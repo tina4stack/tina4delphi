@@ -28,6 +28,14 @@ package Tina4Delphi;
 {$IMPLICITBUILD ON}
 
 requires
-  rtl;
+  rtl,
+  IndySystem,
+  IndyProtocols,
+  IndyCore;
+
+contains
+  Tina4Core in 'Tina4Core.pas',
+  Tina4HttpServer in 'Tina4HttpServer.pas',
+  Tina4Route in 'Tina4Route.pas';
 
 end.

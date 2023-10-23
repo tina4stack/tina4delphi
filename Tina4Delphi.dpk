@@ -31,7 +31,11 @@ requires
   rtl,
   IndySystem,
   IndyProtocols,
-  IndyCore;
+  IndyCore,
+  dbrtl,
+  FireDAC,
+  FireDACCommonDriver,
+  FireDACCommon;
 
 contains
   Tina4Core in 'Tina4Core.pas',

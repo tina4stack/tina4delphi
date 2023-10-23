@@ -13,6 +13,7 @@ type
     { Protected declarations }
   public
     { Public declarations }
+    constructor Create(AOwner: TComponent); overload;
   published
     { Published declarations }
   end;
@@ -24,6 +25,18 @@ implementation
 procedure Register;
 begin
   RegisterComponents('Tina4Delphi', [TTina4HttpServer]);
+end;
+
+{ TTina4HttpServer }
+
+constructor TTina4HttpServer.Create(AOwner: TComponent);
+begin
+  inherited;
+
+  //Look for Tina4Route components belonging to the same project or parent to create a path map
+
+
+
 end;
 
 end.

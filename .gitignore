@@ -10,3 +10,6 @@
 /Tina4DelphiProject.~dsk
 /Tina4DelphiProject_prjgroup.tvsconfig
 /Example/Tina4DelphiExample.identcache
+/Example/__recovery/__recovery.ini
+/Example/__recovery/DataModule.dfm
+/Example/__recovery/DataModule.pas

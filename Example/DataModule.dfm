@@ -29,4 +29,12 @@ object frmDataModule: TfrmDataModule
     Left = 304
     Top = 232
   end
+  object Tina4Route1: TTina4Route
+    Left = 200
+    Top = 384
+  end
+  object Tina4REST1: TTina4REST
+    Left = 336
+    Top = 416
+  end
 end

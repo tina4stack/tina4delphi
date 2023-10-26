@@ -1,6 +1,6 @@
 package Tina4Delphi;
 
-{$R *.res}
+
 {$IFDEF IMPLICITBUILDING This IFDEF should not be used by users}
 {$ALIGN 8}
 {$ASSERTIONS ON}
@@ -40,6 +40,7 @@ requires
 contains
   Tina4Core in 'Tina4Core.pas',
   Tina4HttpServer in 'Tina4HttpServer.pas',
-  Tina4Route in 'Tina4Route.pas';
+  Tina4Route in 'Tina4Route.pas',
+  Tina4REST in 'Tina4REST.pas';
 
 end.

@@ -16,6 +16,7 @@ begin
 
    frmDatamodule.GetBrands;
    frmDatamodule.GetSBrands;
+   frmDatamodule.GetEntries;
 
    frmDataModule.Tina4HttpServer1.Active := True;
    while frmDataModule.Tina4HttpServer1.Active do

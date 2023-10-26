@@ -2,7 +2,12 @@ unit Tina4Core;
 
 interface
 
-uses JSON, System.SysUtils, FireDAC.DApt, FireDAC.Stan.Intf, FireDAC.Stan.Option, FireDAC.Stan.Error, FireDAC.UI.Intf, FireDAC.Phys.Intf, FireDAC.Stan.Def, FireDAC.Stan.Pool, FireDAC.Stan.Async, FireDAC.Phys, FireDAC.ConsoleUI.Wait, Data.DB, FireDAC.Comp.Client, FireDAC.Stan.Param;
+uses JSON, System.SysUtils, FireDAC.DApt, FireDAC.Stan.Intf,
+  FireDAC.Stan.Option, FireDAC.Stan.Error, FireDAC.UI.Intf,
+  FireDAC.Phys.Intf, FireDAC.Stan.Def, FireDAC.Stan.Pool, FireDAC.Stan.Async,
+  FireDAC.Phys, FireDAC.ConsoleUI.Wait,
+  Data.DB, FireDAC.Comp.Client, FireDAC.Stan.Param, IdHTTP, System.NetEncoding,
+  IdSSLOpenSSL, System.Classes;
 
 type
   TTina4Response = class(TObject)
@@ -13,127 +18,271 @@ type
 
   end;
 
-  function CamelCase(FieldName: String): String;
-  function GetJSONFromDB(Connection: TFDConnection; SQL: String; DataSetName : String = 'records'; Params: TFDParams = nil) : TJSONObject;
+function CamelCase(FieldName: String): String;
+function GetJSONFromDB(Connection: TFDConnection; SQL: String;
+   Params: TFDParams = nil; DataSetName: String = 'records'): TJSONObject;
+function SendHttpRequest(BaseURL: String; EndPoint: String = ''; QueryParams: String = ''; Body: String=''; ContentType: String = 'application/json';
+  ContentEncoding : String = 'utf-8'; Username:String = ''; Password: String = ''; CustomHeaders: TStringList = nil; UserAgent: String = 'Tina4Delphi'): String;
+function StrToJSONObject(JSON:String): TJSONObject;
 
 implementation
 
-  /// <summary> Converts a database underscored field to a camel case field for returing in JSON
-  /// </summary>
-  /// <param name="FieldName">The field name to camel case
-  /// </param>
-  /// <remarks>
-  /// If there are no underscores or an exception happens the orginal field name is returned
-  /// </remarks>
-  /// <returns>
-  /// Camel cased field name
-  /// </returns>
-  function CamelCase(FieldName: String): String;
-  var
-    NewName: String;
-    I : Integer;
-  begin
-    I := 1;
-    try
-      if (Pos('_', FieldName) <> 0) then
+/// <summary> Converts a database underscored field to a camel case field for returing in JSON
+/// </summary>
+/// <param name="FieldName">The field name to camel case
+/// </param>
+/// <remarks>
+/// If there are no underscores or an exception happens the orginal field name is returned
+/// </remarks>
+/// <returns>
+/// Camel cased field name
+/// </returns>
+function CamelCase(FieldName: String): String;
+var
+  NewName: String;
+  I: Integer;
+begin
+  I := 1;
+  try
+    if (Pos('_', FieldName) <> 0) then
+    begin
+      FieldName := LowerCase(FieldName);
+      while I <= Length(FieldName) do
       begin
-        FieldName := LowerCase(FieldName);
-        while I <= Length(FieldName) do
+        if (FieldName[I] = '_') then
         begin
-          if (FieldName[I] = '_') then
-          begin
-            I := I + 1;
-            NewName := NewName + UpperCase(FieldName[I]);
-          end
-            else
-          begin
-            NewName := NewName + FieldName[I];
-          end;
           I := I + 1;
-        end;
-      end
+          NewName := NewName + UpperCase(FieldName[I]);
+        end
         else
-      begin
-        Result := FieldName;
+        begin
+          NewName := NewName + FieldName[I];
+        end;
+        I := I + 1;
       end;
-      Result := NewName;
-    except
+    end
+    else
+    begin
       Result := FieldName;
     end;
+    Result := NewName;
+  except
+    Result := FieldName;
   end;
+end;
 
-  /// <summary> Returns a JSON Object response based on an SQL text
-  /// </summary>
-  /// <param name="Connection">A TFDConnection from which to query
-  /// </param>
-  /// <param name="SQL">A valid SQL which queries the database, it can include parameters starting with :
-  /// </param>
-  /// <param name="DataSetName">A name to give the returned result, example: cats, the default is records
-  /// </param>
-  /// <param name="Params">Params to pass to the query on execution
-  /// </param>
-  /// <remarks>
-  /// A JSON object is returned with an array of records, if an exception happens , error is returned with the correct error
-  /// </remarks>
-  /// <returns>
-  /// JSON Object with an Array of records
-  /// </returns>
-  function GetJSONFromDB(Connection: TFDConnection; SQL: String; DataSetName : String = 'records'; Params: TFDParams = nil) : TJSONObject;
-  var
-    Query : TFDQuery;
-    DataRecord : TJSONObject;
-    DataArray : TJSONArray;
-    I: Integer;
-    FieldNames: Array of String;
+/// <summary> Returns a JSON Object response based on an SQL text
+/// </summary>
+/// <param name="Connection">A TFDConnection from which to query
+/// </param>
+/// <param name="SQL">A valid SQL which queries the database, it can include parameters starting with :
+/// </param>
+/// <param name="DataSetName">A name to give the returned result, example: cats, the default is records
+/// </param>
+/// <param name="Params">Params to pass to the query on execution
+/// </param>
+/// <remarks>
+/// A JSON object is returned with an array of records, if an exception happens , error is returned with the correct error
+/// </remarks>
+/// <returns>
+/// JSON Object with an Array of records
+/// </returns>
+function GetJSONFromDB(Connection: TFDConnection; SQL: String;
+   Params: TFDParams = nil; DataSetName: String = 'records'): TJSONObject;
+var
+  Query: TFDQuery;
+  DataRecord: TJSONObject;
+  DataArray: TJSONArray;
+  I: Integer;
+  FieldNames: Array of String;
 
-  begin
-    Result := TJSONObject.Create;
-    DataArray := TJSONArray.Create;
-    Query := TFDQuery.Create(nil);
+begin
+  Result := TJSONObject.Create;
+  DataArray := TJSONArray.Create;
+  Query := TFDQuery.Create(nil);
+  try
     try
-      try
-        Query.Connection := Connection;
-        if (Assigned(Params)) then
-        begin
-          Query.Params := Params;
-        end;
-        Query.SQL.Text := SQL;
-        Query.Open();
-
-        while not Query.Eof do
-        begin
-          DataRecord := TJSONObject.Create;
-
-          for I := 0 to Query.FieldDefs.Count -1 do
-          begin
-            if (Length(FieldNames) = Query.FieldDefs.Count) then //gets the field names in camel case on first iteration to save processing
-            begin
-              DataRecord.AddPair(FieldNames[I], Query.FieldByName(Query.FieldDefs[I].Name).AsString);
-            end
-              else
-            begin
-              SetLength(FieldNames, Length(FieldNames)+1);
-              FieldNames[I] := CamelCase(Query.FieldDefs[I].Name);
-              DataRecord.AddPair(FieldNames[I], Query.FieldByName(Query.FieldDefs[I].Name).AsString);
-            end;
-          end;
-
-          DataArray.Add(DataRecord);
-
-          Query.Next;
-        end;
-
-        Result.AddPair(DataSetName, DataArray);
-
-      finally
-        Query.Free;
-      end;
-    except
-      on E:Exception do
+      Query.Connection := Connection;
+      if (Assigned(Params)) then
       begin
-        Result.AddPair('error', E.UnitName+ ' '+ E.Message);
+        Query.Params := Params;
       end;
+      Query.SQL.Text := SQL;
+      Query.Open();
+
+      while not Query.Eof do
+      begin
+        DataRecord := TJSONObject.Create;
+
+        for I := 0 to Query.FieldDefs.Count - 1 do
+        begin
+          if (Length(FieldNames) = Query.FieldDefs.Count) then
+          // gets the field names in camel case on first iteration to save processing
+          begin
+            DataRecord.AddPair(FieldNames[I],
+              Query.FieldByName(Query.FieldDefs[I].Name).AsString);
+          end
+          else
+          begin
+            SetLength(FieldNames, Length(FieldNames) + 1);
+            FieldNames[I] := CamelCase(Query.FieldDefs[I].Name);
+            DataRecord.AddPair(FieldNames[I],
+              Query.FieldByName(Query.FieldDefs[I].Name).AsString);
+          end;
+        end;
+
+        DataArray.Add(DataRecord);
+
+        Query.Next;
+      end;
+
+      Result.AddPair(DataSetName, DataArray);
+
+    finally
+      Query.Free;
+    end;
+  except
+    on E: Exception do
+    begin
+      Result.AddPair('error', E.UnitName + ' ' + E.Message);
     end;
   end;
+end;
+
+/// <summary> Returns a response from an REST end point
+/// </summary>
+/// <param name="BaseURL">The base url of the REST service
+/// </param>
+/// <param name="EndPoint">A valid REST end point
+/// </param>
+/// <param name="QueryParams">Any query params in the form <key>=<value>, these normally suffix a URL inform ?key=value
+/// </param>
+/// <param name="Body">A text body to send to the REST end point, normally JSON
+/// </param>
+/// <param name="ContentType">The content type that is send and expected from the REST request
+/// </param>
+/// <param name="ContentEncoding">The content encoding of the request that is sent
+/// </param>
+/// <param name="Username">Username for Basic auth headers
+/// </param>
+/// <param name="Password">Password for Basic auth headers
+/// </param>
+/// <param name="CustomHeaders">A TStringList of headers in the form header: value
+/// </param>
+/// <param name="UserAgent">A name for the user agent doing the requests
+/// </param>
+/// <remarks>
+/// A simple function to return back a response from a REST end point
+/// </remarks>
+/// <returns>
+/// A string containing the results from the REST endpoint
+/// </returns>
+function SendHttpRequest(BaseURL: String; EndPoint: String = ''; QueryParams: String = ''; Body: String=''; ContentType: String = 'application/json';
+  ContentEncoding : String = 'utf-8'; Username:String = ''; Password: String = ''; CustomHeaders: TStringList = nil; UserAgent: String = 'Tina4Delphi'): String;
+var
+  IdHTTP: TIdHTTP;
+  BodyList: TStringStream;
+  Url, Header: String;
+  Ssl: TIdSSLIOHandlerSocketOpenSSL;
+
+begin
+  try
+
+    Url := BaseURL + '/' + EndPoint;
+
+    if QueryParams <> '' then
+    begin
+      Url := Url + '?' + QueryParams;
+    end;
+
+    IdHTTP := TIdHTTP.Create(nil);
+    BodyList := TStringStream.Create(Body);
+
+    try
+      IdHTTP.ConnectTimeout := 60000;
+      IdHTTP.ReadTimeout := 600000;
+      // Open SSL handling
+      Ssl := TIdSSLIOHandlerSocketOpenSSL.Create(IdHTTP);
+      Ssl.SSLOptions.SSLVersions := [sslvTLSv1_2];
+
+      IdHTTP.IOHandler := Ssl;
+
+      IdHTTP.HTTPOptions := IdHTTP.HTTPOptions + [hoNoProtocolErrorException,
+        hoWantProtocolErrorContent];
+
+      IdHTTP.HandleRedirects := True;
+      IdHTTP.Request.CustomHeaders.FoldLines := False;
+      IdHTTP.Request.UserAgent := UserAgent;
+
+      if (Username <> '') then
+      begin
+        var Auth := TNetEncoding.Base64.Encode(Username+':'+Password);
+        IdHTTP.Request.CustomHeaders.Add('Authorization: Basic '+Auth);
+      end;
+
+      if Assigned(CustomHeaders) then
+      begin
+        for Header in CustomHeaders do
+        begin
+          IdHTTP.Request.CustomHeaders.Add(Header);
+        end;
+      end;
+
+      if (Body <> '') then
+      begin
+        IdHTTP.Request.ContentType := ContentType;
+        IdHTTP.Request.Accept := ContentType;
+        IdHTTP.Request.ContentEncoding := ContentEncoding;
+        Result := IdHTTP.Post(Url, BodyList);
+
+        if (Length(Result) > 0) and ((Result[1] <> '{') and (Result[1] <> '['))
+        then
+        begin
+          Result := '{"error":"' + Result + '"}';
+        end;
+      end
+      else
+      begin
+        Result := IdHTTP.Get(Url);
+
+        if (Length(Result) > 0) and ((Result[1] <> '{') and (Result[1] <> '['))
+        then
+        begin
+          Result := '{"error":"' + Result + '"}';
+        end;
+      end;
+    finally
+      IdHTTP.Free;
+      BodyList.Free;
+    end;
+  except
+    on E: Exception do
+    begin
+      Result := '{"error":"' + E.Message + '", "url": "' + Url + '", "body": ' +
+        Body + '}';
+    end;
+  end;
+end;
+
+/// <summary> Converts a String into a TJSONObject
+/// </summary>
+/// <param name="JSON">A JSON string
+/// </param>
+/// <remarks>
+/// Converts a string into a JSON object
+/// </remarks>
+/// <returns>
+/// A TJSON Object or nil if the string is invalid
+/// </returns>
+function StrToJSONObject(JSON:String): TJSONObject;
+begin
+  Result := TJSONObject.Create;
+  try
+    Result.Parse(BytesOf(JSON), 0);
+  except
+    Result.Free;
+    Result := nil;
+  end;
+end;
 
 end.

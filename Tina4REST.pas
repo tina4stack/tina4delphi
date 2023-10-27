@@ -3,7 +3,7 @@ unit Tina4REST;
 interface
 
 uses
-  System.SysUtils, System.Classes;
+  System.SysUtils, System.Classes, JSON, Tina4Core;
 
 type
   TTina4REST = class(TComponent)
@@ -20,6 +20,10 @@ type
     { Public declarations }
     constructor Create(AOwner: TComponent); override;
     destructor Destroy; override;
+
+    function Get(EndPoint: String; QueryParams: String=''; ContentType: String= 'application/json'; ContentEncoding: String = 'utf-8'): TJSONObject;
+    function Post(EndPoint: String; QueryParams: String=''; Body: String = ''; ContentType: String= 'application/json'; ContentEncoding: String = 'utf-8'): TJSONObject;
+
   published
     { Published declarations }
     property BaseUrl: String read FBaseUrl write FBaseUrl;
@@ -49,6 +53,23 @@ destructor TTina4REST.Destroy;
 begin
   FCustomHeaders.Free;
   inherited;
+end;
+
+function TTina4REST.Get(EndPoint: String; QueryParams: String=''; ContentType: String= 'application/json'; ContentEncoding: String = 'utf-8'): TJSONObject;
+var
+  JSONContent : String;
+begin
+  JSONContent := SendHttpRequest(Self.FBaseUrl, EndPoint, QueryParams, '', ContentType, ContentEncoding, Self.FUsername, Self.FPassword, Self.FCustomHeaders);
+  Result := StrToJSONObject(JSONContent);
+end;
+
+function TTina4REST.Post(EndPoint, QueryParams, Body, ContentType,
+  ContentEncoding: String): TJSONObject;
+var
+  JSONContent : String;
+begin
+  JSONContent := SendHttpRequest(Self.FBaseUrl, EndPoint, QueryParams, Body, ContentType, ContentEncoding, Self.FUsername, Self.FPassword, Self.FCustomHeaders);
+  Result := StrToJSONObject(JSONContent);
 end;
 
 procedure TTina4REST.SetCustomHeaders(List: TStringList);

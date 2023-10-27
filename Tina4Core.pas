@@ -182,8 +182,29 @@ function SendHttpRequest(BaseURL: String; EndPoint: String = ''; QueryParams: St
 var
   IdHTTP: TIdHTTP;
   BodyList: TStringStream;
+  MemoryStream : TMemoryStream;
   Url, Header: String;
   Ssl: TIdSSLIOHandlerSocketOpenSSL;
+
+
+  function StreamToString(aStream: TStream): string;
+  var
+    SS: TStringStream;
+  begin
+    if aStream <> nil then
+    begin
+      SS := TStringStream.Create('');
+      try
+        SS.CopyFrom(aStream, 0);  // No need to position at 0 nor provide size
+        Result := SS.DataString;
+      finally
+        SS.Free;
+      end;
+    end else
+    begin
+      Result := '';
+    end;
+  end;
 
 begin
   try
@@ -233,7 +254,14 @@ begin
         IdHTTP.Request.ContentType := ContentType;
         IdHTTP.Request.Accept := ContentType;
         IdHTTP.Request.ContentEncoding := ContentEncoding;
-        Result := IdHTTP.Post(Url, BodyList);
+
+        MemoryStream := TMemoryStream.Create;
+        try
+         IdHTTP.Post(Url, BodyList, MemoryStream);
+         Result := StreamToString(MemoryStream);
+        finally
+          MemoryStream.Free;
+        end;
 
         if (Length(Result) > 0) and ((Result[1] <> '{') and (Result[1] <> '['))
         then
@@ -243,7 +271,13 @@ begin
       end
       else
       begin
-        Result := IdHTTP.Get(Url);
+        MemoryStream := TMemoryStream.Create;
+        try
+          IdHTTP.Get(Url, MemoryStream);
+          Result := StreamToString(MemoryStream);
+        finally
+          MemoryStream.Free;
+        end;
 
         if (Length(Result) > 0) and ((Result[1] <> '{') and (Result[1] <> '['))
         then

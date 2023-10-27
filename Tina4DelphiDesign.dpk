@@ -1,4 +1,4 @@
-package Tina4Delphi;
+package Tina4DelphiDesign;
 
 {$R *.res}
 {$IFDEF IMPLICITBUILDING This IFDEF should not be used by users}
@@ -25,25 +25,23 @@ package Tina4Delphi;
 {$IMAGEBASE $400000}
 {$DEFINE DEBUG}
 {$ENDIF IMPLICITBUILDING}
+{$DESIGNONLY}
 {$IMPLICITBUILD ON}
 
 requires
   rtl,
+  DesignIde,
+  Fmx,
+  dbrtl,
   IndySystem,
   IndyProtocols,
   IndyCore,
-  dbrtl,
   FireDAC,
   FireDACCommonDriver,
   FireDACCommon,
-  fmx;
+  Tina4Delphi;
 
 contains
-  Tina4Core in 'Tina4Core.pas',
-  Tina4HttpServer in 'Tina4HttpServer.pas',
-  Tina4Route in 'Tina4Route.pas',
-  Tina4REST in 'Tina4REST.pas',
-  Tina4RESTRequest in 'Tina4RESTRequest.pas';
+  Tina4RESTRequestEditor in 'Tina4RESTRequestEditor.pas';
 
 end.
-

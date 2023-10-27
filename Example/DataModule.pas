@@ -3,7 +3,8 @@ unit DataModule;
 interface
 
 uses
-  System.SysUtils, System.Classes, IdBaseComponent, IdComponent, IdCustomTCPServer, IdCustomHTTPServer, IdHTTPServer, Tina4HttpServer, IdContext, IdScheduler, IdSchedulerOfThread, IdSchedulerOfThreadPool, IdServerIOHandler, IdSSL, IdSSLOpenSSL, FireDAC.Stan.Intf, FireDAC.Stan.Option, FireDAC.Stan.Error, FireDAC.UI.Intf, FireDAC.Phys.Intf, FireDAC.Stan.Def, FireDAC.Stan.Pool, FireDAC.Stan.Async, FireDAC.Phys, FireDAC.ConsoleUI.Wait, Data.DB, FireDAC.Comp.Client, FireDAC.Phys.SQLite, FireDAC.Phys.SQLiteDef, FireDAC.Stan.ExprFuncs, FireDAC.Phys.SQLiteWrapper.Stat, Tina4Core, JSON, FireDAC.Stan.Param, FireDAC.DatS, FireDAC.DApt.Intf, FireDAC.DApt, FireDAC.Comp.DataSet, Tina4REST, Tina4Route;
+  System.SysUtils, System.Classes, IdBaseComponent, IdComponent, IdCustomTCPServer, IdCustomHTTPServer, IdHTTPServer, Tina4HttpServer, IdContext, IdScheduler, IdSchedulerOfThread, IdSchedulerOfThreadPool, IdServerIOHandler, IdSSL, IdSSLOpenSSL, FireDAC.Stan.Intf, FireDAC.Stan.Option, FireDAC.Stan.Error, FireDAC.UI.Intf, FireDAC.Phys.Intf, FireDAC.Stan.Def, FireDAC.Stan.Pool, FireDAC.Stan.Async, FireDAC.Phys, FireDAC.ConsoleUI.Wait, Data.DB, FireDAC.Comp.Client, FireDAC.Phys.SQLite, FireDAC.Phys.SQLiteDef, FireDAC.Stan.ExprFuncs, FireDAC.Phys.SQLiteWrapper.Stat, Tina4Core, JSON, FireDAC.Stan.Param, FireDAC.DatS, FireDAC.DApt.Intf, FireDAC.DApt, FireDAC.Comp.DataSet, Tina4REST, Tina4Route,
+  Data.Bind.Components, Data.Bind.ObjectScope, REST.Client, Tina4RESTRequest;
 
 type
   TfrmDataModule = class(TDataModule)
@@ -13,6 +14,8 @@ type
     FDTable1: TFDTable;
     Tina4Route1: TTina4Route;
     Tina4REST1: TTina4REST;
+    RESTRequest1: TRESTRequest;
+    Tina4RESTRequest1: TTina4RESTRequest;
     procedure Tina4HttpServer1CommandGet(AContext: TIdContext; ARequestInfo: TIdHTTPRequestInfo; AResponseInfo: TIdHTTPResponseInfo);
   private
     { Private declarations }
@@ -40,8 +43,10 @@ end;
 
 function TfrmDataModule.GetEntries: TJSONObject;
 begin
-  var Entries := SendHttpRequest ('https://api.publicapis.org', 'entries');
+  //var Entries := SendHttpRequest ('https://api.publicapis.org', 'entries');
 
+  var entries := Tina4Rest1.Get('entries');
+  WriteLn(entries.ToString);
 
 end;
 
@@ -53,7 +58,7 @@ begin
   try
     Params.Add('name', '%', TParamType.ptInput);
 
-    Result := GetJSONFromDB(FDConnection1, 'select * from brands where brand_name like :name', 'brands', Params);
+    Result := GetJSONFromDB(FDConnection1, 'select * from brands where brand_name like :name',  Params, 'brands');
     WriteLn(Result.ToString);
   finally
     Params.Free;

@@ -4,6 +4,8 @@ program Tina4DelphiExample;
 
 {$R *.res}
 
+{$R *.dres}
+
 uses
   System.SysUtils,
   DataModule in 'DataModule.pas' {frmDataModule: TDataModule};

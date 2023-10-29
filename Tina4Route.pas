@@ -3,7 +3,7 @@ unit Tina4Route;
 interface
 
 uses
-  System.SysUtils, System.Classes;
+  System.SysUtils, System.Classes, Tina4Core;
 
 type
   TTina4Route = class(TComponent)
@@ -11,10 +11,16 @@ type
     { Private declarations }
   protected
     { Protected declarations }
+    FOnEndPointExecute : TTina4EndpointExecute;
+    FEndPoint: String;
+    FCRUDRoute: Boolean;
   public
     { Public declarations }
   published
     { Published declarations }
+    property OnExecute: TTina4EndpointExecute read FOnEndPointExecute write FOnEndPointExecute;
+    property EndPoint: String read FEndpoint write FEndpoint;
+    property CRUD: Boolean read FCRUDRoute write FCRUDRoute;
   end;
 
 procedure Register;

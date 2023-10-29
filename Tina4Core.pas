@@ -18,12 +18,18 @@ type
 
   end;
 
+  TTina4EndpointExecute = procedure(Request : TTina4Request; var Response: TTina4Response) of object;
+
+
 function CamelCase(FieldName: String): String;
 function GetJSONFromDB(Connection: TFDConnection; SQL: String;
    Params: TFDParams = nil; DataSetName: String = 'records'): TJSONObject;
 function SendHttpRequest(BaseURL: String; EndPoint: String = ''; QueryParams: String = ''; Body: String=''; ContentType: String = 'application/json';
   ContentEncoding : String = 'utf-8'; Username:String = ''; Password: String = ''; CustomHeaders: TStringList = nil; UserAgent: String = 'Tina4Delphi'): String;
 function StrToJSONObject(JSON:String): TJSONObject;
+function StrToJSONArray(JSON:String): TJSONArray;
+function GetJSONFieldName(FieldName: String) : String;
+procedure GetFieldDefsFromJSONObject(JSONObject: TJSONObject; var MemTable: TFDMemTable);
 
 implementation
 
@@ -306,16 +312,84 @@ end;
 /// Converts a string into a JSON object
 /// </remarks>
 /// <returns>
-/// A TJSON Object or nil if the string is invalid
+/// A TJSONObject or nil if the string is invalid
 /// </returns>
 function StrToJSONObject(JSON:String): TJSONObject;
 begin
-  Result := TJSONObject.Create;
   try
-    Result.Parse(BytesOf(JSON), 0);
+    Result := TJSONObject.ParseJSONValue(JSON) as TJSONObject;
   except
     Result.Free;
     Result := nil;
+  end;
+end;
+
+/// <summary> Converts a String into a TJSONArray
+/// </summary>
+/// <param name="JSON">A JSON string
+/// </param>
+/// <remarks>
+/// Converts a string into a JSON array
+/// </remarks>
+/// <returns>
+/// A TJSONArray or nil if the string is invalid
+/// </returns>
+function StrToJSONArray(JSON:String): TJSONArray;
+begin
+  try
+    Result := TJSONObject.ParseJSONValue(JSON) as TJSONArray;
+  except
+    Result.Free;
+    Result := nil;
+  end;
+end;
+
+
+/// <summary> Gets the field name from a JSON string field
+/// </summary>
+/// <param name="FieldName">Field name in form "name"
+/// </param>
+/// <remarks>
+/// The fields from a JSON object normally are enclosed in quotes and this removes them
+/// </remarks>
+/// <returns>
+/// Field name as a string or the original if the length is less than 2 or empty
+/// </returns>
+function GetJSONFieldName(FieldName: String) : String;
+begin
+  if (FieldName <> '') and (Length(FieldName) > 2) then //""
+  begin
+    Result := Copy(FieldName, 2, Length(FieldName)-2);
+  end
+    else
+  begin
+    Result := FieldName;
+  end;
+end;
+
+
+/// <summary> Gets Field definitions from a TJSONObject
+/// </summary>
+/// <param name="JSONObject">A TJSONObject
+/// </param>
+/// <remarks>
+/// Converts a TJSONObject into field definitions
+/// </remarks>
+/// <returns>
+/// A TFieldDefs object or nil if it fails
+/// </returns>
+procedure GetFieldDefsFromJSONObject(JSONObject: TJSONObject; var MemTable: TFDMemTable);
+begin
+  if (MemTable.FieldDefs.Count > 0) then Exit;
+
+  try
+    for var Index : Integer := 0 to JSONObject.Count-1 do
+    begin
+      var FieldName: String := JSONObject.Pairs[Index].JsonString.Value;
+      MemTable.FieldDefs.Add(FieldName, TFieldType.ftString, 1000);
+    end;
+  except
+    MemTable.FieldDefs.Clear;
   end;
 end;
 

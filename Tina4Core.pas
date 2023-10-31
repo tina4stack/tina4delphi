@@ -11,14 +11,19 @@ uses JSON, System.SysUtils, FireDAC.DApt, FireDAC.Stan.Intf,
 
 type
   TTina4Response = class(TObject)
-
+    HTTPCode: Integer;
+    ContentType: String;
+    Content: String;
   end;
 
   TTina4Request = class(TObject)
-
+    Headers: TStringList;
+    QueryParams: TStringList;
+    Body: String;
   end;
 
   TTina4EndpointExecute = procedure(Request : TTina4Request; var Response: TTina4Response) of object;
+  TTina4Event = procedure (Sender: TObject) of object;
 
 
 function CamelCase(FieldName: String): String;

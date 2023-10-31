@@ -1,11 +1,12 @@
 object frmDataModule: TfrmDataModule
-  Height = 440
-  Width = 669
+  Height = 662
+  Width = 988
+  PixelsPerInch = 120
   object IdSchedulerOfThreadPool1: TIdSchedulerOfThreadPool
     MaxThreads = 50
     PoolSize = 100
-    Left = 176
-    Top = 80
+    Left = 220
+    Top = 100
   end
   object FDConnection1: TFDConnection
     Params.Strings = (
@@ -13,33 +14,18 @@ object frmDataModule: TfrmDataModule
       'DriverID=SQLite')
     Connected = True
     LoginPrompt = False
-    Left = 360
-    Top = 200
+    Left = 450
+    Top = 250
   end
   object FDTable1: TFDTable
     Connection = FDConnection1
-    Left = 256
-    Top = 200
-  end
-  object Tina4Route1: TTina4Route
-    EndPoint = '/api/cars'
-    CRUD = False
-    WebServer = Tina4WebServer1
-    Left = 264
-    Top = 344
+    Left = 320
+    Top = 250
   end
   object Tina4REST1: TTina4REST
     BaseUrl = 'https://api.publicapis.org'
-    Left = 384
-    Top = 343
-  end
-  object RESTRequest1: TRESTRequest
-    Client = RESTClient1
-    Params = <>
-    Response = RESTResponse1
-    SynchronizedEvents = False
-    Left = 526
-    Top = 283
+    Left = 480
+    Top = 429
   end
   object Tina4RESTRequest1: TTina4RESTRequest
     DataKey = 'entries'
@@ -4494,8 +4480,9 @@ object frmDataModule: TfrmDataModule
         'Description":"Assesses weather condition in specific locations",' +
         '"Auth":"apiKey","HTTPS":true,"Cors":"no","Link":"https:\/\/yande' +
         'x.com\/dev\/weather\/","Category":"Weather"}]}')
-    Left = 477
-    Top = 344
+    OnExecuteDone = Tina4RESTRequest1ExecuteDone
+    Left = 596
+    Top = 430
   end
   object FDMemTable1: TFDMemTable
     Active = True
@@ -4545,8 +4532,8 @@ object frmDataModule: TfrmDataModule
     UpdateOptions.CheckRequired = False
     UpdateOptions.AutoCommitUpdates = True
     StoreDefs = True
-    Left = 480
-    Top = 72
+    Left = 600
+    Top = 90
     Content = {
       4144425310000000E8AF0300FF00010001FF02FF03040016000000460044004D
       0065006D005400610062006C0065003100050016000000460044004D0065006D
@@ -12125,13 +12112,14 @@ object frmDataModule: TfrmDataModule
   object Tina4WebServer1: TTina4WebServer
     Connection = FDConnection1
     HTTPServer = IdHTTPServer1
-    Left = 144
-    Top = 344
+    Active = False
+    Left = 180
+    Top = 430
   end
   object IdHTTPServer1: TIdHTTPServer
     Bindings = <>
-    Left = 128
-    Top = 152
+    Left = 160
+    Top = 190
   end
   object FDMemTable2: TFDMemTable
     Active = True
@@ -12153,8 +12141,7 @@ object frmDataModule: TfrmDataModule
       end
       item
         Name = 'HTTPS'
-        DataType = ftString
-        Size = 1000
+        DataType = ftBoolean
       end
       item
         Name = 'Cors'
@@ -12180,22 +12167,13 @@ object frmDataModule: TfrmDataModule
     UpdateOptions.CheckRequired = False
     UpdateOptions.AutoCommitUpdates = True
     StoreDefs = True
-    Left = 473
-    Top = 200
+    Left = 591
+    Top = 250
   end
-  object RESTClient1: TRESTClient
-    Params = <>
-    SynchronizedEvents = False
-    Left = 448
-    Top = 288
-  end
-  object RESTResponse1: TRESTResponse
-    Left = 568
-    Top = 280
-  end
-  object RESTResponseDataSetAdapter1: TRESTResponseDataSetAdapter
-    FieldDefs = <>
-    Left = 584
-    Top = 224
+  object Tina4Route1: TTina4Route
+    EndPoint = '/api/cars'
+    CRUD = False
+    Left = 320
+    Top = 432
   end
 end

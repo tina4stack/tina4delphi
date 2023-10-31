@@ -4,7 +4,7 @@ program Tina4DelphiExample;
 
 {$R *.res}
 
-{$R *.dres}
+
 
 uses
   System.SysUtils,
@@ -20,8 +20,8 @@ begin
    frmDatamodule.GetSBrands;
    frmDatamodule.GetEntries;
 
-   frmDataModule.Tina4HttpServer1.Active := True;
-   while frmDataModule.Tina4HttpServer1.Active do
+   frmDataModule.Tina4WebServer1.Active := True;
+   while frmDataModule.Tina4WebServer1.Active do
    begin
      sleep (1000);
    end;

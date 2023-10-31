@@ -16,6 +16,7 @@ type
     FQueryParams: String;
     FDataKey : String;
     FResponseJSON: TStringList;
+    FOnExecuteDone: TTina4Event;
     procedure SetResponseJSON(List: TStringList);
   protected
     { Protected declarations }
@@ -32,6 +33,7 @@ type
     property MemTable: TFDMemTable read FMemTable write FMemTable;
     property Tina4REST: TTina4REST read FTina4REST write FTina4REST;
     property JSONResponse: TStringList read FResponseJSON write SetResponseJSON;
+    property OnExecuteDone: TTina4Event read FOnExecuteDone write FOnExecuteDone;
   end;
 
 procedure Register;
@@ -58,77 +60,81 @@ begin
 end;
 
 procedure TTina4RESTRequest.ExecuteRESTCall;
-var
-  JSONValue : TJSONPair;
-  JSONInfo : TJSONValue;
-  JSONRecord : TJSONObject;
-  Response : TJSONObject;
-
 begin
   if Assigned(Self.FTina4REST) then
   begin
-    Self.JSONResponse.Clear;
-    Response := Self.FTina4REST.Get(Self.EndPoint, Self.QueryParams);
-    try
-      Self.JSONResponse.Text := Response.ToString;
-      if Assigned(Self.FMemTable) then
-      begin
-        for JSONValue in Response do
+    var ExecuteThread := TThread.CreateAnonymousThread(
+    procedure
+    begin
+      Self.JSONResponse.Clear;
+      var Response := Self.FTina4REST.Get(Self.EndPoint, Self.QueryParams);
+      try
+        Self.JSONResponse.Text := Response.ToString;
+        if Assigned(Self.FMemTable) then
         begin
-          if (GetJSONFieldName(JSONValue.JsonString.ToString) = Self.DataKey) or (Self.DataKey = '') then
+          for var JSONValue in Response do
           begin
-            if (JSONValue.JsonValue is TJSONArray) then
+            if (GetJSONFieldName(JSONValue.JsonString.ToString) = Self.DataKey) or (Self.DataKey = '') then
             begin
-              Self.DataKey := GetJSONFieldName(JSONValue.JsonString.ToString);
-
-              if (Self.FMemTable.Active) and (Self.FMemTable.FieldDefs.Count > 0) then
+              if (JSONValue.JsonValue is TJSONArray) then
               begin
-                Self.FMemTable.EmptyDataSet;
-              end;
+                Self.DataKey := GetJSONFieldName(JSONValue.JsonString.ToString);
 
-              for JSONInfo in TJSONArray(JSONValue.JsonValue) do
-              begin
-                if (JSONInfo is TJSONObject) then
+                if (Self.FMemTable.Active) and (Self.FMemTable.FieldDefs.Count > 0) then
                 begin
-                  if Assigned(Self.FMemTable) and (Self.FMemTable.FieldDefs.Count = 0) then
-                  begin
-                    if (Self.FMemTable.Active) then
-                    begin
-                      Self.FMemTable.EmptyDataSet;
-                      Self.FMemTable.Close;
-                    end;
-                    GetFieldDefsFromJSONObject(TJSONObject(JSONInfo), TFDMemTable(Self.FMemTable));
-                    Self.FMemTable.CreateDataSet;
-                  end
-                    else
-                  if (not Self.FMemTable.Active) then
-                  begin
-                    Self.FMemTable.Open;
-                    Self.FMemTable.CreateDataSet;
-                  end;
+                  Self.FMemTable.EmptyDataSet;
+                end;
 
-                  JSONRecord := StrToJSONObject(JSONInfo.ToJSON);
-                  try
-                    Self.FMemTable.Append;
-                    for var Index : Integer := 0 to JSONRecord.Count-1 do
+                for var JSONInfo in TJSONArray(JSONValue.JsonValue) do
+                begin
+                  if (JSONInfo is TJSONObject) then
+                  begin
+                    if Assigned(Self.FMemTable) and (Self.FMemTable.FieldDefs.Count = 0) then
                     begin
-                      var PairValue := JSONRecord.Pairs[Index].JsonValue.Value;
-                      Self.FMemTable.FieldByName(JSONRecord.Pairs[Index].JsonString.Value).AsString := PairValue;
+                      if (Self.FMemTable.Active) then
+                      begin
+                        Self.FMemTable.EmptyDataSet;
+                        Self.FMemTable.Close;
+                      end;
+                      GetFieldDefsFromJSONObject(TJSONObject(JSONInfo), TFDMemTable(Self.FMemTable));
+                      Self.FMemTable.CreateDataSet;
+                    end
+                      else
+                    if (not Self.FMemTable.Active) then
+                    begin
+                      Self.FMemTable.Open;
+                      Self.FMemTable.EmptyDataSet;
                     end;
-                    Self.FMemTable.Post;
-                  finally
-                    JSONRecord.Free;
+
+                    var JSONRecord := StrToJSONObject(JSONInfo.ToJSON);
+                    try
+                      Self.FMemTable.Append;
+                      for var Index : Integer := 0 to JSONRecord.Count-1 do
+                      begin
+                        var PairValue := JSONRecord.Pairs[Index].JsonValue.Value;
+                        Self.FMemTable.FieldByName(JSONRecord.Pairs[Index].JsonString.Value).AsString := PairValue;
+                      end;
+                      Self.FMemTable.Post;
+                    finally
+                      JSONRecord.Free;
+                    end;
                   end;
                 end;
+                Self.FMemTable.First;
               end;
-              Self.FMemTable.First;
             end;
           end;
         end;
+      finally
+        Response.Free;
+        if (Assigned(Self.FOnExecuteDone)) then
+        begin
+          Self.FOnExecuteDone(Self);
+        end;
       end;
-    finally
-      Response.Free;
-    end;
+    end);
+    ExecuteThread.FreeOnTerminate := True;
+    ExecuteThread.Start;
   end
     else
   begin

@@ -17,6 +17,8 @@ type
     FWebServer: TTina4WebServer;
   public
     { Public declarations }
+    constructor Create(AOwner: TComponent); override;
+    destructor Destroy; override;
   published
     { Published declarations }
     property OnExecute: TTina4EndpointExecute read FOnEndPointExecute write FOnEndPointExecute;
@@ -32,6 +34,20 @@ implementation
 procedure Register;
 begin
   RegisterComponents('Tina4Delphi', [TTina4Route]);
+end;
+
+{ TTina4Route }
+
+constructor TTina4Route.Create(AOwner: TComponent);
+begin
+  inherited Create(AOwner);
+
+end;
+
+destructor TTina4Route.Destroy;
+begin
+
+  inherited;
 end;
 
 end.

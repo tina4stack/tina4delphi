@@ -1,4 +1,4 @@
-unit Tina4HttpServer;
+unit Tina4WebServer;
 
 interface
 
@@ -9,19 +9,23 @@ uses
   FireDAC.Stan.Param, Tina4Core;
 
 type
-  TTina4HttpServer = class(TIdHTTPServer)
+  TTina4WebServer = class(TComponent)
   private
     { Private declarations }
     FConnection: TFDConnection;
+    FHTTPServer: TIdHTTPServer;
+    FPublicPath: String;
   protected
     { Protected declarations }
   public
     { Public declarations }
-    constructor Create(AOwner: TComponent); overload;
+    constructor Create(AOwner: TComponent); override;
     function JSONFromDB(SQL: String; DataSetName : String = 'records'; Params: TFDParams = nil) : TJSONObject;
   published
     { Published declarations }
     property Connection : TFDConnection read FConnection write FConnection;
+    property HTTPServer: TIdHTTPServer read FHTTPServer write FHTTPServer;
+    property PublicPath: String read FPublicPath write FPublicPath;
   end;
 
 procedure Register;
@@ -30,12 +34,12 @@ implementation
 
 procedure Register;
 begin
-  RegisterComponents('Tina4Delphi', [TTina4HttpServer]);
+  RegisterComponents('Tina4Delphi', [TTina4WebServer]);
 end;
 
-{ TTina4HttpServer }
+{ TTina4WebServer }
 
-constructor TTina4HttpServer.Create(AOwner: TComponent);
+constructor TTina4WebServer.Create(AOwner: TComponent);
 begin
   inherited Create(AOwner);
 
@@ -45,7 +49,7 @@ begin
 
 end;
 
-function TTina4HttpServer.JSONFromDB(SQL, DataSetName: String; Params: TFDParams): TJSONObject;
+function TTina4WebServer.JSONFromDB(SQL, DataSetName: String; Params: TFDParams): TJSONObject;
 begin
   if Assigned(FConnection) then
   begin

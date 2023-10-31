@@ -319,7 +319,6 @@ begin
   try
     Result := TJSONObject.ParseJSONValue(JSON) as TJSONObject;
   except
-    Result.Free;
     Result := nil;
   end;
 end;
@@ -339,7 +338,6 @@ begin
   try
     Result := TJSONObject.ParseJSONValue(JSON) as TJSONArray;
   except
-    Result.Free;
     Result := nil;
   end;
 end;

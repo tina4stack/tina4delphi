@@ -4,7 +4,7 @@ interface
 
 uses
   System.SysUtils, System.Classes, IdBaseComponent, IdComponent, IdCustomTCPServer, IdCustomHTTPServer, IdHTTPServer, Tina4HttpServer, IdContext, IdScheduler, IdSchedulerOfThread, IdSchedulerOfThreadPool, IdServerIOHandler, IdSSL, IdSSLOpenSSL, FireDAC.Stan.Intf, FireDAC.Stan.Option, FireDAC.Stan.Error, FireDAC.UI.Intf, FireDAC.Phys.Intf, FireDAC.Stan.Def, FireDAC.Stan.Pool, FireDAC.Stan.Async, FireDAC.Phys, FireDAC.ConsoleUI.Wait, Data.DB, FireDAC.Comp.Client, FireDAC.Phys.SQLite, FireDAC.Phys.SQLiteDef, FireDAC.Stan.ExprFuncs, FireDAC.Phys.SQLiteWrapper.Stat, Tina4Core, JSON, FireDAC.Stan.Param, FireDAC.DatS, FireDAC.DApt.Intf, FireDAC.DApt, FireDAC.Comp.DataSet, Tina4REST, Tina4Route,
-  Data.Bind.Components, Data.Bind.ObjectScope, REST.Client, Tina4RESTRequest, FireDAC.Stan.StorageBin;
+  Data.Bind.Components, Data.Bind.ObjectScope, REST.Client, Tina4RESTRequest, FireDAC.Stan.StorageBin, Tina4WebServer, REST.Types, REST.Response.Adapter;
 
 type
   TfrmDataModule = class(TDataModule)
@@ -15,6 +15,12 @@ type
     Tina4REST1: TTina4REST;
     Tina4RESTRequest1: TTina4RESTRequest;
     FDMemTable1: TFDMemTable;
+    Tina4WebServer1: TTina4WebServer;
+    IdHTTPServer1: TIdHTTPServer;
+    FDMemTable2: TFDMemTable;
+    RESTClient1: TRESTClient;
+    RESTResponse1: TRESTResponse;
+    RESTResponseDataSetAdapter1: TRESTResponseDataSetAdapter;
 
     procedure Tina4HttpServer1CommandGet(AContext: TIdContext; ARequestInfo: TIdHTTPRequestInfo; AResponseInfo: TIdHTTPResponseInfo);
   private

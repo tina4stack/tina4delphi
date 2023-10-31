@@ -3,7 +3,7 @@ unit Tina4Route;
 interface
 
 uses
-  System.SysUtils, System.Classes, Tina4Core;
+  System.SysUtils, System.Classes, Tina4Core, Tina4Webserver;
 
 type
   TTina4Route = class(TComponent)
@@ -14,6 +14,7 @@ type
     FOnEndPointExecute : TTina4EndpointExecute;
     FEndPoint: String;
     FCRUDRoute: Boolean;
+    FWebServer: TTina4WebServer;
   public
     { Public declarations }
   published
@@ -21,6 +22,7 @@ type
     property OnExecute: TTina4EndpointExecute read FOnEndPointExecute write FOnEndPointExecute;
     property EndPoint: String read FEndpoint write FEndpoint;
     property CRUD: Boolean read FCRUDRoute write FCRUDRoute;
+    property WebServer: TTina4WebServer read FWebServer write FWebServer;
   end;
 
 procedure Register;

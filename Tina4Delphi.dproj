@@ -170,7 +170,7 @@
         <DCCReference Include="FireDACCommon.dcp"/>
         <DCCReference Include="fmx.dcp"/>
         <DCCReference Include="Tina4Core.pas"/>
-        <DCCReference Include="Tina4HttpServer.pas"/>
+        <DCCReference Include="Tina4WebServer.pas"/>
         <DCCReference Include="Tina4Route.pas"/>
         <DCCReference Include="Tina4REST.pas"/>
         <DCCReference Include="Tina4RESTRequest.pas"/>
@@ -185,6 +185,10 @@
         <RcItem Include="TTina4Route.bmp">
             <ResourceType>BITMAP</ResourceType>
             <ResourceId>TTina4Route</ResourceId>
+        </RcItem>
+        <RcItem Include="TTina4WebServer.bmp">
+            <ResourceType>BITMAP</ResourceType>
+            <ResourceId>TTina4WebServer</ResourceId>
         </RcItem>
         <BuildConfiguration Include="Base">
             <Key>Base</Key>

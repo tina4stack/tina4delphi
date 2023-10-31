@@ -41,7 +41,7 @@ requires
 
 contains
   Tina4Core in 'Tina4Core.pas',
-  Tina4HttpServer in 'Tina4HttpServer.pas',
+  Tina4WebServer in 'Tina4WebServer.pas',
   Tina4Route in 'Tina4Route.pas',
   Tina4REST in 'Tina4REST.pas',
   Tina4RESTRequest in 'Tina4RESTRequest.pas';

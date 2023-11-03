@@ -38,49 +38,49 @@ procedure GetFieldDefsFromJSONObject(JSONObject: TJSONObject; var MemTable: TFDM
 
 implementation
 
-/// <summary> Converts a database underscored field to a camel case field for returing in JSON
-/// </summary>
-/// <param name="FieldName">The field name to camel case
-/// </param>
-/// <remarks>
-/// If there are no underscores or an exception happens the orginal field name is returned
-/// </remarks>
-/// <returns>
-/// Camel cased field name
-/// </returns>
-function CamelCase(FieldName: String): String;
-var
-  NewName: String;
-  I: Integer;
-begin
-  I := 1;
-  try
-    if (Pos('_', FieldName) <> 0) then
-    begin
-      FieldName := LowerCase(FieldName);
-      while I <= Length(FieldName) do
+  /// <summary> Converts a database underscored field to a camel case field for returing in JSON
+  /// </summary>
+  /// <param name="FieldName">The field name to camel case
+  /// </param>
+  /// <remarks>
+  /// If there are no underscores or an exception happens the orginal field name is returned
+  /// </remarks>
+  /// <returns>
+  /// Camel cased field name
+  /// </returns>
+  function CamelCase(FieldName: String): String;
+  var
+    NewName: String;
+    I : Integer;
+  begin
+    I := 1;
+    try
+      if (Pos('_', FieldName) <> 0) then
       begin
-        if (FieldName[I] = '_') then
+        FieldName := LowerCase(FieldName);
+        while I <= Length(FieldName) do
         begin
+          if (FieldName[I] = '_') then
+          begin
+            I := I + 1;
+            NewName := NewName + UpperCase(FieldName[I]);
+          end
+            else
+          begin
+            NewName := NewName + FieldName[I];
+          end;
           I := I + 1;
-          NewName := NewName + UpperCase(FieldName[I]);
-        end
-        else
-        begin
-          NewName := NewName + FieldName[I];
         end;
-        I := I + 1;
+        Result := NewName;
+      end
+        else
+      begin
+        Result := LowerCase(FieldName);
       end;
-    end
-    else
-    begin
+    except
       Result := FieldName;
     end;
-    Result := NewName;
-  except
-    Result := FieldName;
   end;
-end;
 
 /// <summary> Returns a JSON Object response based on an SQL text
 /// </summary>

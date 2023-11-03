@@ -1,31 +1,29 @@
 object frmDataModule: TfrmDataModule
-  Height = 662
-  Width = 988
-  PixelsPerInch = 120
+  Height = 530
+  Width = 790
   object IdSchedulerOfThreadPool1: TIdSchedulerOfThreadPool
     MaxThreads = 50
     PoolSize = 100
-    Left = 220
-    Top = 100
+    Left = 176
+    Top = 80
   end
   object FDConnection1: TFDConnection
     Params.Strings = (
-      'Database=..\Car_Database.db'
+      'Database=D:\projects\tina4delphi\Example\Car_Database.db'
       'DriverID=SQLite')
-    Connected = True
     LoginPrompt = False
-    Left = 450
-    Top = 250
+    Left = 360
+    Top = 200
   end
   object FDTable1: TFDTable
     Connection = FDConnection1
-    Left = 320
-    Top = 250
+    Left = 256
+    Top = 200
   end
   object Tina4REST1: TTina4REST
     BaseUrl = 'https://api.publicapis.org'
-    Left = 480
-    Top = 429
+    Left = 384
+    Top = 343
   end
   object Tina4RESTRequest1: TTina4RESTRequest
     DataKey = 'entries'
@@ -4481,8 +4479,8 @@ object frmDataModule: TfrmDataModule
         '"Auth":"apiKey","HTTPS":true,"Cors":"no","Link":"https:\/\/yande' +
         'x.com\/dev\/weather\/","Category":"Weather"}]}')
     OnExecuteDone = Tina4RESTRequest1ExecuteDone
-    Left = 596
-    Top = 430
+    Left = 485
+    Top = 344
   end
   object FDMemTable1: TFDMemTable
     Active = True
@@ -4532,8 +4530,8 @@ object frmDataModule: TfrmDataModule
     UpdateOptions.CheckRequired = False
     UpdateOptions.AutoCommitUpdates = True
     StoreDefs = True
-    Left = 600
-    Top = 90
+    Left = 480
+    Top = 72
     Content = {
       4144425310000000E8AF0300FF00010001FF02FF03040016000000460044004D
       0065006D005400610062006C0065003100050016000000460044004D0065006D
@@ -12113,13 +12111,14 @@ object frmDataModule: TfrmDataModule
     Connection = FDConnection1
     HTTPServer = IdHTTPServer1
     Active = False
-    Left = 180
-    Top = 430
+    Left = 144
+    Top = 344
   end
   object IdHTTPServer1: TIdHTTPServer
     Bindings = <>
-    Left = 160
-    Top = 190
+    Scheduler = IdSchedulerOfThreadPool1
+    Left = 128
+    Top = 152
   end
   object FDMemTable2: TFDMemTable
     Active = True
@@ -12141,7 +12140,8 @@ object frmDataModule: TfrmDataModule
       end
       item
         Name = 'HTTPS'
-        DataType = ftBoolean
+        DataType = ftString
+        Size = 1000
       end
       item
         Name = 'Cors'
@@ -12163,17 +12163,19 @@ object frmDataModule: TfrmDataModule
     FetchOptions.Mode = fmAll
     ResourceOptions.AssignedValues = [rvSilentMode]
     ResourceOptions.SilentMode = True
-    UpdateOptions.AssignedValues = [uvCheckRequired, uvAutoCommitUpdates]
+    UpdateOptions.AssignedValues = [uvUpdateChngFields, uvUpdateMode, uvLockMode, uvLockPoint, uvLockWait, uvRefreshMode, uvFetchGeneratorsPoint, uvCheckRequired, uvCheckReadOnly, uvCheckUpdatable, uvAutoCommitUpdates]
+    UpdateOptions.LockWait = True
+    UpdateOptions.FetchGeneratorsPoint = gpNone
     UpdateOptions.CheckRequired = False
     UpdateOptions.AutoCommitUpdates = True
     StoreDefs = True
-    Left = 591
-    Top = 250
+    Left = 473
+    Top = 200
   end
   object Tina4Route1: TTina4Route
     EndPoint = '/api/cars'
     CRUD = False
-    Left = 320
-    Top = 432
+    Left = 256
+    Top = 346
   end
 end

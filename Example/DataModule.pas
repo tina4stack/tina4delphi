@@ -51,9 +51,10 @@ var
 
 begin
   //var Entries := SendHttpRequest ('https://api.publicapis.org', 'entries');
+  //WriteLn(Entries);
 
-  WriteLn(StrToJSONArray('["hello", "fellow"]').toString);
-  Tina4RESTRequest1.ExecuteRESTCall;
+  //WriteLn(StrToJSONArray('["hello", "fellow"]').toString);
+  Tina4RESTRequest1.ExecuteRESTCallAsync;
 
 end;
 
@@ -91,6 +92,7 @@ end;
 procedure TfrmDataModule.Tina4RESTRequest1ExecuteDone(Sender: TObject);
 begin
   WriteLn('Fetched Data!');
+ // ShowMessage('Hello');
 end;
 
 end.

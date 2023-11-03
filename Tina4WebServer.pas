@@ -65,10 +65,10 @@ begin
   //Check for Files in the public folder
 
   //Check Routes
-  for var I := 0 t do
-    begin
-      WriteLn(Self.Components[I].ClassName+ ' '+Self.Components[I].Name);
-    end;
+  //for var I := 0 t do
+  //  begin
+  //    WriteLn(Self.Components[I].ClassName+ ' '+Self.Components[I].Name);
+  //  end;
 
 
   //Check Templates

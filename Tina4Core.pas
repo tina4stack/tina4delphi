@@ -10,6 +10,7 @@ uses JSON, System.SysUtils, FireDAC.DApt, FireDAC.Stan.Intf,
   IdSSLOpenSSL, System.Classes;
 
 type
+  TTina4RequestType = (Get,Post,Patch,Put,Delete);
   TTina4Response = class(TObject)
     HTTPCode: Integer;
     ContentType: String;
@@ -30,7 +31,7 @@ function CamelCase(FieldName: String): String;
 function GetJSONFromDB(Connection: TFDConnection; SQL: String;
    Params: TFDParams = nil; DataSetName: String = 'records'): TJSONObject;
 function SendHttpRequest(BaseURL: String; EndPoint: String = ''; QueryParams: String = ''; Body: String=''; ContentType: String = 'application/json';
-  ContentEncoding : String = 'utf-8'; Username:String = ''; Password: String = ''; CustomHeaders: TStringList = nil; UserAgent: String = 'Tina4Delphi'): String;
+  ContentEncoding : String = 'utf-8'; Username:String = ''; Password: String = ''; CustomHeaders: TStringList = nil; UserAgent: String = 'Tina4Delphi'; RequestType: TTina4RequestType = Get): String;
 function StrToJSONObject(JSON:String): TJSONObject;
 function StrToJSONArray(JSON:String): TJSONArray;
 function GetJSONFieldName(FieldName: String) : String;
@@ -182,6 +183,8 @@ end;
 /// </param>
 /// <param name="UserAgent">A name for the user agent doing the requests
 /// </param>
+/// <param name="RequestType">Request Type - Get, Post, Patch, Put, Delete
+/// </param>
 /// <remarks>
 /// A simple function to return back a response from a REST end point
 /// </remarks>
@@ -189,7 +192,8 @@ end;
 /// A string containing the results from the REST endpoint
 /// </returns>
 function SendHttpRequest(BaseURL: String; EndPoint: String = ''; QueryParams: String = ''; Body: String=''; ContentType: String = 'application/json';
-  ContentEncoding : String = 'utf-8'; Username:String = ''; Password: String = ''; CustomHeaders: TStringList = nil; UserAgent: String = 'Tina4Delphi'): String;
+  ContentEncoding : String = 'utf-8'; Username:String = ''; Password: String = ''; CustomHeaders: TStringList = nil; UserAgent: String = 'Tina4Delphi';
+  RequestType: TTina4RequestType = Get): String;
 var
   IdHTTP: TIdHTTP;
   BodyList: TStringStream;
@@ -280,7 +284,7 @@ begin
           Result := '{"error":"' + Result + '"}';
         end;
       end
-      else
+        else
       begin
         MemoryStream := TMemoryStream.Create;
         try

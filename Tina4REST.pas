@@ -13,6 +13,7 @@ type
     FUsername: String;
     FPassword: String;
     FCustomHeaders: TStringList;
+    FUserAgent: String;
     procedure SetCustomHeaders(List: TStringList);
   protected
     { Protected declarations }
@@ -26,6 +27,7 @@ type
 
   published
     { Published declarations }
+    property UserAgent: String read FUserAgent write FUserAgent;
     property BaseUrl: String read FBaseUrl write FBaseUrl;
     property Username: String read FUsername write FUsername;
     property Password: String read FPassword write FPassword;
@@ -47,6 +49,10 @@ constructor TTina4REST.Create(AOwner: TComponent);
 begin
   inherited Create(AOwner);
   FCustomHeaders := TStringList.Create;
+  if FUserAgent = '' then
+  begin
+    FUserAgent := 'Tina4REST';
+  end;
 end;
 
 destructor TTina4REST.Destroy;
@@ -59,7 +65,7 @@ function TTina4REST.Get(EndPoint: String; QueryParams: String=''; ContentType: S
 var
   JSONContent : String;
 begin
-  JSONContent := SendHttpRequest(Self.FBaseUrl, EndPoint, QueryParams, '', ContentType, ContentEncoding, Self.FUsername, Self.FPassword, Self.FCustomHeaders);
+  JSONContent := SendHttpRequest(Self.FBaseUrl, EndPoint, QueryParams, '', ContentType, ContentEncoding, Self.FUsername, Self.FPassword, Self.FCustomHeaders, Self.FUserAgent, TTina4RequestType.Get);
   Result := StrToJSONObject(JSONContent);
 end;
 
@@ -68,7 +74,7 @@ function TTina4REST.Post(EndPoint, QueryParams, Body, ContentType,
 var
   JSONContent : String;
 begin
-  JSONContent := SendHttpRequest(Self.FBaseUrl, EndPoint, QueryParams, Body, ContentType, ContentEncoding, Self.FUsername, Self.FPassword, Self.FCustomHeaders);
+  JSONContent := SendHttpRequest(Self.FBaseUrl, EndPoint, QueryParams, Body, ContentType, ContentEncoding, Self.FUsername, Self.FPassword, Self.FCustomHeaders, Self.FUserAgent, TTina4RequestType.Post);
   Result := StrToJSONObject(JSONContent);
 end;
 

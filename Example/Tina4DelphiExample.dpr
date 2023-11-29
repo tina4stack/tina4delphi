@@ -8,7 +8,7 @@ program Tina4DelphiExample;
 
 uses
   System.SysUtils,
-  DataModule in 'DataModule.pas' {frmDataModule: TDataModule};
+  DataModule in 'DataModule.pas' {h: TDataModule};
 
 begin
   try

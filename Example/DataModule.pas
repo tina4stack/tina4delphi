@@ -18,6 +18,10 @@ type
     IdHTTPServer1: TIdHTTPServer;
     FDMemTable2: TFDMemTable;
     Tina4Route1: TTina4Route;
+    RESTClient1: TRESTClient;
+    RESTRequest1: TRESTRequest;
+    RESTResponse1: TRESTResponse;
+    RESTResponseDataSetAdapter1: TRESTResponseDataSetAdapter;
 
     procedure Tina4HttpServer1CommandGet(AContext: TIdContext; ARequestInfo: TIdHTTPRequestInfo; AResponseInfo: TIdHTTPResponseInfo);
     procedure Tina4RESTRequest1ExecuteDone(Sender: TObject);
@@ -92,6 +96,7 @@ end;
 procedure TfrmDataModule.Tina4RESTRequest1ExecuteDone(Sender: TObject);
 begin
   WriteLn('Fetched Data!');
+  Writeln((Sender as TTina4RESTRequest).ResponseBody.Text);
  // ShowMessage('Hello');
 end;
 

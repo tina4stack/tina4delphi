@@ -14,7 +14,6 @@ type
     Tina4REST1: TTina4REST;
     Tina4RESTRequest1: TTina4RESTRequest;
     FDMemTable1: TFDMemTable;
-    Tina4WebServer1: TTina4WebServer;
     IdHTTPServer1: TIdHTTPServer;
     FDMemTable2: TFDMemTable;
     Tina4Route1: TTina4Route;
@@ -54,11 +53,21 @@ var
   JSONValue : TJSONPair;
 
 begin
-  //var Entries := SendHttpRequest ('https://api.publicapis.org', 'entries');
+  var CustomHeaders : TStringList;
+  CustomHeaders := TStringList.Create;
+
+  try
+  CustomHeaders.Add('Authorization: Bearer abc');
+  var Entries := SendHttpRequest ('http://localhost:7112/api', 'admin/users', '', '', 'application/json', 'utf-8', '', '', CustomHeaders);
+  //BaseURL: String; EndPoint: String = ''; QueryParams: String = ''; Body: String=''; ContentType: String = 'application/json';  ContentEncoding : String = 'utf-8'; Username:String = ''; Password: String = ''; CustomHeaders: TStringList = nil;
   //WriteLn(Entries);
 
   //WriteLn(StrToJSONArray('["hello", "fellow"]').toString);
   Tina4RESTRequest1.ExecuteRESTCallAsync;
+
+  finally
+    CustomHeaders.Free;
+  end;
 
 end;
 

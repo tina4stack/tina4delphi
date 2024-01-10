@@ -288,8 +288,15 @@ begin
       begin
         MemoryStream := TMemoryStream.Create;
         try
+          try
           IdHTTP.Get(Url, MemoryStream);
           Result := StreamToString(MemoryStream);
+          except
+            on E:Exception do
+            begin
+              Result := '{"error":"'+E.Message+'"}';
+            end;
+          end;
         finally
           MemoryStream.Free;
         end;

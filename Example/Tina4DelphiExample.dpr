@@ -16,16 +16,12 @@ begin
    frmDatamodule := TfrmDataModule.Create(nil);
    try
 
-   frmDatamodule.GetBrands;
-   frmDatamodule.GetSBrands;
+   frmDatamodule.Tina4RESTRequest1.ExecuteRESTCall;
+   //frmDatamodule.GetBrands;
+   //frmDatamodule.GetSBrands;
    frmDatamodule.GetEntries;
 
-   frmDataModule.Tina4WebServer1.Active := True;
-   while frmDataModule.Tina4WebServer1.Active do
-   begin
-     WriteLn('Polling');
-     sleep (2000);
-   end;
+  
 
 
    ReadLn;

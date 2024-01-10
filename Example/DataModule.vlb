@@ -7,24 +7,37 @@ Coordinates=225,53,76,33
 [Tina4REST1]
 Coordinates=225,105,74,33
 
-[Tina4WebServer1]
-Coordinates=225,157,100,33
-
 [IdSchedulerOfThreadPool1]
 Coordinates=206,197,147,33
 
 [FDMemTable2]
-Coordinates=104,10,84,177
+Coordinates=104,10,84,87
 
 [IdHTTPServer1]
 Coordinates=225,249,88,33
 
 [FDMemTable1]
-Coordinates=10,10,84,177
+Coordinates=420,50,84,393
+Visible=True
 
 [FDConnection1]
 Coordinates=206,285,90,33
 
 [FDTable1]
 Coordinates=198,10,60,51
+
+[]
+Coordinates=132,351,91,36
+
+[RESTRequest1]
+Coordinates=132,131,88,87
+
+[RESTResponse1]
+Coordinates=0,0,96,303
+
+[RESTClient1]
+Coordinates=132,252,76,69
+
+[RESTResponseDataSetAdapter1]
+Coordinates=288,160,174,33
 

@@ -130,6 +130,12 @@ begin
     end;
 
     try
+      if (Response = nil) then
+      begin
+        Self.FResponseBody.Text := '{"error": "Check the response from the server, something bad happened!"}';
+        Exit;
+      end;
+
       Self.FResponseBody.Text := Response.ToString;
       if Assigned(Self.FMemTable) then
       begin

@@ -8,3 +8,4 @@ This is not another framework for Delphi
 ## Change Release
 
 - 2024-01-10 Fixed access violation when REST request did not work, returns as error JSON in Execute
+- 2024-01-10 Added GetJSONFromTable to Core and better error handling for REST requests

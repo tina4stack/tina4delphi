@@ -30,6 +30,8 @@ type
 function CamelCase(FieldName: String): String;
 function GetJSONFromDB(Connection: TFDConnection; SQL: String;
    Params: TFDParams = nil; DataSetName: String = 'records'): TJSONObject;
+function GetJSONFromTable(Table: TFDMemTable; DataSetName: String = 'records'): TJSONObject; overload;
+function GetJSONFromTable(Table: TFDTable; DataSetName: String = 'records'): TJSONObject; overload;
 function SendHttpRequest(BaseURL: String; EndPoint: String = ''; QueryParams: String = ''; Body: String=''; ContentType: String = 'application/json';
   ContentEncoding : String = 'utf-8'; Username:String = ''; Password: String = ''; CustomHeaders: TStringList = nil; UserAgent: String = 'Tina4Delphi'; RequestType: TTina4RequestType = Get): String;
 function StrToJSONObject(JSON:String): TJSONObject;
@@ -160,6 +162,145 @@ begin
     end;
   end;
 end;
+
+/// <summary> Returns a JSON Object response based on the data in a TFDMemTable
+/// </summary>
+/// <param name="Table">A TFDMemTable from which to get the data
+/// </param>
+/// <param name="DataSetName">A name to give the returned result, example: cats, the default is records
+/// </param>
+/// <remarks>
+/// A JSON object is returned with an array of records, if an exception happens , error is returned with the correct error
+/// </remarks>
+/// <returns>
+/// JSON Object with an Array of records
+/// </returns>
+function GetJSONFromTable(Table: TFDMemTable; DataSetName: String = 'records'): TJSONObject; overload;
+var
+  DataRecord: TJSONObject;
+  DataArray: TJSONArray;
+  I: Integer;
+  FieldNames: Array of String;
+
+begin
+  Result := TJSONObject.Create;
+  DataArray := TJSONArray.Create;
+  try
+    try
+      if not Table.Active then
+      begin
+        Table.Open;
+      end;
+
+      Table.First;
+
+      while not Table.Eof do
+      begin
+        DataRecord := TJSONObject.Create;
+
+        for I := 0 to Table.FieldDefs.Count - 1 do
+        begin
+          if (Length(FieldNames) = Table.FieldDefs.Count) then
+          // gets the field names in camel case on first iteration to save processing
+          begin
+            DataRecord.AddPair(FieldNames[I],
+              Table.FieldByName(Table.FieldDefs[I].Name).AsString);
+          end
+          else
+          begin
+            SetLength(FieldNames, Length(FieldNames) + 1);
+            FieldNames[I] := CamelCase(Table.FieldDefs[I].Name);
+            DataRecord.AddPair(FieldNames[I],
+              Table.FieldByName(Table.FieldDefs[I].Name).AsString);
+          end;
+        end;
+
+        DataArray.Add(DataRecord);
+
+        Table.Next;
+      end;
+
+      Result.AddPair(DataSetName, DataArray);
+    finally
+
+    end;
+  except
+    on E: Exception do
+    begin
+      Result.AddPair('error', E.UnitName + ' ' + E.Message);
+    end;
+  end;
+end;
+
+/// <summary> Returns a JSON Object response based on the data in a TFDTable
+/// </summary>
+/// <param name="Table">A TFDMemTable from which to get the data
+/// </param>
+/// <param name="DataSetName">A name to give the returned result, example: cats, the default is records
+/// </param>
+/// <remarks>
+/// A JSON object is returned with an array of records, if an exception happens , error is returned with the correct error
+/// </remarks>
+/// <returns>
+/// JSON Object with an Array of records
+/// </returns>
+function GetJSONFromTable(Table: TFDTable; DataSetName: String = 'records'): TJSONObject; overload;
+var
+  DataRecord: TJSONObject;
+  DataArray: TJSONArray;
+  I: Integer;
+  FieldNames: Array of String;
+
+begin
+  Result := TJSONObject.Create;
+  DataArray := TJSONArray.Create;
+  try
+    try
+      if not Table.Active then
+      begin
+        Table.Open;
+      end;
+
+      Table.First;
+
+      while not Table.Eof do
+      begin
+        DataRecord := TJSONObject.Create;
+
+        for I := 0 to Table.FieldDefs.Count - 1 do
+        begin
+          if (Length(FieldNames) = Table.FieldDefs.Count) then
+          // gets the field names in camel case on first iteration to save processing
+          begin
+            DataRecord.AddPair(FieldNames[I],
+              Table.FieldByName(Table.FieldDefs[I].Name).AsString);
+          end
+          else
+          begin
+            SetLength(FieldNames, Length(FieldNames) + 1);
+            FieldNames[I] := CamelCase(Table.FieldDefs[I].Name);
+            DataRecord.AddPair(FieldNames[I],
+              Table.FieldByName(Table.FieldDefs[I].Name).AsString);
+          end;
+        end;
+
+        DataArray.Add(DataRecord);
+
+        Table.Next;
+      end;
+
+      Result.AddPair(DataSetName, DataArray);
+    finally
+
+    end;
+  except
+    on E: Exception do
+    begin
+      Result.AddPair('error', E.UnitName + ' ' + E.Message);
+    end;
+  end;
+end;
+
 
 /// <summary> Returns a response from an REST end point
 /// </summary>
@@ -400,7 +541,18 @@ begin
     for var Index : Integer := 0 to JSONObject.Count-1 do
     begin
       var FieldName: String := JSONObject.Pairs[Index].JsonString.Value;
-      MemTable.FieldDefs.Add(FieldName, TFieldType.ftString, 1000);
+
+      try
+        if MemTable.FieldDefs.IndexOf(FieldName) = -1 then
+        begin
+            MemTable.FieldDefs.Add(FieldName, TFieldType.ftString, 1000);
+        end;
+      except
+          On Exception do
+          begin
+            //Fail silently - must be a data issue or duplicate field ?
+          end;
+        end;
     end;
   except
     MemTable.FieldDefs.Clear;

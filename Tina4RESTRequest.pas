@@ -186,6 +186,13 @@ begin
         end;
 
 
+      end
+        else
+      begin
+        if (Assigned(Self.FOnExecuteDone)) then
+        begin
+          Self.FOnExecuteDone(Self);
+        end;
       end;
     finally
       Response.Free;

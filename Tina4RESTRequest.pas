@@ -133,6 +133,10 @@ begin
       if (Response = nil) then
       begin
         Self.FResponseBody.Text := '{"error": "Check the response from the server, something bad happened!"}';
+        if (Assigned(Self.FOnExecuteDone)) then
+        begin
+          Self.FOnExecuteDone(Self);
+        end;
         Exit;
       end;
 
@@ -184,8 +188,6 @@ begin
             Self.FOnExecuteDone(Self);
           end;
         end;
-
-
       end
         else
       begin

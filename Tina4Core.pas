@@ -6,8 +6,8 @@ uses JSON, System.SysUtils, FireDAC.DApt, FireDAC.Stan.Intf,
   FireDAC.Stan.Option, FireDAC.Stan.Error, FireDAC.UI.Intf,
   FireDAC.Phys.Intf, FireDAC.Stan.Def, FireDAC.Stan.Pool, FireDAC.Stan.Async,
   FireDAC.Phys, FireDAC.ConsoleUI.Wait,
-  Data.DB, FireDAC.Comp.Client, FireDAC.Stan.Param, IdHTTP, System.NetEncoding,
-  IdSSLOpenSSL, System.Classes;
+  Data.DB, FireDAC.Comp.Client, FireDAC.Stan.Param, System.NetEncoding,
+  System.Classes, System.Net.HttpClientComponent, System.Net.URLClient;
 
 type
   TTina4RequestType = (Get,Post,Patch,Put,Delete);
@@ -18,7 +18,7 @@ type
   end;
 
   TTina4Request = class(TObject)
-    Headers: TStringList;
+    Headers: TURLHeaders;
     QueryParams: TStringList;
     Body: String;
   end;
@@ -33,7 +33,7 @@ function GetJSONFromDB(Connection: TFDConnection; SQL: String;
 function GetJSONFromTable(Table: TFDMemTable; DataSetName: String = 'records'): TJSONObject; overload;
 function GetJSONFromTable(Table: TFDTable; DataSetName: String = 'records'): TJSONObject; overload;
 function SendHttpRequest(BaseURL: String; EndPoint: String = ''; QueryParams: String = ''; Body: String=''; ContentType: String = 'application/json';
-  ContentEncoding : String = 'utf-8'; Username:String = ''; Password: String = ''; CustomHeaders: TStringList = nil; UserAgent: String = 'Tina4Delphi'; RequestType: TTina4RequestType = Get): String;
+  ContentEncoding : String = 'utf-8'; Username:String = ''; Password: String = ''; CustomHeaders: TURLHeaders = nil; UserAgent: String = 'Tina4Delphi'; RequestType: TTina4RequestType = Get): String;
 function StrToJSONObject(JSON:String): TJSONObject;
 function StrToJSONArray(JSON:String): TJSONArray;
 function GetJSONFieldName(FieldName: String) : String;
@@ -333,14 +333,16 @@ end;
 /// A string containing the results from the REST endpoint
 /// </returns>
 function SendHttpRequest(BaseURL: String; EndPoint: String = ''; QueryParams: String = ''; Body: String=''; ContentType: String = 'application/json';
-  ContentEncoding : String = 'utf-8'; Username:String = ''; Password: String = ''; CustomHeaders: TStringList = nil; UserAgent: String = 'Tina4Delphi';
+  ContentEncoding : String = 'utf-8'; Username:String = ''; Password: String = ''; CustomHeaders: TURLHeaders = nil; UserAgent: String = 'Tina4Delphi';
   RequestType: TTina4RequestType = Get): String;
 var
-  IdHTTP: TIdHTTP;
+  HttpClient: TNetHTTPClient;
+  HTTPRequest: TNetHTTPRequest;
   BodyList: TStringStream;
   MemoryStream : TMemoryStream;
-  Url, Header: String;
-  Ssl: TIdSSLIOHandlerSocketOpenSSL;
+  Url: String;
+  Header: TNetHeader;
+
 
 
   function StreamToString(aStream: TStream): string;
@@ -372,49 +374,46 @@ begin
       Url := Url + '?' + QueryParams;
     end;
 
-    IdHTTP := TIdHTTP.Create(nil);
+    HttpClient := TNetHTTPClient.Create(nil);
     BodyList := TStringStream.Create(Body);
 
     try
-      IdHTTP.ConnectTimeout := 60000;
-      IdHTTP.ReadTimeout := 600000;
-      // Open SSL handling
-      Ssl := TIdSSLIOHandlerSocketOpenSSL.Create(IdHTTP);
-      Ssl.SSLOptions.SSLVersions := [sslvTLSv1_2];
+      HttpClient.ConnectionTimeout := 60000;
+      HttpClient.ResponseTimeout := 600000;
 
-      IdHTTP.IOHandler := Ssl;
+      HttpClient.HandleRedirects := True;
 
-      IdHTTP.HTTPOptions := IdHTTP.HTTPOptions + [hoNoProtocolErrorException,
-        hoWantProtocolErrorContent];
-
-      IdHTTP.HandleRedirects := True;
-      IdHTTP.Request.CustomHeaders.FoldLines := False;
-      IdHTTP.Request.UserAgent := UserAgent;
+      HttpCLient.UserAgent := UserAgent;
 
       if (Username <> '') then
       begin
         var Auth := TNetEncoding.Base64.Encode(Username+':'+Password);
-        IdHTTP.Request.CustomHeaders.Add('Authorization: Basic '+Auth);
+        HttpCLient.CustHeaders.Add('Authorization', 'Basic '+Auth);
       end;
 
       if Assigned(CustomHeaders) then
       begin
         for Header in CustomHeaders do
         begin
-          IdHTTP.Request.CustomHeaders.Add(Header);
+          HttpClient.CustHeaders.Add(Header);
         end;
       end;
 
       if (Body <> '') then
       begin
-        IdHTTP.Request.ContentType := ContentType;
-        IdHTTP.Request.Accept := ContentType;
-        IdHTTP.Request.ContentEncoding := ContentEncoding;
+        HTTPRequest := TNetHTTPRequest.Create(HttpClient);
+        HTTPRequest.Client := HttpClient;
+        //HTTPRequest.OnRequestCompleted := HTTPRequestCompleted;
+        //HTTPRequest.OnRequestError := HTTPRequestError;
+
+        HTTPRequest.Client.ContentType := ContentType;
+        HTTPRequest.Accept := ContentType;
+        HTTPRequest.AcceptEncoding := ContentEncoding;
 
         MemoryStream := TMemoryStream.Create;
         try
-         IdHTTP.Post(Url, BodyList, MemoryStream);
-         Result := StreamToString(MemoryStream);
+          HTTPRequest.Post(Url, BodyList, MemoryStream);
+          Result := StreamToString(MemoryStream);
         finally
           MemoryStream.Free;
         end;
@@ -430,7 +429,7 @@ begin
         MemoryStream := TMemoryStream.Create;
         try
           try
-          IdHTTP.Get(Url, MemoryStream);
+          HTTPRequest.Get(Url, MemoryStream);
           Result := StreamToString(MemoryStream);
           except
             on E:Exception do
@@ -449,7 +448,8 @@ begin
         end;
       end;
     finally
-      IdHTTP.Free;
+      HTTPRequest.Free;
+      HTTPClient.Free;
       BodyList.Free;
     end;
   except

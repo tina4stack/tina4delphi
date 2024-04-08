@@ -4,14 +4,13 @@ interface
 
 uses
   System.SysUtils, System.Classes, IdBaseComponent, IdComponent, IdCustomTCPServer, IdCustomHTTPServer, IdHTTPServer, FMX.Dialogs, IdContext, IdScheduler, IdSchedulerOfThread, IdSchedulerOfThreadPool, IdServerIOHandler, IdSSL, IdSSLOpenSSL, FireDAC.Stan.Intf, FireDAC.Stan.Option, FireDAC.Stan.Error, FireDAC.UI.Intf, FireDAC.Phys.Intf, FireDAC.Stan.Def, FireDAC.Stan.Pool, FireDAC.Stan.Async, FireDAC.Phys, FireDAC.ConsoleUI.Wait, Data.DB, FireDAC.Comp.Client, FireDAC.Phys.SQLite, FireDAC.Phys.SQLiteDef, FireDAC.Stan.ExprFuncs, FireDAC.Phys.SQLiteWrapper.Stat, Tina4Core, JSON, FireDAC.Stan.Param, FireDAC.DatS, FireDAC.DApt.Intf, FireDAC.DApt, FireDAC.Comp.DataSet, Tina4REST, Tina4Route,
-  Data.Bind.Components, Data.Bind.ObjectScope, REST.Client, Tina4RESTRequest, FireDAC.Stan.StorageBin, Tina4WebServer, REST.Types, REST.Response.Adapter;
+  Data.Bind.Components, Data.Bind.ObjectScope, REST.Client, Tina4RESTRequest, FireDAC.Stan.StorageBin, Tina4WebServer, REST.Types, REST.Response.Adapter, System.Net.URLClient;
 
 type
   TfrmDataModule = class(TDataModule)
     IdSchedulerOfThreadPool1: TIdSchedulerOfThreadPool;
     FDConnection1: TFDConnection;
     FDTable1: TFDTable;
-    Tina4REST1: TTina4REST;
     Tina4RESTRequest1: TTina4RESTRequest;
     FDMemTable1: TFDMemTable;
     IdHTTPServer1: TIdHTTPServer;
@@ -53,11 +52,11 @@ var
   JSONValue : TJSONPair;
 
 begin
-  var CustomHeaders : TStringList;
-  CustomHeaders := TStringList.Create;
+  var CustomHeaders : TUrlHeaders;
+  CustomHeaders := TUrlHeaders.Create;
 
   try
-  CustomHeaders.Add('Authorization: Bearer abc');
+  CustomHeaders.Add('Authorization','Bearer abc');
   var Entries := SendHttpRequest ('http://localhost:7112/api', 'admin/users', '', '', 'application/json', 'utf-8', '', '', CustomHeaders);
   //BaseURL: String; EndPoint: String = ''; QueryParams: String = ''; Body: String=''; ContentType: String = 'application/json';  ContentEncoding : String = 'utf-8'; Username:String = ''; Password: String = ''; CustomHeaders: TStringList = nil;
   //WriteLn(Entries);

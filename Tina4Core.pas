@@ -399,18 +399,19 @@ begin
         end;
       end;
 
+      HTTPRequest := TNetHTTPRequest.Create(nil);
+      HTTPRequest.Client := HttpClient;
+      HTTPRequest.Client.ContentType := ContentType;
+      HTTPRequest.Accept := ContentType;
+      HTTPRequest.AcceptEncoding := ContentEncoding;
+      //HTTPRequest.OnRequestCompleted := HTTPRequestCompleted;
+      //HTTPRequest.OnRequestError := HTTPRequestError;
+
+      MemoryStream := TMemoryStream.Create;
+
       if (Body <> '') then
       begin
-        HTTPRequest := TNetHTTPRequest.Create(HttpClient);
-        HTTPRequest.Client := HttpClient;
-        //HTTPRequest.OnRequestCompleted := HTTPRequestCompleted;
-        //HTTPRequest.OnRequestError := HTTPRequestError;
 
-        HTTPRequest.Client.ContentType := ContentType;
-        HTTPRequest.Accept := ContentType;
-        HTTPRequest.AcceptEncoding := ContentEncoding;
-
-        MemoryStream := TMemoryStream.Create;
         try
           HTTPRequest.Post(Url, BodyList, MemoryStream);
           Result := StreamToString(MemoryStream);
@@ -426,7 +427,6 @@ begin
       end
         else
       begin
-        MemoryStream := TMemoryStream.Create;
         try
           try
           HTTPRequest.Get(Url, MemoryStream);

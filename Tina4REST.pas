@@ -3,7 +3,7 @@ unit Tina4REST;
 interface
 
 uses
-  System.SysUtils, System.Classes, JSON, Tina4Core;
+  System.SysUtils, System.Classes, JSON, Tina4Core,System.Net.URLClient;
 
 type
   TTina4REST = class(TComponent)
@@ -12,9 +12,9 @@ type
     FBaseUrl : String;
     FUsername: String;
     FPassword: String;
-    FCustomHeaders: TStringList;
+    FCustomHeaders: TURLHeaders;
     FUserAgent: String;
-    procedure SetCustomHeaders(List: TStringList);
+    procedure SetCustomHeaders(List: TURLHeaders);
   protected
     { Protected declarations }
   public
@@ -31,7 +31,7 @@ type
     property BaseUrl: String read FBaseUrl write FBaseUrl;
     property Username: String read FUsername write FUsername;
     property Password: String read FPassword write FPassword;
-    property CustomHeaders: TStringList read FCustomHeaders write SetCustomHeaders;
+    property CustomHeaders: TURLHeaders read FCustomHeaders write SetCustomHeaders;
   end;
 
 procedure Register;
@@ -48,7 +48,7 @@ end;
 constructor TTina4REST.Create(AOwner: TComponent);
 begin
   inherited Create(AOwner);
-  FCustomHeaders := TStringList.Create;
+  FCustomHeaders := TURLHeaders.Create;
   if FUserAgent = '' then
   begin
     FUserAgent := 'Tina4REST';
@@ -78,7 +78,7 @@ begin
   Result := StrToJSONObject(JSONContent);
 end;
 
-procedure TTina4REST.SetCustomHeaders(List: TStringList);
+procedure TTina4REST.SetCustomHeaders(List: TURLHeaders);
 begin
   FCustomHeaders.Assign(List);
 end;

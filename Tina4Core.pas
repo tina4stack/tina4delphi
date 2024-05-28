@@ -7,7 +7,7 @@ uses JSON, System.SysUtils, FireDAC.DApt, FireDAC.Stan.Intf,
   FireDAC.Phys.Intf, FireDAC.Stan.Def, FireDAC.Stan.Pool, FireDAC.Stan.Async,
   FireDAC.Phys, FireDAC.ConsoleUI.Wait,
   Data.DB, FireDAC.Comp.Client, FireDAC.Stan.Param, System.NetEncoding,
-  System.Classes, System.Net.HttpClientComponent, System.Net.URLClient;
+  System.Classes, System.Generics.Collections, System.Net.HttpClientComponent, System.Net.URLClient;
 
 type
   TTina4RequestType = (Get,Post,Patch,Put,Delete);
@@ -376,6 +376,7 @@ begin
 
     HttpClient := TNetHTTPClient.Create(nil);
     BodyList := TStringStream.Create(Body);
+    HTTPRequest := TNetHTTPRequest.Create(nil);
 
     try
       HttpClient.ConnectionTimeout := 60000;
@@ -399,7 +400,7 @@ begin
         end;
       end;
 
-      HTTPRequest := TNetHTTPRequest.Create(nil);
+
       HTTPRequest.Client := HttpClient;
       HTTPRequest.Client.ContentType := ContentType;
       HTTPRequest.Accept := ContentType;

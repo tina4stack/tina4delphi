@@ -3,7 +3,7 @@
         <ProjectGuid>{77A8C367-7A0E-4577-BD77-0820AB9F891B}</ProjectGuid>
         <MainSource>Tina4DelphiDesign.dpk</MainSource>
         <ProjectVersion>20.1</ProjectVersion>
-        <FrameworkType>None</FrameworkType>
+        <FrameworkType>VCL</FrameworkType>
         <Base>True</Base>
         <Config Condition="'$(Config)'==''">Debug</Config>
         <Platform Condition="'$(Platform)'==''">Win32</Platform>
@@ -74,7 +74,7 @@
         <DCC_K>false</DCC_K>
         <GenDll>true</GenDll>
         <GenPackage>true</GenPackage>
-        <DCC_Namespace>System;Xml;Data;Datasnap;Web;Soap;$(DCC_Namespace)</DCC_Namespace>
+        <DCC_Namespace>System;Xml;Data;Datasnap;Web;Soap;Vcl;Vcl.Imaging;Vcl.Touch;Vcl.Samples;Vcl.Shell;$(DCC_Namespace)</DCC_Namespace>
         <DCC_CBuilderOutput>All</DCC_CBuilderOutput>
         <SanitizedProjectName>Tina4DelphiDesign</SanitizedProjectName>
         <DesignOnlyPackage>true</DesignOnlyPackage>
@@ -152,6 +152,11 @@
         <DCCReference Include="FireDACCommon.dcp"/>
         <DCCReference Include="Tina4Delphi.dcp"/>
         <DCCReference Include="Tina4RESTRequestEditor.pas"/>
+        <DCCReference Include="Tina4RESTEditor.pas"/>
+        <DCCReference Include="Tina4URLHeaderEditor.pas">
+            <Form>frmTina4URLHeaderEditor</Form>
+            <FormType>dfm</FormType>
+        </DCCReference>
         <BuildConfiguration Include="Base">
             <Key>Base</Key>
         </BuildConfiguration>
@@ -173,12 +178,8 @@
                     <Source Name="MainSource">Tina4DelphiDesign.dpk</Source>
                 </Source>
                 <Excluded_Packages>
-                    <Excluded_Packages Name="$(BDSBIN)\dclbcbsmp280.bpl">File c:\program files (x86)\embarcadero\studio\22.0\bin\dclbcbsmp280.bpl not found</Excluded_Packages>
-                    <Excluded_Packages Name="$(BDSBIN)\bcbie280.bpl">File c:\program files (x86)\embarcadero\studio\22.0\bin\bcbie280.bpl not found</Excluded_Packages>
-                    <Excluded_Packages Name="$(BDSBIN)\bcboffice2k280.bpl">Embarcadero C++Builder Office 2000 Servers Package</Excluded_Packages>
-                    <Excluded_Packages Name="$(BDSBIN)\bcbofficexp280.bpl">Embarcadero C++Builder Office XP Servers Package</Excluded_Packages>
-                    <Excluded_Packages Name="$(BDSBIN)\dcloffice2k280.bpl">Microsoft Office 2000 Sample Automation Server Wrapper Components</Excluded_Packages>
-                    <Excluded_Packages Name="$(BDSBIN)\dclofficexp280.bpl">Microsoft Office XP Sample Automation Server Wrapper Components</Excluded_Packages>
+                    <Excluded_Packages Name="$(BDSBIN)\dcloffice2k290.bpl">Microsoft Office 2000 Sample Automation Server Wrapper Components</Excluded_Packages>
+                    <Excluded_Packages Name="$(BDSBIN)\dclofficexp290.bpl">Microsoft Office XP Sample Automation Server Wrapper Components</Excluded_Packages>
                 </Excluded_Packages>
             </Delphi.Personality>
             <Deployment Version="4">
@@ -197,7 +198,7 @@
                         <Overwrite>true</Overwrite>
                     </Platform>
                 </DeployFile>
-                <DeployFile LocalName="..\..\..\Public\Documents\Embarcadero\Studio\22.0\Bpl\Tina4DelphiDesign.bpl" Configuration="Debug" Class="ProjectOutput">
+                <DeployFile LocalName="C:\Users\Public\Documents\Embarcadero\Studio\23.0\Bpl\Tina4DelphiDesign.bpl" Configuration="Debug" Class="ProjectOutput">
                     <Platform Name="Win32">
                         <RemoteName>Tina4DelphiDesign.bpl</RemoteName>
                         <Overwrite>true</Overwrite>

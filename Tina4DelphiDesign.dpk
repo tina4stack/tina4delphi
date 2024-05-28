@@ -42,6 +42,8 @@ requires
   Tina4Delphi;
 
 contains
-  Tina4RESTRequestEditor in 'Tina4RESTRequestEditor.pas';
+  Tina4RESTRequestEditor in 'Tina4RESTRequestEditor.pas',
+  Tina4RESTEditor in 'Tina4RESTEditor.pas',
+  Tina4URLHeaderEditor in 'Tina4URLHeaderEditor.pas' {frmTina4URLHeaderEditor};
 
 end.

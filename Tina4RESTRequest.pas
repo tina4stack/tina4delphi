@@ -3,7 +3,7 @@ unit Tina4RESTRequest;
 interface
 
 uses
-  System.SysUtils, System.Classes, Data.DB, FireDAC.Comp.DataSet,
+  System.SysUtils, System.Generics.Collections, System.Classes, Data.DB, FireDAC.Comp.DataSet,
   FireDAC.Comp.Client, Tina4Core, Tina4REST, FMX.Dialogs, JSON;
 
 type
@@ -118,6 +118,7 @@ begin
   if Assigned(Self.FTina4REST) then
   begin
     Self.FResponseBody.Clear;
+    Response := nil;
 
     if (Self.FRequestType = TTina4RequestType.Get) then
     begin

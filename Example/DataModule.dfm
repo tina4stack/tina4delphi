@@ -20,24 +20,6 @@ object frmDataModule: TfrmDataModule
     Left = 256
     Top = 200
   end
-  object Tina4REST1: TTina4REST
-    UserAgent = 'Tina4REST'
-    BaseUrl = 'http://localhost:7112/api'
-    Left = 72
-    Top = 407
-  end
-  object Tina4RESTRequest1: TTina4RESTRequest
-    RequestType = Get
-    DataKey = 'data'
-    EndPoint = 'sim'
-    MemTable = FDMemTable1
-    Tina4REST = Tina4REST1
-    ResponseBody.Strings = (
-      '{"error":"Socket Error # 10061\r\nConnection refused."}')
-    OnExecuteDone = Tina4RESTRequest1ExecuteDone
-    Left = 237
-    Top = 408
-  end
   object FDMemTable1: TFDMemTable
     Active = True
     FieldDefs = <
@@ -128,12 +110,6 @@ object frmDataModule: TfrmDataModule
     Left = 529
     Top = 120
   end
-  object Tina4Route1: TTina4Route
-    EndPoint = '/api/cars'
-    CRUD = False
-    Left = 352
-    Top = 410
-  end
   object RESTClient1: TRESTClient
     Params = <>
     SynchronizedEvents = False
@@ -156,5 +132,15 @@ object frmDataModule: TfrmDataModule
     FieldDefs = <>
     Left = 704
     Top = 456
+  end
+  object Tina4REST1: TTina4REST
+    UserAgent = 'Tina4REST'
+    Left = 168
+    Top = 480
+  end
+  object Tina4WebServer1: TTina4WebServer
+    Active = False
+    Left = 528
+    Top = 240
   end
 end

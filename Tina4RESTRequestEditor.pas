@@ -3,7 +3,7 @@ unit Tina4RESTRequestEditor;
 interface
 
 uses
-  DesignIntf, DesignEditors, Classes, Tina4RestRequest;
+  DesignIntf, DesignEditors, Classes, Dialogs, Tina4RestRequest;
 
 type
   TTina4RESTRequestEditor = class(TComponentEditor)
@@ -28,7 +28,10 @@ procedure TTina4RESTRequestEditor.ExecuteVerb(Index: Integer);
 begin
   inherited;
   case Index of
-    0: (Component as TTina4RESTRequest).ExecuteRESTCall;
+    0: begin
+         (Component as TTina4RESTRequest).ExecuteRESTCall;
+         MessageDlg('Done!', mtInformation, [mbOk], 0);
+       end;
   end;
 end;
 

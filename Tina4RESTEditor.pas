@@ -3,7 +3,7 @@ unit Tina4RESTEditor;
 interface
 
 uses
-  DesignIntf, DesignEditors, Classes, Tina4Rest, System.Net.URLClient, System.UITypes, Tina4URLHeaderEditor, VCL.Forms;
+  DesignIntf, DesignEditors, Classes, Tina4Rest, System.Net.URLClient, System.UITypes, Tina4URLHeaderEditor, VCL.Forms, VCL.Dialogs;
 
 type
   TURLHeadersEditor = class(TPropertyEditor)
@@ -19,7 +19,7 @@ implementation
 
 procedure Register;
 begin
-  RegisterPropertyEditor(TypeInfo(TUrlHeaders), nil, '', TURLHeadersEditor);
+  RegisterPropertyEditor(TypeInfo(TUrlHeaders), TTina4REST, 'CustomHeaders', TURLHeadersEditor);
 end;
 
 { TURLHeadersEditor }
@@ -30,10 +30,10 @@ procedure TURLHeadersEditor.Edit;
 begin
   frmTina4URLHeaderEditor :=  TfrmTina4URLHeaderEditor.Create(Application);
   try
-    frmTina4URLHeaderEditor.URLHeaders.Assign(GetVarValue);
+    frmTina4URLHeaderEditor.URLHeaders := TURLHeaders(GetOrdValue);
     if frmTina4URLHeaderEditor.ShowModal = mrOK then
     begin
-      Self.SetVarValue(frmTina4URLHeaderEditor.URLHeaders);
+      SetOrdValue(LongInt(frmTina4URLHeaderEditor.URLHeaders));
     end;
   finally
     frmTina4URLHeaderEditor.Free;
@@ -47,7 +47,7 @@ end;
 
 function TURLHeadersEditor.GetValue: String;
 begin
-  Result := 'Click to Edit Headers';
+  Result := 'Click to add customer headers';
 end;
 
 

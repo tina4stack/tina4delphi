@@ -155,7 +155,6 @@
         <DCCReference Include="Tina4RESTEditor.pas"/>
         <DCCReference Include="Tina4URLHeaderEditor.pas">
             <Form>frmTina4URLHeaderEditor</Form>
-            <FormType>dfm</FormType>
         </DCCReference>
         <BuildConfiguration Include="Base">
             <Key>Base</Key>
@@ -195,6 +194,12 @@
                 </DeployFile>
                 <DeployFile LocalName="$(BDS)\Redist\osx32\libcgunwind.1.0.dylib" Class="DependencyModule">
                     <Platform Name="OSX32">
+                        <Overwrite>true</Overwrite>
+                    </Platform>
+                </DeployFile>
+                <DeployFile LocalName="..\..\..\Public\Documents\Embarcadero\Studio\22.0\Bpl\Tina4DelphiDesign.bpl" Configuration="Debug" Class="ProjectOutput">
+                    <Platform Name="Win32">
+                        <RemoteName>Tina4DelphiDesign.bpl</RemoteName>
                         <Overwrite>true</Overwrite>
                     </Platform>
                 </DeployFile>

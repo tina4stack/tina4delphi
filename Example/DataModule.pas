@@ -11,15 +11,15 @@ type
     IdSchedulerOfThreadPool1: TIdSchedulerOfThreadPool;
     FDConnection1: TFDConnection;
     FDTable1: TFDTable;
-    Tina4RESTRequest1: TTina4RESTRequest;
     FDMemTable1: TFDMemTable;
     IdHTTPServer1: TIdHTTPServer;
     FDMemTable2: TFDMemTable;
-    Tina4Route1: TTina4Route;
     RESTClient1: TRESTClient;
     RESTRequest1: TRESTRequest;
     RESTResponse1: TRESTResponse;
     RESTResponseDataSetAdapter1: TRESTResponseDataSetAdapter;
+    Tina4REST1: TTina4REST;
+    Tina4WebServer1: TTina4WebServer;
 
     procedure Tina4HttpServer1CommandGet(AContext: TIdContext; ARequestInfo: TIdHTTPRequestInfo; AResponseInfo: TIdHTTPResponseInfo);
     procedure Tina4RESTRequest1ExecuteDone(Sender: TObject);

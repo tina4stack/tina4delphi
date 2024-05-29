@@ -3,7 +3,7 @@ unit Tina4REST;
 interface
 
 uses
-  System.SysUtils, System.Classes, JSON, Tina4Core, System.Net.URLClient;
+  System.SysUtils, System.Classes, JSON, Tina4Core, System.Net.URLClient, FMX.Dialogs;
 
 type
   TTina4REST = class(TComponent)
@@ -25,13 +25,17 @@ type
     function Get(EndPoint: String; QueryParams: String=''; ContentType: String= 'application/json'; ContentEncoding: String = 'utf-8'): TJSONObject;
     function Post(EndPoint: String; QueryParams: String=''; Body: String = ''; ContentType: String= 'application/json'; ContentEncoding: String = 'utf-8'): TJSONObject;
 
+    procedure LoadHeaderProperty(Reader: TReader);
+    procedure SaveHeaderProperty(Writer: TWriter);
+    procedure DefineProperties(Filer: TFiler); override;
   published
     { Published declarations }
     property UserAgent: String read FUserAgent write FUserAgent;
     property BaseUrl: String read FBaseUrl write FBaseUrl;
     property Username: String read FUsername write FUsername;
     property Password: String read FPassword write FPassword;
-    property CustomHeaders: TURLHeaders read FCustomHeaders write SetCustomHeaders;
+    property CustomHeaders: TURLHeaders read FCustomHeaders write SetCustomHeaders stored True;
+
   end;
 
 procedure Register;
@@ -55,6 +59,12 @@ begin
   end;
 end;
 
+procedure TTina4REST.DefineProperties(Filer: TFiler);
+begin
+  inherited;
+  Filer.DefineProperty('CustomHeaders.List', LoadHeaderProperty, SaveHeaderProperty, CustomHeaders.Headers <> nil);
+end;
+
 destructor TTina4REST.Destroy;
 begin
   FCustomHeaders.Free;
@@ -69,6 +79,19 @@ begin
   Result := StrToJSONObject(JSONContent);
 end;
 
+
+procedure TTina4REST.LoadHeaderProperty(Reader: TReader);
+begin
+  try
+    if Reader.ReadBoolean then
+    begin
+      ShowMessage('Hello');
+    end
+  except
+
+  end;
+end;
+
 function TTina4REST.Post(EndPoint, QueryParams, Body, ContentType,
   ContentEncoding: String): TJSONObject;
 var
@@ -76,6 +99,20 @@ var
 begin
   JSONContent := SendHttpRequest(Self.FBaseUrl, EndPoint, QueryParams, Body, ContentType, ContentEncoding, Self.FUsername, Self.FPassword, Self.FCustomHeaders, Self.FUserAgent, TTina4RequestType.Post);
   Result := StrToJSONObject(JSONContent);
+end;
+
+
+procedure TTina4REST.SaveHeaderProperty(Writer: TWriter);
+begin
+  try
+    Writer.WriteBoolean(CustomHeaders. <> nil);
+    if CustomHeaders.Headers <> nil then
+    begin
+      //Writer.WriteString('Hello');
+    end;
+  except
+
+  end;
 end;
 
 procedure TTina4REST.SetCustomHeaders(List: TURLHeaders);

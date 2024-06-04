@@ -33,8 +33,6 @@ object frmTina4URLHeaderEditor: TfrmTina4URLHeaderEditor
     ParentFont = False
     TabOrder = 0
     OnDrawCell = grdHeadersDrawCell
-    ExplicitTop = 41
-    ExplicitHeight = 286
     ColWidths = (
       134
       195)

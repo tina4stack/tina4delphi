@@ -69,7 +69,7 @@ begin
   begin
     if Trim(grdHeaders.Cells[0, RowCount]) <> '' then
     begin
-      UrlHeaders.Add(Trim(grdHeaders.Cells[0, RowCount]), Trim(grdHeaders.Cells[1, RowCount]));
+      UrlHeaders.Add( Trim(grdHeaders.Cells[0, RowCount]),Trim(grdHeaders.Cells[1, RowCount]));
     end;
   end;
 end;

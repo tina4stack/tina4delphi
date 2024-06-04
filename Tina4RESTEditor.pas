@@ -11,6 +11,8 @@ type
     procedure Edit; override;
     function GetAttributes: TPropertyAttributes; override;
     function GetValue: String; override;
+    procedure SetValue(const AValue: string); override;
+
   end;
 
 procedure Register;
@@ -30,7 +32,7 @@ procedure TURLHeadersEditor.Edit;
 begin
   frmTina4URLHeaderEditor :=  TfrmTina4URLHeaderEditor.Create(Application);
   try
-    frmTina4URLHeaderEditor.URLHeaders := TURLHeaders(GetOrdValue);
+    frmTina4URLHeaderEditor.URLHeaders := TUrlHeaders(GetOrdValue);
     if frmTina4URLHeaderEditor.ShowModal = mrOK then
     begin
       SetOrdValue(LongInt(frmTina4URLHeaderEditor.URLHeaders));
@@ -50,5 +52,10 @@ begin
   Result := 'Click to add customer headers';
 end;
 
+
+procedure TURLHeadersEditor.SetValue(const AValue: string);
+begin
+  inherited;
+end;
 
 end.

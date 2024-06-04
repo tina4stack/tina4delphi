@@ -15,6 +15,7 @@ type
     FCustomHeaders: TURLHeaders;
     FUserAgent: String;
     procedure SetCustomHeaders(const List: TURLHeaders);
+    function GetCustomHeaders: TURLHeaders;
     procedure WrapJSONResponse(JSONContent: string; var Result: TJSONObject);
   protected
     { Protected declarations }
@@ -22,6 +23,14 @@ type
     { Public declarations }
     constructor Create(AOwner: TComponent); override;
     destructor Destroy; override;
+
+    procedure Loaded; override;
+    procedure DefineProperties(Filer: TFiler); override;
+    procedure ReadHeaders(Reader: TReader);
+    procedure WriteHeaders(Writer: TWriter);
+
+    procedure ReadHeaderData(AStream: TStream);
+    procedure WriteHeaderData(AStream: TStream);
 
     function Get(EndPoint: String; QueryParams: String=''; ContentType: String= 'application/json'; ContentEncoding: String = 'utf-8'): TJSONObject;
     function Post(EndPoint: String; QueryParams: String=''; Body: String = ''; ContentType: String= 'application/json'; ContentEncoding: String = 'utf-8'): TJSONObject;
@@ -32,8 +41,7 @@ type
     property BaseUrl: String read FBaseUrl write FBaseUrl;
     property Username: String read FUsername write FUsername;
     property Password: String read FPassword write FPassword;
-    property CustomHeaders: TURLHeaders read FCustomHeaders write SetCustomHeaders;
-
+    property CustomHeaders: TURLHeaders read GetCustomHeaders write SetCustomHeaders;
   end;
 
 procedure Register;
@@ -58,6 +66,13 @@ begin
 end;
 
 
+procedure TTina4REST.DefineProperties(Filer: TFiler);
+begin
+  inherited;
+  //This is the headers property on CustomHeaders
+  Filer.DefineProperty('Headers', ReadHeaders, WriteHeaders, True);
+end;
+
 destructor TTina4REST.Destroy;
 begin
   FCustomHeaders.Free;
@@ -73,6 +88,17 @@ begin
 end;
 
 
+function TTina4REST.GetCustomHeaders: TURLHeaders;
+begin
+  Result := FCustomHeaders;
+end;
+
+procedure TTina4REST.Loaded;
+begin
+  inherited;
+
+end;
+
 function TTina4REST.Post(EndPoint, QueryParams, Body, ContentType,
   ContentEncoding: String): TJSONObject;
 var
@@ -80,6 +106,31 @@ var
 begin
   JSONContent := SendHttpRequest(Self.FBaseUrl, EndPoint, QueryParams, Body, ContentType, ContentEncoding, Self.FUsername, Self.FPassword, Self.FCustomHeaders, Self.FUserAgent, TTina4RequestType.Post);
   WrapJSONResponse(JSONContent, Result);
+end;
+
+procedure TTina4REST.ReadHeaderData(AStream: TStream);
+begin
+  //
+end;
+
+procedure TTina4REST.ReadHeaders(Reader: TReader);
+var
+  DelimitedString: TStringList;
+begin
+  DelimitedString := TStringList.Create('"', '~');
+  try
+    Reader.ReadListBegin;
+
+    while not Reader.EndOfList do
+    begin
+      DelimitedString.DelimitedText := Reader.ReadString;
+      FCustomHeaders.Add(DelimitedString[0],DelimitedString[1]);
+    end;
+
+    Reader.ReadListEnd;
+  finally
+    DelimitedString.Free;
+  end;
 end;
 
 procedure TTina4REST.WrapJSONResponse(JSONContent: string; var Result: TJSONObject);
@@ -95,6 +146,21 @@ begin
   end;
 end;
 
+
+procedure TTina4REST.WriteHeaderData(AStream: TStream);
+begin
+  //
+end;
+
+procedure TTina4REST.WriteHeaders(Writer: TWriter);
+begin
+  Writer.WriteListBegin;
+  for var I := 0 to FCustomHeaders.Count-1 do
+  begin
+    Writer.WriteString(FCustomHeaders.Headers[I].Name+'~'+FCustomHeaders.Headers[I].Value);
+  end;
+  Writer.WriteListEnd;
+end;
 
 procedure TTina4REST.SetCustomHeaders(const List: TURLHeaders);
 begin

@@ -113,25 +113,25 @@ object frmDataModule: TfrmDataModule
   object RESTClient1: TRESTClient
     Params = <>
     SynchronizedEvents = False
-    Left = 632
-    Top = 336
+    Left = 656
+    Top = 176
   end
   object RESTRequest1: TRESTRequest
     Client = RESTClient1
     Params = <>
     Response = RESTResponse1
     SynchronizedEvents = False
-    Left = 704
-    Top = 336
+    Left = 776
+    Top = 168
   end
   object RESTResponse1: TRESTResponse
-    Left = 704
-    Top = 392
+    Left = 768
+    Top = 256
   end
   object RESTResponseDataSetAdapter1: TRESTResponseDataSetAdapter
     FieldDefs = <>
-    Left = 704
-    Top = 456
+    Left = 656
+    Top = 304
   end
   object Tina4REST1: TTina4REST
     UserAgent = 'Tina4REST'
@@ -142,5 +142,11 @@ object frmDataModule: TfrmDataModule
     Active = False
     Left = 528
     Top = 240
+  end
+  object Tina4RESTRequest1: TTina4RESTRequest
+    RequestType = Get
+    Tina4REST = Tina4REST1
+    Left = 408
+    Top = 544
   end
 end

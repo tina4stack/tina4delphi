@@ -149,7 +149,10 @@ begin
         begin
           if (Self.FMemTable.Active) and (Self.FMemTable.FieldDefs.Count > 0) then
           begin
-            Self.FMemTable.EmptyDataSet;
+            if not Found then
+            begin
+              Self.FMemTable.EmptyDataSet;
+            end;
           end;
 
           if (GetJSONFieldName(JSONValue.JsonString.ToString) = Self.DataKey) or (Self.DataKey = '') then

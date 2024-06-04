@@ -1,13 +1,4 @@
-﻿[Tina4RESTRequest1]
-Coordinates=206,1,115,33
-
-[Tina4Route1]
-Coordinates=225,53,76,33
-
-[Tina4REST1]
-Coordinates=225,105,74,33
-
-[IdSchedulerOfThreadPool1]
+﻿[IdSchedulerOfThreadPool1]
 Coordinates=206,197,147,33
 
 [FDMemTable2]
@@ -27,7 +18,7 @@ Coordinates=206,285,90,33
 Coordinates=198,10,60,51
 
 []
-Coordinates=132,351,91,36
+Coordinates=225,53,76,33
 
 [RESTRequest1]
 Coordinates=132,131,88,87

@@ -20,6 +20,7 @@ type
     RESTResponseDataSetAdapter1: TRESTResponseDataSetAdapter;
     Tina4REST1: TTina4REST;
     Tina4WebServer1: TTina4WebServer;
+    Tina4RESTRequest1: TTina4RESTRequest;
 
     procedure Tina4HttpServer1CommandGet(AContext: TIdContext; ARequestInfo: TIdHTTPRequestInfo; AResponseInfo: TIdHTTPResponseInfo);
     procedure Tina4RESTRequest1ExecuteDone(Sender: TObject);

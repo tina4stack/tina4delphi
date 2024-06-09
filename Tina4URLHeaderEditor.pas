@@ -65,6 +65,7 @@ var
   RowCount: Integer;
 begin
   //Update the URL Headers
+  UrlHeaders.Clear;
   for RowCount := 1 to grdHeaders.RowCount-1 do
   begin
     if Trim(grdHeaders.Cells[0, RowCount]) <> '' then

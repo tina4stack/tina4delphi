@@ -10,7 +10,12 @@ uses JSON, System.SysUtils, FireDAC.DApt, FireDAC.Stan.Intf,
   System.Classes, System.Generics.Collections, System.Net.HttpClientComponent, System.Net.URLClient;
 
 type
+  /// <summary> The type of REST calls we can make
+  /// </summary>
   TTina4RequestType = (Get,Post,Patch,Put,Delete);
+  /// <summary> Sync modes to the mem table, Clear removes everything, Sync updates based on primary keys and Inserts new if they don't exist
+  /// </summary>
+  TTina4RestSyncMode = (Clear,Sync);
   TTina4Response = class(TObject)
     HTTPCode: Integer;
     ContentType: String;
@@ -546,7 +551,14 @@ begin
       try
         if MemTable.FieldDefs.IndexOf(FieldName) = -1 then
         begin
+          if (JSONObject.Pairs[Index].JsonValue is TJSONObject) or (JSONObject.Pairs[Index].JsonValue is TJSONArray) then
+          begin
+            MemTable.FieldDefs.Add(FieldName, TFieldType.ftMemo);
+          end
+            else
+          begin
             MemTable.FieldDefs.Add(FieldName, TFieldType.ftString, 1000);
+          end;
         end;
       except
           On Exception do

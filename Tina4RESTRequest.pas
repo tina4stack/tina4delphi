@@ -95,7 +95,6 @@ begin
         begin
           if Self.FSyncMode = Clear then
           begin
-            Self.FMemTable.EmptyDataSet;
             Self.FMemTable.Close;
           end;
         end;
@@ -105,8 +104,8 @@ begin
           GetFieldDefsFromJSONObject(TJSONObject(JSONInfo), TFDMemTable(Self.FMemTable));
           Self.FMemTable.CreateDataSet;
         end;
-      end
-        else
+      end;
+
       if (not Self.FMemTable.Active) then
       begin
         Self.FMemTable.Open;

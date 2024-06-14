@@ -18,7 +18,7 @@ type
     FResponseBody: TStringList;
     FRequestBody: TStringList;
     FOnExecuteDone: TTina4Event;
-    FOnAddRecord: TTina4Event;
+    FOnAddRecord: TTina4AddRecordEvent;
     FRequestType: TTina4RequestType;
     FMasterSource: TTina4RESTRequest;
     FSyncMode: TTina4RestSyncMode;
@@ -47,7 +47,7 @@ type
     property MasterSource: TTina4RESTRequest read FMasterSource write SetMasterSource;
     property ResponseBody: TStringList read FResponseBody write SetResponseBody;
     property RequestBody: TStringList read FRequestBody write SetRequestBody;
-    property OnAddRecord :  TTina4Event read FOnAddRecord write FOnAddRecord;
+    property OnAddRecord :  TTina4AddRecordEvent read FOnAddRecord write FOnAddRecord;
     property OnExecuteDone: TTina4Event read FOnExecuteDone write FOnExecuteDone;
   end;
 
@@ -81,7 +81,7 @@ var
   Response: TJSONObject;
   Initialized: Boolean;
 
-procedure CreateRecord(JSONInfo: TJSONValue);
+procedure CreateOrUpdateRecord(JSONInfo: TJSONValue);
 begin
   if (JSONInfo is TJSONObject) then
   begin
@@ -115,7 +115,11 @@ begin
         end;
       end;
 
-      Self.FMemTable.BeginBatch;
+      //Only do batching when we don't have to refresh or update records
+      if (not Assigned(Self.OnAddRecord)) then
+      begin
+        Self.FMemTable.BeginBatch;
+      end;
       Initialized := True;
     end;
 
@@ -138,8 +142,9 @@ begin
         IndexStringList := TStringList.Create('"', ',');
         IndexStringList.DelimitedText := Self.IndexFieldNames;
 
-        Self.FMemTable.Filtered := True; 
-        Self.FMemTable.Filter := Filter; 
+        Self.FMemTable.Filtered := False;
+        Self.FMemTable.Filter := '';
+
         for var I := 0 to IndexStringList.Count-1 do
         begin  
           if (Self.FMemTable.Filter <> '') then
@@ -148,8 +153,10 @@ begin
           end;
           Self.FMemTable.Filter := Self.FMemTable.Filter + IndexStringList[I] +' = '+QuotedStr(JSONRecord.GetValue<string>(IndexStringList[I])); 
         end;
-        
-        if (Self.FMemTable.RecordCount = 0) then   //Found the record
+
+        Self.FMemTable.Filtered := True;
+
+        if (Self.FMemTable.RecNo = 0) then   //No record found
         begin
           Self.FMemTable.Append;
         end
@@ -170,19 +177,27 @@ begin
         begin
           PairValue := JSONRecord.Pairs[Index].JsonValue.Value;
         end;
-        Self.FMemTable.FieldByName(JSONRecord.Pairs[Index].JsonString.Value).AsString := PairValue;
+
+        var KeyIndex := Self.MemTable.FieldDefs.IndexOf(JSONRecord.Pairs[Index].JsonString.Value);
+
+        if KeyIndex >= 0 then
+        begin
+          Self.FMemTable.FieldByName(JSONRecord.Pairs[Index].JsonString.Value).AsString := PairValue;
+        end;
       end;
+
+
 
       if Assigned(Self.FOnAddRecord) then
       begin
-        FOnAddRecord(Self);
+        FOnAddRecord(Self, Self.FMemTable);
       end;
-
 
       Self.FMemTable.Post;
 
-      Self.MemTable.Filtered := FilterState;
+      Self.FMemTable.Filtered := False;
       Self.MemTable.Filter := Filter;
+      Self.MemTable.Filtered := FilterState;
     finally
       JSONRecord.Free;
     end;
@@ -272,9 +287,13 @@ begin
               Initialized := False;
               for var JSONInfo in TJSONArray(JSONValue.JsonValue) do
               begin
-                CreateRecord(JSONInfo);
+                CreateOrUpdateRecord(JSONInfo);
               end;
-              Self.FMemTable.EndBatch;
+              //Only do batching when we don't have to refresh or update records
+              if (not Assigned(Self.OnAddRecord)) then
+              begin
+                Self.FMemTable.EndBatch;
+              end;
               Self.FMemTable.First;
 
               if (Assigned(Self.FOnExecuteDone)) then
@@ -290,9 +309,12 @@ begin
         begin
           Initialized := False;
 
-          CreateRecord(Response);
+          CreateOrUpdateRecord(Response);
 
-          Self.FMemTable.EndBatch;
+          if (not Assigned(Self.OnAddRecord)) then
+          begin
+            Self.FMemTable.EndBatch;
+          end;
 
           if (Assigned(Self.FOnExecuteDone)) then
           begin

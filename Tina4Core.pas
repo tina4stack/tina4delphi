@@ -30,6 +30,7 @@ type
 
   TTina4EndpointExecute = procedure(Request : TTina4Request; var Response: TTina4Response) of object;
   TTina4Event = procedure (Sender: TObject) of object;
+  TTina4AddRecordEvent = procedure (Sender: TObject; var MemTable: TFDMemTable) of object;
 
 
 function CamelCase(FieldName: String): String;
@@ -38,7 +39,8 @@ function GetJSONFromDB(Connection: TFDConnection; SQL: String;
 function GetJSONFromTable(Table: TFDMemTable; DataSetName: String = 'records'): TJSONObject; overload;
 function GetJSONFromTable(Table: TFDTable; DataSetName: String = 'records'): TJSONObject; overload;
 function SendHttpRequest(BaseURL: String; EndPoint: String = ''; QueryParams: String = ''; Body: String=''; ContentType: String = 'application/json';
-  ContentEncoding : String = 'utf-8'; Username:String = ''; Password: String = ''; CustomHeaders: TURLHeaders = nil; UserAgent: String = 'Tina4Delphi'; RequestType: TTina4RequestType = Get): String;
+  ContentEncoding : String = 'utf-8'; Username:String = ''; Password: String = ''; CustomHeaders: TURLHeaders = nil; UserAgent: String = 'Tina4Delphi'; RequestType: TTina4RequestType = Get;
+  ReadTimeOut: Integer = 10000; ConnectTimeOut: Integer = 5000): String;
 function StrToJSONObject(JSON:String): TJSONObject;
 function StrToJSONArray(JSON:String): TJSONArray;
 function GetJSONFieldName(FieldName: String) : String;
@@ -331,6 +333,10 @@ end;
 /// </param>
 /// <param name="RequestType">Request Type - Get, Post, Patch, Put, Delete
 /// </param>
+/// <param name="ReadTimeOut">Read Time Out in milliseconds
+/// </param>
+/// <param name="ReadTimeOut">Connect Time Out in milliseconds
+/// </param>
 /// <remarks>
 /// A simple function to return back a response from a REST end point
 /// </remarks>
@@ -339,7 +345,7 @@ end;
 /// </returns>
 function SendHttpRequest(BaseURL: String; EndPoint: String = ''; QueryParams: String = ''; Body: String=''; ContentType: String = 'application/json';
   ContentEncoding : String = 'utf-8'; Username:String = ''; Password: String = ''; CustomHeaders: TURLHeaders = nil; UserAgent: String = 'Tina4Delphi';
-  RequestType: TTina4RequestType = Get): String;
+  RequestType: TTina4RequestType = Get; ReadTimeOut: Integer = 10000; ConnectTimeOut: Integer = 5000): String;
 var
   HttpClient: TNetHTTPClient;
   HTTPRequest: TNetHTTPRequest;
@@ -384,8 +390,8 @@ begin
     HTTPRequest := TNetHTTPRequest.Create(nil);
 
     try
-      HttpClient.ConnectionTimeout := 60000;
-      HttpClient.ResponseTimeout := 600000;
+      HttpClient.ConnectionTimeout := ConnectTimeOut;
+      HttpClient.ResponseTimeout := ReadTimeOut;
 
       HttpClient.HandleRedirects := True;
 

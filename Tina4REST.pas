@@ -13,6 +13,8 @@ type
     FUsername: String;
     FPassword: String;
     FCustomHeaders: TURLHeaders;
+    FReadTimeOut: Integer;
+    FConnectTimeOut: Integer;
     FUserAgent: String;
     procedure SetCustomHeaders(const List: TURLHeaders);
     function GetCustomHeaders: TURLHeaders;
@@ -42,6 +44,8 @@ type
     property Username: String read FUsername write FUsername;
     property Password: String read FPassword write FPassword;
     property CustomHeaders: TURLHeaders read GetCustomHeaders write SetCustomHeaders;
+    property ReadTimeOut : Integer read FReadTimeOut write FReadTimeOut;
+    property ConnectTimeOut : Integer read FConnectTimeOut write FConnectTimeOut;
   end;
 
 procedure Register;
@@ -83,7 +87,7 @@ function TTina4REST.Get(EndPoint: String; QueryParams: String=''; ContentType: S
 var
   JSONContent : String;
 begin
-  JSONContent := SendHttpRequest(Self.FBaseUrl, EndPoint, QueryParams, '', ContentType, ContentEncoding, Self.FUsername, Self.FPassword, Self.FCustomHeaders, Self.FUserAgent, TTina4RequestType.Get);
+  JSONContent := SendHttpRequest(Self.FBaseUrl, EndPoint, QueryParams, '', ContentType, ContentEncoding, Self.FUsername, Self.FPassword, Self.FCustomHeaders, Self.FUserAgent, TTina4RequestType.Get, Self.FReadTimeOut, Self.FConnectTimeOut);
   WrapJSONResponse(JSONContent, Result);
 end;
 

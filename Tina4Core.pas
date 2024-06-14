@@ -377,8 +377,21 @@ var
 
 begin
   try
-
-    Url := BaseURL + '/' + EndPoint;
+    if (EndPoint <> '') and (BaseUrl <> '') then
+    begin
+      Url := BaseURL + '/' + EndPoint;
+    end
+      else
+    begin
+      if (BaseUrl = '') and (EndPoint <> '') then
+      begin
+        Url := EndPoint;
+      end
+        else
+      begin
+        Url := BaseURL;
+      end;
+    end;
 
     if QueryParams <> '' then
     begin
@@ -431,7 +444,7 @@ begin
           MemoryStream.Free;
         end;
 
-        if (Length(Result) > 0) and ((Result[1] <> '{') and (Result[1] <> '['))
+        if (ContentType = 'application/json') and (Length(Result) > 0) and ((Result[1] <> '{') and (Result[1] <> '['))
         then
         begin
           Result := '{"error":"' + Result + '"}';
@@ -453,8 +466,7 @@ begin
           MemoryStream.Free;
         end;
 
-        if (Length(Result) > 0) and ((Result[1] <> '{') and (Result[1] <> '['))
-        then
+        if (ContentType = 'application/json') and (Length(Result) > 0) and ((Result[1] <> '{') and (Result[1] <> '[')) then
         begin
           Result := '{"error":"' + Result + '"}';
         end;

@@ -6,7 +6,7 @@ uses JSON, System.SysUtils, FireDAC.DApt, FireDAC.Stan.Intf,
   FireDAC.Stan.Option, FireDAC.Stan.Error, FireDAC.UI.Intf,
   FireDAC.Phys.Intf, FireDAC.Stan.Def, FireDAC.Stan.Pool, FireDAC.Stan.Async,
   FireDAC.Phys, FireDAC.ConsoleUI.Wait,
-  Data.DB, FireDAC.Comp.Client, FireDAC.Stan.Param, System.NetEncoding,
+  Data.DB, FireDAC.Comp.Client, FireDAC.Stan.Param, System.NetEncoding, System.DateUtils,
   System.Classes, System.Generics.Collections, System.Net.HttpClientComponent, System.Net.URLClient;
 
 type
@@ -44,6 +44,7 @@ function SendHttpRequest(BaseURL: String; EndPoint: String = ''; QueryParams: St
 function StrToJSONObject(JSON:String): TJSONObject;
 function StrToJSONArray(JSON:String): TJSONArray;
 function GetJSONFieldName(FieldName: String) : String;
+function GetJSONDate(const ADate: TDateTime) : String;
 procedure GetFieldDefsFromJSONObject(JSONObject: TJSONObject; var MemTable: TFDMemTable);
 
 implementation
@@ -434,42 +435,47 @@ begin
 
       MemoryStream := TMemoryStream.Create;
 
-      if (Body <> '') then
-      begin
-
+      try
         try
-          HTTPRequest.Post(Url, BodyList, MemoryStream);
-          Result := StreamToString(MemoryStream);
-        finally
-          MemoryStream.Free;
-        end;
-
-        if (ContentType = 'application/json') and (Length(Result) > 0) and ((Result[1] <> '{') and (Result[1] <> '['))
-        then
-        begin
-          Result := '{"error":"' + Result + '"}';
-        end;
-      end
-        else
-      begin
-        try
-          try
-          HTTPRequest.Get(Url, MemoryStream);
-          Result := StreamToString(MemoryStream);
-          except
-            on E:Exception do
-            begin
-              Result := '{"error":"'+E.Message+'"}';
-            end;
+          if RequestType = Post then
+          begin
+            HTTPRequest.Post(Url, BodyList, MemoryStream);
+          end
+            else
+          if RequestType = Patch then
+          begin
+            HTTPRequest.Patch(Url, BodyList, MemoryStream);
+          end
+            else
+          if RequestType = Put then
+          begin
+            HTTPRequest.Put(Url, BodyList, MemoryStream);
+          end
+           else
+          if RequestType = Get then
+          begin
+            HTTPRequest.Get(Url, MemoryStream);
+          end
+            else
+          if RequestType = Delete then
+          begin
+            HTTPRequest.Delete(Url, MemoryStream);
           end;
-        finally
-          MemoryStream.Free;
-        end;
 
-        if (ContentType = 'application/json') and (Length(Result) > 0) and ((Result[1] <> '{') and (Result[1] <> '[')) then
-        begin
-          Result := '{"error":"' + Result + '"}';
+          Result := StreamToString(MemoryStream);
+        except
+          on E:Exception do
+          begin
+            Result := '{"error":"'+E.Message+'"}';
+          end;
         end;
+      finally
+        MemoryStream.Free;
+      end;
+
+      if (ContentType = 'application/json') and (Length(Result) > 0) and ((Result[1] <> '{') and (Result[1] <> '[')) then
+      begin
+        Result := '{"error":"' + Result + '"}';
       end;
     finally
       HTTPRequest.Free;
@@ -544,6 +550,22 @@ begin
   begin
     Result := FieldName;
   end;
+end;
+
+
+/// <summary> Gets an ISO date for passing to JSON request
+/// </summary>
+/// <param name="ADate">A TDateTime
+/// </param>
+/// <remarks>
+/// Returns back an ISO formatted date in form  YYYY-MM-DDT00:00:00.000Z
+/// </remarks>
+/// <returns>
+/// Returns a string in ISO date format YYYY-MM-DDT00:00:00.000Z
+/// </returns>
+function GetJSONDate(const ADate: TDateTime) : String;
+begin
+  Result := DateToISO8601(ADate, False);
 end;
 
 

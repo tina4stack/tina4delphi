@@ -243,9 +243,24 @@ begin
       Response := Self.FTina4REST.Get(EndPoint, QueryParams);
     end
       else
+    if (Self.FRequestType = TTina4RequestType.Delete) then
+    begin
+      Response := Self.FTina4REST.Delete(EndPoint, QueryParams);
+    end
+      else
     if (Self.FRequestType = TTina4RequestType.Post) then
     begin
       Response := Self.FTina4REST.Post(EndPoint, QueryParams, RequestBody);
+    end
+      else
+    if (Self.FRequestType = TTina4RequestType.Patch) then
+    begin
+      Response := Self.FTina4REST.Patch(EndPoint, QueryParams, RequestBody);
+    end
+      else
+    if (Self.FRequestType = TTina4RequestType.Put) then
+    begin
+      Response := Self.FTina4REST.Put(EndPoint, QueryParams, RequestBody);
     end;
 
     try

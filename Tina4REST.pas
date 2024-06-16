@@ -35,7 +35,10 @@ type
     procedure WriteHeaderData(AStream: TStream);
 
     function Get(EndPoint: String; QueryParams: String=''; ContentType: String= 'application/json'; ContentEncoding: String = 'utf-8'): TJSONObject;
+    function Delete(EndPoint: String; QueryParams: String=''; ContentType: String= 'application/json'; ContentEncoding: String = 'utf-8'): TJSONObject;
     function Post(EndPoint: String; QueryParams: String=''; Body: String = ''; ContentType: String= 'application/json'; ContentEncoding: String = 'utf-8'): TJSONObject;
+    function Patch(EndPoint: String; QueryParams: String=''; Body: String = ''; ContentType: String= 'application/json'; ContentEncoding: String = 'utf-8'): TJSONObject;
+    function Put(EndPoint: String; QueryParams: String=''; Body: String = ''; ContentType: String= 'application/json'; ContentEncoding: String = 'utf-8'): TJSONObject;
 
   published
     { Published declarations }
@@ -77,6 +80,8 @@ begin
   Filer.DefineProperty('Headers', ReadHeaders, WriteHeaders, True);
 end;
 
+
+
 destructor TTina4REST.Destroy;
 begin
   FCustomHeaders.Free;
@@ -88,6 +93,15 @@ var
   JSONContent : String;
 begin
   JSONContent := SendHttpRequest(Self.FBaseUrl, EndPoint, QueryParams, '', ContentType, ContentEncoding, Self.FUsername, Self.FPassword, Self.FCustomHeaders, Self.FUserAgent, TTina4RequestType.Get, Self.FReadTimeOut, Self.FConnectTimeOut);
+  WrapJSONResponse(JSONContent, Result);
+end;
+
+function TTina4REST.Delete(EndPoint, QueryParams, ContentType,
+  ContentEncoding: String): TJSONObject;
+var
+  JSONContent : String;
+begin
+  JSONContent := SendHttpRequest(Self.FBaseUrl, EndPoint, QueryParams, '', ContentType, ContentEncoding, Self.FUsername, Self.FPassword, Self.FCustomHeaders, Self.FUserAgent, TTina4RequestType.Delete, Self.FReadTimeOut, Self.FConnectTimeOut);
   WrapJSONResponse(JSONContent, Result);
 end;
 
@@ -103,12 +117,31 @@ begin
 
 end;
 
+
 function TTina4REST.Post(EndPoint, QueryParams, Body, ContentType,
   ContentEncoding: String): TJSONObject;
 var
   JSONContent : String;
 begin
   JSONContent := SendHttpRequest(Self.FBaseUrl, EndPoint, QueryParams, Body, ContentType, ContentEncoding, Self.FUsername, Self.FPassword, Self.FCustomHeaders, Self.FUserAgent, TTina4RequestType.Post);
+  WrapJSONResponse(JSONContent, Result);
+end;
+
+function TTina4REST.Patch(EndPoint, QueryParams, Body, ContentType,
+  ContentEncoding: String): TJSONObject;
+var
+  JSONContent : String;
+begin
+  JSONContent := SendHttpRequest(Self.FBaseUrl, EndPoint, QueryParams, Body, ContentType, ContentEncoding, Self.FUsername, Self.FPassword, Self.FCustomHeaders, Self.FUserAgent, TTina4RequestType.Patch);
+  WrapJSONResponse(JSONContent, Result);
+end;
+
+function TTina4REST.Put(EndPoint, QueryParams, Body, ContentType,
+  ContentEncoding: String): TJSONObject;
+var
+  JSONContent : String;
+begin
+  JSONContent := SendHttpRequest(Self.FBaseUrl, EndPoint, QueryParams, Body, ContentType, ContentEncoding, Self.FUsername, Self.FPassword, Self.FCustomHeaders, Self.FUserAgent, TTina4RequestType.Put);
   WrapJSONResponse(JSONContent, Result);
 end;
 

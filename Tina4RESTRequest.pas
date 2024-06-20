@@ -140,32 +140,36 @@ begin
       begin
         var IndexStringList: TStringList;
         IndexStringList := TStringList.Create('"', ',');
-        IndexStringList.DelimitedText := Self.IndexFieldNames;
+        try
+          IndexStringList.DelimitedText := Self.IndexFieldNames;
 
-        Self.FMemTable.Filtered := False;
-        Self.FMemTable.Filter := '';
+          Self.FMemTable.Filtered := False;
+          Self.FMemTable.Filter := '';
 
-        for var I := 0 to IndexStringList.Count-1 do
-        begin  
-          if (Self.FMemTable.Filter <> '') then
+          for var I := 0 to IndexStringList.Count-1 do
           begin
-            Self.FMemTable.Filter := Self.FMemTable.Filter +' and ';
+            if (Self.FMemTable.Filter <> '') then
+            begin
+              Self.FMemTable.Filter := Self.FMemTable.Filter +' and ';
+            end;
+            Self.FMemTable.Filter := Self.FMemTable.Filter + IndexStringList[I] +' = '+QuotedStr(JSONRecord.GetValue<string>(IndexStringList[I]));
           end;
-          Self.FMemTable.Filter := Self.FMemTable.Filter + IndexStringList[I] +' = '+QuotedStr(JSONRecord.GetValue<string>(IndexStringList[I])); 
+
+          Self.FMemTable.Filtered := True;
+
+          if (Self.FMemTable.RecNo = 0) then   //No record found
+          begin
+            Self.FMemTable.Append;
+          end
+            else
+          begin
+            Self.FMemTable.Edit;
+          end;
+        finally
+          IndexStringList.Free;
         end;
-
-        Self.FMemTable.Filtered := True;
-
-        if (Self.FMemTable.RecNo = 0) then   //No record found
-        begin
-          Self.FMemTable.Append;
-        end
-          else
-        begin  
-          Self.FMemTable.Edit;
-        end;        
       end;
-      
+
       for var Index : Integer := 0 to JSONRecord.Count-1 do
       begin
         var PairValue : String;

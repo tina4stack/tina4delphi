@@ -49,7 +49,7 @@ end;
 
 function TURLHeadersEditor.GetValue: String;
 begin
-  Result := 'Click to add customer headers';
+  Result := 'Click to add custom headers';
 end;
 
 

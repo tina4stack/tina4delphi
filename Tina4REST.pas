@@ -81,7 +81,6 @@ begin
 end;
 
 
-
 destructor TTina4REST.Destroy;
 begin
   FCustomHeaders.Free;
@@ -172,17 +171,16 @@ end;
 
 procedure TTina4REST.WrapJSONResponse(JSONContent: string; var Result: TJSONObject);
 begin
+  //Add wrapper because the string is [] => {'response': []}
   if (Trim(JSONContent)[1] = '[') then    //Trim off the blanks and spaces on the edges [ ] //
   begin
     Result := StrToJSONObject('{"response":' + JSONContent + '}');
   end
-  else
-  //Add wrapper because the string is [] => {'response': []}
+    else
   begin
     Result := StrToJSONObject(JSONContent);
   end;
 end;
-
 
 procedure TTina4REST.WriteHeaderData(AStream: TStream);
 begin

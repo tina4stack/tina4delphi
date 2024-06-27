@@ -36,7 +36,7 @@ type
 function CamelCase(FieldName: String): String;
 function GetJSONFromDB(Connection: TFDConnection; SQL: String;
    Params: TFDParams = nil; DataSetName: String = 'records'): TJSONObject;
-function GetJSONFromTable(Table: TFDMemTable; DataSetName: String = 'records'): TJSONObject; overload;
+function GetJSONFromTable(var Table: TFDMemTable; DataSetName: String = 'records'): TJSONObject; overload;
 function GetJSONFromTable(Table: TFDTable; DataSetName: String = 'records'): TJSONObject; overload;
 function SendHttpRequest(BaseURL: String; EndPoint: String = ''; QueryParams: String = ''; Body: String=''; ContentType: String = 'application/json';
   ContentEncoding : String = 'utf-8'; Username:String = ''; Password: String = ''; CustomHeaders: TURLHeaders = nil; UserAgent: String = 'Tina4Delphi'; RequestType: TTina4RequestType = Get;
@@ -186,7 +186,7 @@ end;
 /// <returns>
 /// JSON Object with an Array of records
 /// </returns>
-function GetJSONFromTable(Table: TFDMemTable; DataSetName: String = 'records'): TJSONObject; overload;
+function GetJSONFromTable(var Table: TFDMemTable; DataSetName: String = 'records'): TJSONObject; overload;
 var
   DataRecord: TJSONObject;
   DataArray: TJSONArray;
@@ -232,6 +232,7 @@ begin
       end;
 
       Result.AddPair(DataSetName, DataArray);
+
     finally
 
     end;
@@ -357,8 +358,6 @@ var
   MemoryStream : TMemoryStream;
   Url: String;
   Header: TNetHeader;
-
-
 
   function StreamToString(aStream: TStream): string;
   var

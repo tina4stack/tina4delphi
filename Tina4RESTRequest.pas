@@ -11,6 +11,7 @@ type
   private
     { Private declarations }
     FMemTable: TFDMemTable;
+    FSourceMemTable: TFDMemTable;
     FTina4REST: TTina4REST;
     FEndPoint: String;
     FQueryParams: String;
@@ -43,6 +44,7 @@ type
     property EndPoint: String read FEndPoint write FEndPoint;
     property QueryParams: String read FQueryParams write FQueryParams;
     property MemTable: TFDMemTable read FMemTable write FMemTable;
+    property SourceMemTable: TFDMemTable read FSourceMemTable write FSourceMemTable;
     property Tina4REST: TTina4REST read FTina4REST write FTina4REST;
     property MasterSource: TTina4RESTRequest read FMasterSource write SetMasterSource;
     property ResponseBody: TStringList read FResponseBody write SetResponseBody;
@@ -81,133 +83,6 @@ var
   Response: TJSONObject;
   Initialized: Boolean;
 
-procedure CreateOrUpdateRecord(JSONInfo: TJSONValue);
-begin
-  if (JSONInfo is TJSONObject) then
-  begin
-    var JSONRecord := StrToJSONObject(JSONInfo.ToJSON);
-
-    if (not Initialized) then
-    begin
-      if Assigned(Self.FMemTable) and ((Self.FMemTable.FieldDefs.Count = 0) or (Self.FMemTable.FieldDefs.Count <> JSONRecord.Count)) then
-      begin
-        if (Self.FMemTable.Active) then
-        begin
-          if Self.FSyncMode = Clear then
-          begin
-            Self.FMemTable.Close;
-          end;
-        end;
-        
-        if Self.FMemTable.Fields.Count = 0 then
-        begin
-          GetFieldDefsFromJSONObject(TJSONObject(JSONInfo), TFDMemTable(Self.FMemTable));
-          Self.FMemTable.CreateDataSet;
-        end;
-      end;
-
-      if (not Self.FMemTable.Active) then
-      begin
-        Self.FMemTable.Open;
-        if Self.FSyncMode = Clear then
-        begin
-          Self.FMemTable.EmptyDataSet;
-        end;
-      end;
-
-      //Only do batching when we don't have to refresh or update records
-      if (not Assigned(Self.OnAddRecord)) then
-      begin
-        Self.FMemTable.BeginBatch;
-      end;
-      Initialized := True;
-    end;
-
-    if (Self.IndexFieldNames = '') and (Self.MemTable.FieldDefs.Count > 0) then
-    begin
-      Self.IndexFieldNames := Self.MemTable.FieldDefs[0].Name; 
-    end;
-
-    var FilterState : Boolean := Self.MemTable.Filtered;
-    var Filter : String := Self.MemTable.Filter;
-   
-    try
-      if Self.FSyncMode = Clear then
-      begin
-        Self.FMemTable.Append;
-      end
-        else
-      begin
-        var IndexStringList: TStringList;
-        IndexStringList := TStringList.Create('"', ',');
-        try
-          IndexStringList.DelimitedText := Self.IndexFieldNames;
-
-          Self.FMemTable.Filtered := False;
-          Self.FMemTable.Filter := '';
-
-          for var I := 0 to IndexStringList.Count-1 do
-          begin
-            if (Self.FMemTable.Filter <> '') then
-            begin
-              Self.FMemTable.Filter := Self.FMemTable.Filter +' and ';
-            end;
-            Self.FMemTable.Filter := Self.FMemTable.Filter + IndexStringList[I] +' = '+QuotedStr(JSONRecord.GetValue<string>(IndexStringList[I]));
-          end;
-
-          Self.FMemTable.Filtered := True;
-
-          if (Self.FMemTable.RecNo = 0) then   //No record found
-          begin
-            Self.FMemTable.Append;
-          end
-            else
-          begin
-            Self.FMemTable.Edit;
-          end;
-        finally
-          IndexStringList.Free;
-        end;
-      end;
-
-      for var Index : Integer := 0 to JSONRecord.Count-1 do
-      begin
-        var PairValue : String;
-        if (JSONRecord.Pairs[Index].JsonValue is TJSONObject) or (JSONRecord.Pairs[Index].JsonValue is TJSONArray) then
-        begin
-          PairValue := JSONRecord.Pairs[Index].JsonValue.ToString;
-        end
-          else
-        begin
-          PairValue := JSONRecord.Pairs[Index].JsonValue.Value;
-        end;
-
-        var KeyIndex := Self.MemTable.FieldDefs.IndexOf(JSONRecord.Pairs[Index].JsonString.Value);
-
-        if KeyIndex >= 0 then
-        begin
-          Self.FMemTable.FieldByName(JSONRecord.Pairs[Index].JsonString.Value).AsString := PairValue;
-        end;
-      end;
-
-
-
-      if Assigned(Self.FOnAddRecord) then
-      begin
-        FOnAddRecord(Self, Self.FMemTable);
-      end;
-
-      Self.FMemTable.Post;
-
-      Self.FMemTable.Filtered := False;
-      Self.MemTable.Filter := Filter;
-      Self.MemTable.Filtered := FilterState;
-    finally
-      JSONRecord.Free;
-    end;
-  end;
-end;
-
 
 procedure InjectMasterSourceParams(const MasterSource: TTina4RestRequest; var EndPoint:String; var RequestBody: String; var QueryParams: String);
 var RegEx: TRegEx;
@@ -231,7 +106,7 @@ end;
 begin
   if Assigned(Self.FTina4REST) then
   begin
-    Self.FResponseBody.Clear;
+    FResponseBody.Clear;
     Response := nil;
 
     var EndPoint : String := Self.EndPoint;
@@ -239,38 +114,54 @@ begin
     var QueryParams : String := Self.QueryParams;
 
 
-    InjectMasterSourceParams(Self.FMasterSource, EndPoint, RequestBody, QueryParams);
+    InjectMasterSourceParams(FMasterSource, EndPoint, RequestBody, QueryParams);
 
+    if Assigned(FSourceMemTable) then
+    begin
+      var JSONObject : TJSONObject := GetJSONFromTable(FSourceMemTable);
+      try
+        if JSONObject.GetValue<TJSONArray>('records').Count = 1 then
+        begin
+          FRequestBody.Text := JSONObject.GetValue<TJSONArray>('records').Items[0].ToJSON;
+        end
+          else
+        begin
+          FRequestBody.Text := JSONObject.GetValue<TJSONArray>('records').ToJSON;
+        end;
+      finally
+        JSONObject.Free;
+      end;
+    end;
 
-    if (Self.FRequestType = TTina4RequestType.Get) then
+    if (FRequestType = TTina4RequestType.Get) then
     begin
-      Response := Self.FTina4REST.Get(EndPoint, QueryParams);
+      Response := FTina4REST.Get(EndPoint, QueryParams);
     end
       else
-    if (Self.FRequestType = TTina4RequestType.Delete) then
+    if (FRequestType = TTina4RequestType.Delete) then
     begin
-      Response := Self.FTina4REST.Delete(EndPoint, QueryParams);
+      Response := FTina4REST.Delete(EndPoint, QueryParams);
     end
       else
-    if (Self.FRequestType = TTina4RequestType.Post) then
+    if (FRequestType = TTina4RequestType.Post) then
     begin
-      Response := Self.FTina4REST.Post(EndPoint, QueryParams, RequestBody);
+      Response := FTina4REST.Post(EndPoint, QueryParams, RequestBody);
     end
       else
-    if (Self.FRequestType = TTina4RequestType.Patch) then
+    if (FRequestType = TTina4RequestType.Patch) then
     begin
-      Response := Self.FTina4REST.Patch(EndPoint, QueryParams, RequestBody);
+      Response := FTina4REST.Patch(EndPoint, QueryParams, RequestBody);
     end
       else
-    if (Self.FRequestType = TTina4RequestType.Put) then
+    if (FRequestType = TTina4RequestType.Put) then
     begin
-      Response := Self.FTina4REST.Put(EndPoint, QueryParams, RequestBody);
+      Response := FTina4REST.Put(EndPoint, QueryParams, RequestBody);
     end;
 
     try
       if (Response = nil) then
       begin
-        Self.FResponseBody.Text := '{"error": "Check the response from the server, something bad happened!"}';
+        FResponseBody.Text := '{"error": "Check the response from the server, something bad happened!"}';
         if (Assigned(Self.FOnExecuteDone)) then
         begin
           Self.FOnExecuteDone(Self);
@@ -278,87 +169,10 @@ begin
         Exit;
       end;
 
-      Self.FResponseBody.Text := Response.ToString;
+      FResponseBody.Text := Response.ToString;
 
+      PopulateMemTableFromJSON(FMemTable, DataKey, Self.FResponseBody.Text, Self.FIndexFieldNames, SyncMode, Self);
 
-      if Assigned(Self.FMemTable) then
-      begin
-        var Found := False;
-        for var JSONValue in Response do
-        begin
-          if (Self.DataKey = '') and (GetJSONFieldName(JSONValue.JsonString.ToString) = 'response') then
-          begin
-            Self.DataKey := 'response';
-          end;
-        
-          if (Self.FMemTable.Active) and (Self.FMemTable.FieldDefs.Count > 0) then
-          begin
-            if not Found and (Self.FSyncMode = Clear) then
-            begin
-              Self.FMemTable.EmptyDataSet;
-            end;
-          end;
-
-          if (GetJSONFieldName(JSONValue.JsonString.ToString) = Self.DataKey) then
-          begin
-            if (JSONValue.JsonValue is TJSONArray) then
-            begin
-              Found := True;
-
-              Initialized := False;
-              for var JSONInfo in TJSONArray(JSONValue.JsonValue) do
-              begin
-                CreateOrUpdateRecord(JSONInfo);
-              end;
-              //Only do batching when we don't have to refresh or update records
-              if Initialized and (not Assigned(Self.OnAddRecord)) then
-              begin
-                Self.FMemTable.EndBatch;
-              end;
-
-
-              if FMemTable.Active then
-              begin
-                Self.FMemTable.First;
-              end
-                else
-              begin
-                FMemTable.Open;
-              end;
-
-              if (Assigned(Self.FOnExecuteDone)) then
-              begin
-                Self.FOnExecuteDone(Self);
-              end;
-            end;
-          end;
-        end;
-
-        //Convert the object that is returned
-        if not Found then
-        begin
-          Initialized := False;
-
-          CreateOrUpdateRecord(Response);
-
-          if (not Assigned(Self.OnAddRecord)) then
-          begin
-            Self.FMemTable.EndBatch;
-          end;
-
-          if (Assigned(Self.FOnExecuteDone)) then
-          begin
-            Self.FOnExecuteDone(Self);
-          end;
-        end;
-      end
-        else
-      begin
-        if (Assigned(Self.FOnExecuteDone)) then
-        begin
-          Self.FOnExecuteDone(Self);
-        end;
-      end;
     finally
       Response.Free;
     end;

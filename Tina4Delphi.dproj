@@ -213,10 +213,6 @@
             <ResourceType>BITMAP</ResourceType>
             <ResourceId>TTina4WebServer</ResourceId>
         </RcItem>
-        <RcItem Include="TTina4JSONAdapter.bmp">
-            <ResourceType>BITMAP</ResourceType>
-            <ResourceId>TTina4JSONAdapter</ResourceId>
-        </RcItem>
         <BuildConfiguration Include="Base">
             <Key>Base</Key>
         </BuildConfiguration>

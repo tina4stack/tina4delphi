@@ -46,8 +46,11 @@ function StrToJSONArray(JSON:String): TJSONArray;
 function GetJSONFieldName(FieldName: String) : String;
 function GetJSONDate(const ADate: TDateTime) : String;
 procedure GetFieldDefsFromJSONObject(JSONObject: TJSONObject; var MemTable: TFDMemTable);
+procedure PopulateMemTableFromJSON(var MemTable: TFDMemTable; DataKey: String; JSON: String; IndexedFieldNames: String = ''; SyncMode: TTina4RestSyncMode = Clear; Component: TComponent = nil);
 
 implementation
+
+uses Tina4RESTRequest;
 
   /// <summary> Converts a database underscored field to a camel case field for returing in JSON
   /// </summary>
@@ -609,6 +612,250 @@ begin
     end;
   except
     MemTable.FieldDefs.Clear;
+  end;
+end;
+
+
+/// <summary> Populates a Mem Table from a JSON object using the data from the DataKey
+/// </summary>
+/// <param name="MemTable">The mem table to be populated
+/// </param>
+/// <param name="DataKey">The key to be used to populate the Mem Table
+/// </param>
+/// <param name="JSON">The JSON to be used
+/// </param>
+/// <param name="IndexedFieldName">The IndexedFieldName to be used
+/// </param>
+/// <param name="SyncMode">TTina4RestSyncMode , default is to clear the mem table
+/// </param>
+/// <param name="Component">TComponent  will either be a TTina4JSONAdapter or a TTina4RESTRequest
+/// </param>
+/// <remarks>
+/// Populates a Mem Table from a JSON object using the data from the DataKey
+/// </remarks>
+procedure PopulateMemTableFromJSON(var MemTable: TFDMemTable; DataKey: String; JSON: String; IndexedFieldNames: String = ''; SyncMode: TTina4RestSyncMode = Clear; Component: TComponent = nil);
+var
+  Response : TJSONObject;
+  Initialized: Boolean;
+  OnExecuteDone : TTina4Event;
+  OnAddRecord: TTina4AddRecordEvent;
+
+procedure CreateOrUpdateRecord(JSONInfo: TJSONValue);
+begin
+  if (JSONInfo is TJSONObject) then
+  begin
+    var JSONRecord := StrToJSONObject(JSONInfo.ToJSON);
+
+    if (not Initialized) then
+    begin
+      if Assigned(MemTable) and ((MemTable.FieldDefs.Count = 0) or (MemTable.FieldDefs.Count <> JSONRecord.Count)) then
+      begin
+        if (MemTable.Active) then
+        begin
+          if SyncMode = Clear then
+          begin
+            MemTable.Close;
+          end;
+        end;
+
+        if MemTable.Fields.Count = 0 then
+        begin
+          GetFieldDefsFromJSONObject(TJSONObject(JSONInfo), TFDMemTable(MemTable));
+          MemTable.CreateDataSet;
+        end;
+      end;
+
+      if (not MemTable.Active) then
+      begin
+        MemTable.Open;
+        if SyncMode = Clear then
+        begin
+          MemTable.EmptyDataSet;
+        end;
+      end;
+
+      //Only do batching when we don't have to refresh or update records
+      if (not Assigned(OnAddRecord)) then
+      begin
+        MemTable.BeginBatch;
+      end;
+      Initialized := True;
+    end;
+
+    if (IndexedFieldNames = '') and (MemTable.FieldDefs.Count > 0) then
+    begin
+      IndexedFieldNames := MemTable.FieldDefs[0].Name;
+    end;
+
+    var FilterState : Boolean := MemTable.Filtered;
+    var Filter : String := MemTable.Filter;
+
+    try
+      if SyncMode = Clear then
+      begin
+        MemTable.Append;
+      end
+        else
+      begin
+        var IndexStringList: TStringList;
+        IndexStringList := TStringList.Create('"', ',');
+        try
+          IndexStringList.DelimitedText := IndexedFieldNames;
+
+          MemTable.Filtered := False;
+          MemTable.Filter := '';
+
+          for var I := 0 to IndexStringList.Count-1 do
+          begin
+            if (MemTable.Filter <> '') then
+            begin
+              MemTable.Filter := MemTable.Filter +' and ';
+            end;
+            MemTable.Filter := MemTable.Filter + IndexStringList[I] +' = '+QuotedStr(JSONRecord.GetValue<string>(IndexStringList[I]));
+          end;
+
+          MemTable.Filtered := True;
+
+          if (MemTable.RecNo = 0) then   //No record found
+          begin
+            MemTable.Append;
+          end
+            else
+          begin
+            MemTable.Edit;
+          end;
+        finally
+          IndexStringList.Free;
+        end;
+      end;
+
+      for var Index : Integer := 0 to JSONRecord.Count-1 do
+      begin
+        var PairValue : String;
+        if (JSONRecord.Pairs[Index].JsonValue is TJSONObject) or (JSONRecord.Pairs[Index].JsonValue is TJSONArray) then
+        begin
+          PairValue := JSONRecord.Pairs[Index].JsonValue.ToString;
+        end
+          else
+        begin
+          PairValue := JSONRecord.Pairs[Index].JsonValue.Value;
+        end;
+
+        var KeyIndex := MemTable.FieldDefs.IndexOf(JSONRecord.Pairs[Index].JsonString.Value);
+
+        if KeyIndex >= 0 then
+        begin
+          MemTable.FieldByName(JSONRecord.Pairs[Index].JsonString.Value).AsString := PairValue;
+        end;
+      end;
+
+      if Assigned(OnAddRecord) and Assigned(Component) then
+      begin
+        OnAddRecord(Component, MemTable);
+      end;
+
+      MemTable.Post;
+
+      MemTable.Filtered := False;
+      MemTable.Filter := Filter;
+      MemTable.Filtered := FilterState;
+    finally
+      JSONRecord.Free;
+    end;
+  end;
+end;
+
+
+begin
+  Response := StrToJSONObject(JSON);
+
+
+  //Get the events if we are the correct component type
+  if Component is TTina4RESTRequest then
+  begin
+    OnExecuteDone := (Component as TTina4RESTRequest).OnExecuteDone;
+    OnAddRecord :=  (Component as TTina4RESTRequest).OnAddRecord;
+  end
+    else
+  begin
+    OnExecuteDone := nil;
+    OnAddRecord := nil;
+  end;
+
+  try
+    if Assigned(Response) and Assigned(MemTable) then
+    begin
+      var Found := False;
+      for var JSONValue in Response do
+      begin
+        if (DataKey = '') and (GetJSONFieldName(JSONValue.JsonString.ToString) = 'response') then
+        begin
+          DataKey := 'response';
+        end;
+
+        if (MemTable.Active) and (MemTable.FieldDefs.Count > 0) then
+        begin
+          if not Found and (SyncMode = Clear) then
+          begin
+            MemTable.EmptyDataSet;
+          end;
+        end;
+
+        if (GetJSONFieldName(JSONValue.JsonString.ToString) = DataKey) then
+        begin
+          if (JSONValue.JsonValue is TJSONArray) then
+          begin
+            Found := True;
+
+            Initialized := False;
+            for var JSONInfo in TJSONArray(JSONValue.JsonValue) do
+            begin
+              CreateOrUpdateRecord(JSONInfo);
+            end;
+            //Only do batching when we don't have to refresh or update records
+            if Initialized and (not Assigned(OnAddRecord)) then
+            begin
+              MemTable.EndBatch;
+            end;
+
+
+            if MemTable.Active then
+            begin
+              MemTable.First;
+            end
+              else
+            begin
+              MemTable.Open;
+            end;
+
+            if (Assigned(OnExecuteDone)) then
+            begin
+              OnExecuteDone(Component);
+            end;
+          end;
+        end;
+      end;
+
+      //Convert the object that is returned
+      if not Found then
+      begin
+        Initialized := False;
+
+        CreateOrUpdateRecord(Response);
+
+        if (not Assigned(OnAddRecord)) then
+        begin
+          MemTable.EndBatch;
+        end;
+
+        if (Assigned(OnExecuteDone)) then
+        begin
+          OnExecuteDone(Component);
+        end;
+      end;
+    end;
+  finally
+    Response.Free;
   end;
 end;
 

@@ -44,7 +44,8 @@ contains
   Tina4WebServer in 'Tina4WebServer.pas',
   Tina4Route in 'Tina4Route.pas',
   Tina4REST in 'Tina4REST.pas',
-  Tina4RESTRequest in 'Tina4RESTRequest.pas';
+  Tina4RESTRequest in 'Tina4RESTRequest.pas',
+  Tina4JSONAdapter in 'Tina4JSONAdapter.pas';
 
 end.
 

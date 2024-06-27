@@ -86,11 +86,11 @@ begin
   if (JSONInfo is TJSONObject) then
   begin
     var JSONRecord := StrToJSONObject(JSONInfo.ToJSON);
-     
+
     if (not Initialized) then
     begin
       if Assigned(Self.FMemTable) and ((Self.FMemTable.FieldDefs.Count = 0) or (Self.FMemTable.FieldDefs.Count <> JSONRecord.Count)) then
-      begin       
+      begin
         if (Self.FMemTable.Active) then
         begin
           if Self.FSyncMode = Clear then
@@ -279,6 +279,8 @@ begin
       end;
 
       Self.FResponseBody.Text := Response.ToString;
+
+
       if Assigned(Self.FMemTable) then
       begin
         var Found := False;
@@ -291,7 +293,7 @@ begin
         
           if (Self.FMemTable.Active) and (Self.FMemTable.FieldDefs.Count > 0) then
           begin
-            if not Found and (Self.FSyncMode = Clear) then 
+            if not Found and (Self.FSyncMode = Clear) then
             begin
               Self.FMemTable.EmptyDataSet;
             end;
@@ -302,18 +304,27 @@ begin
             if (JSONValue.JsonValue is TJSONArray) then
             begin
               Found := True;
-              
+
               Initialized := False;
               for var JSONInfo in TJSONArray(JSONValue.JsonValue) do
               begin
                 CreateOrUpdateRecord(JSONInfo);
               end;
               //Only do batching when we don't have to refresh or update records
-              if (not Assigned(Self.OnAddRecord)) then
+              if Initialized and (not Assigned(Self.OnAddRecord)) then
               begin
                 Self.FMemTable.EndBatch;
               end;
-              Self.FMemTable.First;
+
+
+              if FMemTable.Active then
+              begin
+                Self.FMemTable.First;
+              end
+                else
+              begin
+                FMemTable.Open;
+              end;
 
               if (Assigned(Self.FOnExecuteDone)) then
               begin

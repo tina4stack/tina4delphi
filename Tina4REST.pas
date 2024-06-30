@@ -171,6 +171,11 @@ end;
 
 procedure TTina4REST.WrapJSONResponse(JSONContent: string; var Result: TJSONObject);
 begin
+  //If there is no response return back a blank object
+  if (JSONContent = '') then
+  begin
+    JSONContent := '{}';
+  end;
   //Add wrapper because the string is [] => {'response': []}
   if (Trim(JSONContent)[1] = '[') then    //Trim off the blanks and spaces on the edges [ ] //
   begin

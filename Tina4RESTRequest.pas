@@ -22,6 +22,7 @@ type
     FOnAddRecord: TTina4AddRecordEvent;
     FRequestType: TTina4RequestType;
     FMasterSource: TTina4RESTRequest;
+    FSourceIgnoreFields: String;
     FSyncMode: TTina4RestSyncMode;
     FIndexFieldNames: String;
     procedure SetMasterSource(const Source: TTina4RESTRequest);
@@ -45,6 +46,7 @@ type
     property QueryParams: String read FQueryParams write FQueryParams;
     property MemTable: TFDMemTable read FMemTable write FMemTable;
     property SourceMemTable: TFDMemTable read FSourceMemTable write FSourceMemTable;
+    property SourceIgnoreFields: String read FSourceIgnoreFields write FSourceIgnoreFields;
     property Tina4REST: TTina4REST read FTina4REST write FTina4REST;
     property MasterSource: TTina4RESTRequest read FMasterSource write SetMasterSource;
     property ResponseBody: TStringList read FResponseBody write SetResponseBody;
@@ -118,7 +120,7 @@ begin
 
     if Assigned(FSourceMemTable) then
     begin
-      var JSONObject : TJSONObject := GetJSONFromTable(FSourceMemTable);
+      var JSONObject : TJSONObject := GetJSONFromTable(FSourceMemTable, 'records', FSourceIgnoreFields);
       try
         if JSONObject.GetValue<TJSONArray>('records').Count = 1 then
         begin
@@ -128,6 +130,7 @@ begin
         begin
           FRequestBody.Text := JSONObject.GetValue<TJSONArray>('records').ToJSON;
         end;
+        RequestBody := FRequestBody.Text;
       finally
         JSONObject.Free;
       end;

@@ -36,8 +36,8 @@ type
 function CamelCase(FieldName: String): String;
 function GetJSONFromDB(Connection: TFDConnection; SQL: String;
    Params: TFDParams = nil; DataSetName: String = 'records'): TJSONObject;
-function GetJSONFromTable(var Table: TFDMemTable; DataSetName: String = 'records'): TJSONObject; overload;
-function GetJSONFromTable(Table: TFDTable; DataSetName: String = 'records'): TJSONObject; overload;
+function GetJSONFromTable(var Table: TFDMemTable; DataSetName: String = 'records'; IgnoreFields: String = ''): TJSONObject; overload;
+function GetJSONFromTable(Table: TFDTable; DataSetName: String = 'records'; IgnoreFields: String = ''): TJSONObject; overload;
 function SendHttpRequest(BaseURL: String; EndPoint: String = ''; QueryParams: String = ''; Body: String=''; ContentType: String = 'application/json';
   ContentEncoding : String = 'utf-8'; Username:String = ''; Password: String = ''; CustomHeaders: TURLHeaders = nil; UserAgent: String = 'Tina4Delphi'; RequestType: TTina4RequestType = Get;
   ReadTimeOut: Integer = 10000; ConnectTimeOut: Integer = 5000): String;
@@ -186,17 +186,27 @@ end;
 /// <returns>
 /// JSON Object with an Array of records
 /// </returns>
-function GetJSONFromTable(var Table: TFDMemTable; DataSetName: String = 'records'): TJSONObject; overload;
+function GetJSONFromTable(var Table: TFDMemTable; DataSetName: String = 'records'; IgnoreFields: String = ''): TJSONObject; overload;
 var
   DataRecord: TJSONObject;
   DataArray: TJSONArray;
   I: Integer;
   FieldNames: Array of String;
+  IgnoreFieldList: TStringList;
 
 begin
   Result := TJSONObject.Create;
   DataArray := TJSONArray.Create;
+  IgnoreFieldList := TStringList.Create;
   try
+    IgnoreFieldList.CommaText := IgnoreFields;
+
+    IgnoreFields := '';
+    for I := 0 to IgnoreFieldList.Count-1 do
+    begin
+      IgnoreFields := IgnoreFields + '"'+IgnoreFieldList.Strings[I]+'"';
+    end;
+
     try
       if not Table.Active then
       begin
@@ -211,18 +221,25 @@ begin
 
         for I := 0 to Table.FieldDefs.Count - 1 do
         begin
-          if (Length(FieldNames) = Table.FieldDefs.Count) then
           // gets the field names in camel case on first iteration to save processing
+
+          if (Length(FieldNames) = Table.FieldDefs.Count) then
           begin
-            DataRecord.AddPair(Table.FieldDefs[I].Name,
+            if (Pos('"'+FieldNames[I]+'"', IgnoreFields) = 0) then
+            begin
+              DataRecord.AddPair(FieldNames[I],
               Table.FieldByName(Table.FieldDefs[I].Name).AsString);
+            end;
           end
-          else
+            else
           begin
             SetLength(FieldNames, Length(FieldNames) + 1);
             FieldNames[I] := CamelCase(Table.FieldDefs[I].Name);
-            DataRecord.AddPair(Table.FieldDefs[I].Name,
+            if (Pos('"'+FieldNames[I]+'"', IgnoreFields) = 0) then
+            begin
+              DataRecord.AddPair(Table.FieldDefs[I].Name,
               Table.FieldByName(Table.FieldDefs[I].Name).AsString);
+            end;
           end;
         end;
 
@@ -234,7 +251,7 @@ begin
       Result.AddPair(DataSetName, DataArray);
 
     finally
-
+      IgnoreFieldList.Free;
     end;
   except
     on E: Exception do
@@ -250,23 +267,35 @@ end;
 /// </param>
 /// <param name="DataSetName">A name to give the returned result, example: cats, the default is records
 /// </param>
+/// <param name="IgnoreFields">Comma separated list of fields to ignore on getting the data
+/// </param>
 /// <remarks>
 /// A JSON object is returned with an array of records, if an exception happens , error is returned with the correct error
 /// </remarks>
 /// <returns>
 /// JSON Object with an Array of records
 /// </returns>
-function GetJSONFromTable(Table: TFDTable; DataSetName: String = 'records'): TJSONObject; overload;
+function GetJSONFromTable(Table: TFDTable; DataSetName: String = 'records'; IgnoreFields: String = ''): TJSONObject; overload;
 var
   DataRecord: TJSONObject;
   DataArray: TJSONArray;
   I: Integer;
   FieldNames: Array of String;
+  IgnoreFieldList: TStringList;
 
 begin
   Result := TJSONObject.Create;
   DataArray := TJSONArray.Create;
+  IgnoreFieldList := TStringList.Create;
   try
+    IgnoreFieldList.CommaText := IgnoreFields;
+
+    IgnoreFields := '';
+    for I := 0 to IgnoreFieldList.Count-1 do
+    begin
+      IgnoreFields := IgnoreFields + '"'+IgnoreFieldList.Strings[I]+'"';
+    end;
+
     try
       if not Table.Active then
       begin
@@ -281,18 +310,25 @@ begin
 
         for I := 0 to Table.FieldDefs.Count - 1 do
         begin
-          if (Length(FieldNames) = Table.FieldDefs.Count) then
           // gets the field names in camel case on first iteration to save processing
+
+          if (Length(FieldNames) = Table.FieldDefs.Count) then
           begin
-            DataRecord.AddPair(FieldNames[I],
+            if (Pos('"'+FieldNames[I]+'"', IgnoreFields) = 0) then
+            begin
+              DataRecord.AddPair(FieldNames[I],
               Table.FieldByName(Table.FieldDefs[I].Name).AsString);
+            end;
           end
-          else
+            else
           begin
             SetLength(FieldNames, Length(FieldNames) + 1);
             FieldNames[I] := CamelCase(Table.FieldDefs[I].Name);
-            DataRecord.AddPair(FieldNames[I],
+            if (Pos('"'+FieldNames[I]+'"', IgnoreFields) = 0) then
+            begin
+              DataRecord.AddPair(Table.FieldDefs[I].Name,
               Table.FieldByName(Table.FieldDefs[I].Name).AsString);
+            end;
           end;
         end;
 
@@ -302,8 +338,9 @@ begin
       end;
 
       Result.AddPair(DataSetName, DataArray);
-    finally
 
+    finally
+      IgnoreFieldList.Free;
     end;
   except
     on E: Exception do

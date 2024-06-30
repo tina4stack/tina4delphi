@@ -89,7 +89,7 @@ uses Tina4RESTRequest;
       end
         else
       begin
-        Result := LowerCase(FieldName);
+        Result := FieldName;
       end;
     except
       Result := FieldName;
@@ -214,14 +214,14 @@ begin
           if (Length(FieldNames) = Table.FieldDefs.Count) then
           // gets the field names in camel case on first iteration to save processing
           begin
-            DataRecord.AddPair(FieldNames[I],
+            DataRecord.AddPair(Table.FieldDefs[I].Name,
               Table.FieldByName(Table.FieldDefs[I].Name).AsString);
           end
           else
           begin
             SetLength(FieldNames, Length(FieldNames) + 1);
             FieldNames[I] := CamelCase(Table.FieldDefs[I].Name);
-            DataRecord.AddPair(FieldNames[I],
+            DataRecord.AddPair(Table.FieldDefs[I].Name,
               Table.FieldByName(Table.FieldDefs[I].Name).AsString);
           end;
         end;

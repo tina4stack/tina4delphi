@@ -1,0 +1,143 @@
+﻿<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+    <Import Condition="Exists('$(BDS)\bin\CodeGear.Deployment.targets')" Project="$(BDS)\bin\CodeGear.Deployment.targets"/>
+    <ProjectExtensions>
+        <ProjectFileVersion>12</ProjectFileVersion>
+    </ProjectExtensions>
+    <PropertyGroup>
+        <DeviceId Condition="'$(Platform)'=='Android'"/>
+        <DeviceId Condition="'$(Platform)'=='Android64'"/>
+        <DeviceId Condition="'$(Platform)'=='iOSDevice64'"/>
+        <DeviceId Condition="'$(Platform)'=='iOSSimARM64'"/>
+    </PropertyGroup>
+    <ItemGroup Condition="'$(Platform)'=='OSX64'"/>
+    <ItemGroup Condition="'$(Platform)'=='Win32'">
+        <DeployFile Include="C:\Users\Public\Documents\Embarcadero\Studio\23.0\Bpl\Tina4Delphi.bpl" Condition="'$(Config)'=='Debug'">
+            <RemoteDir>Tina4Delphi\</RemoteDir>
+            <RemoteName>Tina4Delphi.bpl</RemoteName>
+            <DeployClass>ProjectOutput</DeployClass>
+            <Operation>0</Operation>
+            <LocalCommand/>
+            <RemoteCommand/>
+            <Overwrite>True</Overwrite>
+            <Required>True</Required>
+        </DeployFile>
+    </ItemGroup>
+    <ItemGroup Condition="'$(Platform)'=='Android64'"/>
+    <ItemGroup Condition="'$(Platform)'=='Android'"/>
+    <ItemGroup Condition="'$(Platform)'=='OSXARM64'">
+        <DeployFile Include="$(BDS)\Redist\OSX64\bplFireDACCommonDriver290.dylib" Condition="'$(Config)'=='Debug'">
+            <RemoteDir>Tina4Delphi\</RemoteDir>
+            <RemoteName>bplFireDACCommonDriver290.dylib</RemoteName>
+            <DeployClass>DependencyPackage</DeployClass>
+            <Operation>1</Operation>
+            <LocalCommand/>
+            <RemoteCommand/>
+            <Overwrite>True</Overwrite>
+            <Required>True</Required>
+        </DeployFile>
+        <DeployFile Include="$(BDS)\Redist\OSX64\bplIndySystem290.dylib" Condition="'$(Config)'=='Debug'">
+            <RemoteDir>Tina4Delphi\</RemoteDir>
+            <RemoteName>bplIndySystem290.dylib</RemoteName>
+            <DeployClass>DependencyPackage</DeployClass>
+            <Operation>1</Operation>
+            <LocalCommand/>
+            <RemoteCommand/>
+            <Overwrite>True</Overwrite>
+            <Required>True</Required>
+        </DeployFile>
+        <DeployFile Include="$(BDS)\Redist\OSX64\bplfmx290.dylib" Condition="'$(Config)'=='Debug'">
+            <RemoteDir>Tina4Delphi\</RemoteDir>
+            <RemoteName>bplfmx290.dylib</RemoteName>
+            <DeployClass>DependencyPackage</DeployClass>
+            <Operation>1</Operation>
+            <LocalCommand/>
+            <RemoteCommand/>
+            <Overwrite>True</Overwrite>
+            <Required>True</Required>
+        </DeployFile>
+        <DeployFile Include="$(BDS)\Redist\OSX64\bplIndyProtocols290.dylib" Condition="'$(Config)'=='Debug'">
+            <RemoteDir>Tina4Delphi\</RemoteDir>
+            <RemoteName>bplIndyProtocols290.dylib</RemoteName>
+            <DeployClass>DependencyPackage</DeployClass>
+            <Operation>1</Operation>
+            <LocalCommand/>
+            <RemoteCommand/>
+            <Overwrite>True</Overwrite>
+            <Required>True</Required>
+        </DeployFile>
+        <DeployFile Include="C:\Users\Public\Documents\Embarcadero\Studio\23.0\Bpl\OSXARM64\bplTina4Delphi.dylib" Condition="'$(Config)'=='Debug'">
+            <RemoteDir>Tina4Delphi\</RemoteDir>
+            <RemoteName>bplTina4Delphi.dylib</RemoteName>
+            <DeployClass>ProjectOutput</DeployClass>
+            <Operation>1</Operation>
+            <LocalCommand/>
+            <RemoteCommand/>
+            <Overwrite>True</Overwrite>
+            <Required>True</Required>
+        </DeployFile>
+        <DeployFile Include="$(BDS)\Redist\OSX64\bplFireDACCommon290.dylib" Condition="'$(Config)'=='Debug'">
+            <RemoteDir>Tina4Delphi\</RemoteDir>
+            <RemoteName>bplFireDACCommon290.dylib</RemoteName>
+            <DeployClass>DependencyPackage</DeployClass>
+            <Operation>1</Operation>
+            <LocalCommand/>
+            <RemoteCommand/>
+            <Overwrite>True</Overwrite>
+            <Required>True</Required>
+        </DeployFile>
+        <DeployFile Include="$(BDS)\Redist\OSX64\bplFireDAC290.dylib" Condition="'$(Config)'=='Debug'">
+            <RemoteDir>Tina4Delphi\</RemoteDir>
+            <RemoteName>bplFireDAC290.dylib</RemoteName>
+            <DeployClass>DependencyPackage</DeployClass>
+            <Operation>1</Operation>
+            <LocalCommand/>
+            <RemoteCommand/>
+            <Overwrite>True</Overwrite>
+            <Required>True</Required>
+        </DeployFile>
+        <DeployFile Include="$(BDS)\Redist\OSX64\bplrtl290.dylib" Condition="'$(Config)'=='Debug'">
+            <RemoteDir>Tina4Delphi\</RemoteDir>
+            <RemoteName>bplrtl290.dylib</RemoteName>
+            <DeployClass>DependencyPackage</DeployClass>
+            <Operation>1</Operation>
+            <LocalCommand/>
+            <RemoteCommand/>
+            <Overwrite>True</Overwrite>
+            <Required>True</Required>
+        </DeployFile>
+        <DeployFile Include="$(BDS)\Redist\OSX64\bplxmlrtl290.dylib" Condition="'$(Config)'=='Debug'">
+            <RemoteDir>Tina4Delphi\</RemoteDir>
+            <RemoteName>bplxmlrtl290.dylib</RemoteName>
+            <DeployClass>DependencyPackage</DeployClass>
+            <Operation>1</Operation>
+            <LocalCommand/>
+            <RemoteCommand/>
+            <Overwrite>True</Overwrite>
+            <Required>True</Required>
+        </DeployFile>
+        <DeployFile Include="$(BDS)\Redist\OSX64\bplIndyCore290.dylib" Condition="'$(Config)'=='Debug'">
+            <RemoteDir>Tina4Delphi\</RemoteDir>
+            <RemoteName>bplIndyCore290.dylib</RemoteName>
+            <DeployClass>DependencyPackage</DeployClass>
+            <Operation>1</Operation>
+            <LocalCommand/>
+            <RemoteCommand/>
+            <Overwrite>True</Overwrite>
+            <Required>True</Required>
+        </DeployFile>
+        <DeployFile Include="$(BDS)\Redist\OSX64\bpldbrtl290.dylib" Condition="'$(Config)'=='Debug'">
+            <RemoteDir>Tina4Delphi\</RemoteDir>
+            <RemoteName>bpldbrtl290.dylib</RemoteName>
+            <DeployClass>DependencyPackage</DeployClass>
+            <Operation>1</Operation>
+            <LocalCommand/>
+            <RemoteCommand/>
+            <Overwrite>True</Overwrite>
+            <Required>True</Required>
+        </DeployFile>
+    </ItemGroup>
+    <ItemGroup Condition="'$(Platform)'=='Win64'"/>
+    <ItemGroup Condition="'$(Platform)'=='iOSDevice64'"/>
+    <ItemGroup Condition="'$(Platform)'=='iOSSimARM64'"/>
+    <ItemGroup Condition="'$(Platform)'=='Linux64'"/>
+</Project>

@@ -18,7 +18,7 @@ type
     FUserAgent: String;
     procedure SetCustomHeaders(const List: TURLHeaders);
     function GetCustomHeaders: TURLHeaders;
-    procedure WrapJSONResponse(JSONContent: string; var Result: TJSONObject);
+    procedure WrapJSONResponse(JSONContent: TBytes; var Result: TJSONObject);
   protected
     { Protected declarations }
   public
@@ -89,7 +89,7 @@ end;
 
 function TTina4REST.Get(EndPoint: String; QueryParams: String=''; ContentType: String= 'application/json'; ContentEncoding: String = 'utf-8'): TJSONObject;
 var
-  JSONContent : String;
+  JSONContent : TBytes;
 begin
   JSONContent := SendHttpRequest(Self.FBaseUrl, EndPoint, QueryParams, '', ContentType, ContentEncoding, Self.FUsername, Self.FPassword, Self.FCustomHeaders, Self.FUserAgent, TTina4RequestType.Get, Self.FReadTimeOut, Self.FConnectTimeOut);
   WrapJSONResponse(JSONContent, Result);
@@ -98,7 +98,7 @@ end;
 function TTina4REST.Delete(EndPoint, QueryParams, ContentType,
   ContentEncoding: String): TJSONObject;
 var
-  JSONContent : String;
+  JSONContent : TBytes;
 begin
   JSONContent := SendHttpRequest(Self.FBaseUrl, EndPoint, QueryParams, '', ContentType, ContentEncoding, Self.FUsername, Self.FPassword, Self.FCustomHeaders, Self.FUserAgent, TTina4RequestType.Delete, Self.FReadTimeOut, Self.FConnectTimeOut);
   WrapJSONResponse(JSONContent, Result);
@@ -120,7 +120,7 @@ end;
 function TTina4REST.Post(EndPoint, QueryParams, Body, ContentType,
   ContentEncoding: String): TJSONObject;
 var
-  JSONContent : String;
+  JSONContent : TBytes;
 begin
   JSONContent := SendHttpRequest(Self.FBaseUrl, EndPoint, QueryParams, Body, ContentType, ContentEncoding, Self.FUsername, Self.FPassword, Self.FCustomHeaders, Self.FUserAgent, TTina4RequestType.Post);
   WrapJSONResponse(JSONContent, Result);
@@ -129,7 +129,7 @@ end;
 function TTina4REST.Patch(EndPoint, QueryParams, Body, ContentType,
   ContentEncoding: String): TJSONObject;
 var
-  JSONContent : String;
+  JSONContent : TBytes;
 begin
   JSONContent := SendHttpRequest(Self.FBaseUrl, EndPoint, QueryParams, Body, ContentType, ContentEncoding, Self.FUsername, Self.FPassword, Self.FCustomHeaders, Self.FUserAgent, TTina4RequestType.Patch);
   WrapJSONResponse(JSONContent, Result);
@@ -138,7 +138,7 @@ end;
 function TTina4REST.Put(EndPoint, QueryParams, Body, ContentType,
   ContentEncoding: String): TJSONObject;
 var
-  JSONContent : String;
+  JSONContent : TBytes;
 begin
   JSONContent := SendHttpRequest(Self.FBaseUrl, EndPoint, QueryParams, Body, ContentType, ContentEncoding, Self.FUsername, Self.FPassword, Self.FCustomHeaders, Self.FUserAgent, TTina4RequestType.Put);
   WrapJSONResponse(JSONContent, Result);
@@ -169,21 +169,25 @@ begin
   end;
 end;
 
-procedure TTina4REST.WrapJSONResponse(JSONContent: string; var Result: TJSONObject);
+procedure TTina4REST.WrapJSONResponse(JSONContent: TBytes; var Result: TJSONObject);
+var
+  JSONString: String;
 begin
   //If there is no response return back a blank object
-  if (JSONContent = '') then
+  JSONString := StringOf(JSONContent);
+
+  if (JSONString = '') then
   begin
-    JSONContent := '{}';
+    JSONString := '{}';
   end;
   //Add wrapper because the string is [] => {'response': []}
-  if (Trim(JSONContent)[1] = '[') then    //Trim off the blanks and spaces on the edges [ ] //
+  if (Trim(JSONString)[1] = '[') then    //Trim off the blanks and spaces on the edges [ ] //
   begin
-    Result := StrToJSONObject('{"response":' + JSONContent + '}');
+    Result := StrToJSONObject('{"response":' + JSONString + '}');
   end
     else
   begin
-    Result := StrToJSONObject(JSONContent);
+    Result := StrToJSONObject(JSONString);
   end;
 end;
 

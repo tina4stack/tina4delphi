@@ -7,7 +7,7 @@ uses JSON, System.SysUtils, FireDAC.DApt, FireDAC.Stan.Intf,
   FireDAC.Phys.Intf, FireDAC.Stan.Def, FireDAC.Stan.Pool, FireDAC.Stan.Async,
   FireDAC.Phys, FireDAC.ConsoleUI.Wait,
   Data.DB, FireDAC.Comp.Client, FireDAC.Stan.Param, System.NetEncoding, System.DateUtils,
-  System.Classes, System.Generics.Collections, System.Net.HttpClientComponent, System.Net.URLClient;
+  System.Classes, System.Generics.Collections, System.Net.HttpClientComponent, System.Net.URLClient, System.Net.HttpClient;
 
 type
   /// <summary> The type of REST calls we can make
@@ -40,7 +40,7 @@ function GetJSONFromTable(var Table: TFDMemTable; DataSetName: String = 'records
 function GetJSONFromTable(Table: TFDTable; DataSetName: String = 'records'; IgnoreFields: String = ''; IgnoreBlanks: Boolean = False): TJSONObject; overload;
 function SendHttpRequest(BaseURL: String; EndPoint: String = ''; QueryParams: String = ''; Body: String=''; ContentType: String = 'application/json';
   ContentEncoding : String = 'utf-8'; Username:String = ''; Password: String = ''; CustomHeaders: TURLHeaders = nil; UserAgent: String = 'Tina4Delphi'; RequestType: TTina4RequestType = Get;
-  ReadTimeOut: Integer = 10000; ConnectTimeOut: Integer = 5000): String;
+  ReadTimeOut: Integer = 10000; ConnectTimeOut: Integer = 5000): TBytes;
 function StrToJSONObject(JSON:String): TJSONObject;
 function StrToJSONArray(JSON:String): TJSONArray;
 function GetJSONFieldName(FieldName: String) : String;
@@ -396,33 +396,14 @@ end;
 /// </returns>
 function SendHttpRequest(BaseURL: String; EndPoint: String = ''; QueryParams: String = ''; Body: String=''; ContentType: String = 'application/json';
   ContentEncoding : String = 'utf-8'; Username:String = ''; Password: String = ''; CustomHeaders: TURLHeaders = nil; UserAgent: String = 'Tina4Delphi';
-  RequestType: TTina4RequestType = Get; ReadTimeOut: Integer = 10000; ConnectTimeOut: Integer = 5000): String;
+  RequestType: TTina4RequestType = Get; ReadTimeOut: Integer = 10000; ConnectTimeOut: Integer = 5000): TBytes;
 var
   HttpClient: TNetHTTPClient;
   HTTPRequest: TNetHTTPRequest;
   BodyList: TStringStream;
-  MemoryStream : TMemoryStream;
+  BytesStream : TBytesStream;
   Url: String;
   Header: TNetHeader;
-
-  function StreamToString(aStream: TStream): string;
-  var
-    SS: TStringStream;
-  begin
-    if aStream <> nil then
-    begin
-      SS := TStringStream.Create('');
-      try
-        SS.CopyFrom(aStream, 0);  // No need to position at 0 nor provide size
-        Result := SS.DataString;
-      finally
-        SS.Free;
-      end;
-    end else
-    begin
-      Result := '';
-    end;
-  end;
 
 begin
   try
@@ -476,55 +457,50 @@ begin
 
       HTTPRequest.Client := HttpClient;
       HTTPRequest.Client.ContentType := ContentType;
-      HTTPRequest.Accept := ContentType;
-      HTTPRequest.AcceptEncoding := ContentEncoding;
-      //HTTPRequest.OnRequestCompleted := HTTPRequestCompleted;
-      //HTTPRequest.OnRequestError := HTTPRequestError;
+      HTTPRequest.Client.Accept := ContentType;
+      HTTPRequest.Client.AcceptEncoding := ContentEncoding;
+      HTTPRequest.Client.AutomaticDecompression  := [THTTPCompressionMethod.Any];
 
-      MemoryStream := TMemoryStream.Create;
-
+      BytesStream := TBytesStream.Create;
       try
         try
           if RequestType = Post then
           begin
-            HTTPRequest.Post(Url, BodyList, MemoryStream);
+            HTTPRequest.Post(Url, BodyList, BytesStream);
           end
             else
           if RequestType = Patch then
           begin
-            HTTPRequest.Patch(Url, BodyList, MemoryStream);
+            HTTPRequest.Patch(Url, BodyList, BytesStream);
           end
             else
           if RequestType = Put then
           begin
-            HTTPRequest.Put(Url, BodyList, MemoryStream);
+            HTTPRequest.Put(Url, BodyList, BytesStream);
           end
            else
           if RequestType = Get then
           begin
-            HTTPRequest.Get(Url, MemoryStream);
+            HTTPRequest.Get(Url, BytesStream);
           end
             else
           if RequestType = Delete then
           begin
-            HTTPRequest.Delete(Url, MemoryStream);
+            HTTPRequest.Delete(Url, BytesStream);
           end;
 
-          Result := StreamToString(MemoryStream);
+          SetLength(Result, Length(BytesStream.Bytes));
+          Move(BytesStream.Bytes[0],Result[0],Length(BytesStream.Bytes));
         except
           on E:Exception do
           begin
-            Result := '{"error":"'+E.Message+'"}';
+            Result := TEncoding.UTF8.GetBytes('{"error": "'+E.Message+'"}');
           end;
         end;
       finally
-        MemoryStream.Free;
+        BytesStream.Free;
       end;
 
-      if (ContentType = 'application/json') and (Length(Result) > 0) and ((Result[1] <> '{') and (Result[1] <> '[')) then
-      begin
-        Result := '{"error":"' + Result + '"}';
-      end;
     finally
       HTTPRequest.Free;
       HTTPClient.Free;
@@ -533,8 +509,7 @@ begin
   except
     on E: Exception do
     begin
-      Result := '{"error":"' + E.Message + '", "url": "' + Url + '", "body": ' +
-        Body + '}';
+      Result := TEncoding.UTF8.GetBytes('{"error": "'+E.Message+'"}');
     end;
   end;
 end;

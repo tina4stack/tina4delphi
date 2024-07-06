@@ -165,7 +165,7 @@ begin
     try
       if (Response = nil) then
       begin
-        FResponseBody.Text := '{"error": "Check the response from the server, something bad happened!"}';
+        FResponseBody.Text := '{"error": "Could not get a reply from the server!"}';
         if (Assigned(Self.FOnExecuteDone)) then
         begin
           Self.FOnExecuteDone(Self);

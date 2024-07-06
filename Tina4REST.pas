@@ -18,7 +18,7 @@ type
     FUserAgent: String;
     procedure SetCustomHeaders(const List: TURLHeaders);
     function GetCustomHeaders: TURLHeaders;
-    procedure WrapJSONResponse(JSONContent: TBytes; var Result: TJSONObject);
+    function WrapJSONResponse(JSONContent: TBytes): TJSONObject;
   protected
     { Protected declarations }
   public
@@ -92,7 +92,7 @@ var
   JSONContent : TBytes;
 begin
   JSONContent := SendHttpRequest(Self.FBaseUrl, EndPoint, QueryParams, '', ContentType, ContentEncoding, Self.FUsername, Self.FPassword, Self.FCustomHeaders, Self.FUserAgent, TTina4RequestType.Get, Self.FReadTimeOut, Self.FConnectTimeOut);
-  WrapJSONResponse(JSONContent, Result);
+  Result := WrapJSONResponse(JSONContent);
 end;
 
 function TTina4REST.Delete(EndPoint, QueryParams, ContentType,
@@ -101,7 +101,7 @@ var
   JSONContent : TBytes;
 begin
   JSONContent := SendHttpRequest(Self.FBaseUrl, EndPoint, QueryParams, '', ContentType, ContentEncoding, Self.FUsername, Self.FPassword, Self.FCustomHeaders, Self.FUserAgent, TTina4RequestType.Delete, Self.FReadTimeOut, Self.FConnectTimeOut);
-  WrapJSONResponse(JSONContent, Result);
+  Result := WrapJSONResponse(JSONContent);
 end;
 
 
@@ -123,7 +123,7 @@ var
   JSONContent : TBytes;
 begin
   JSONContent := SendHttpRequest(Self.FBaseUrl, EndPoint, QueryParams, Body, ContentType, ContentEncoding, Self.FUsername, Self.FPassword, Self.FCustomHeaders, Self.FUserAgent, TTina4RequestType.Post);
-  WrapJSONResponse(JSONContent, Result);
+  Result := WrapJSONResponse(JSONContent);
 end;
 
 function TTina4REST.Patch(EndPoint, QueryParams, Body, ContentType,
@@ -132,7 +132,7 @@ var
   JSONContent : TBytes;
 begin
   JSONContent := SendHttpRequest(Self.FBaseUrl, EndPoint, QueryParams, Body, ContentType, ContentEncoding, Self.FUsername, Self.FPassword, Self.FCustomHeaders, Self.FUserAgent, TTina4RequestType.Patch);
-  WrapJSONResponse(JSONContent, Result);
+  Result := WrapJSONResponse(JSONContent);
 end;
 
 function TTina4REST.Put(EndPoint, QueryParams, Body, ContentType,
@@ -141,7 +141,7 @@ var
   JSONContent : TBytes;
 begin
   JSONContent := SendHttpRequest(Self.FBaseUrl, EndPoint, QueryParams, Body, ContentType, ContentEncoding, Self.FUsername, Self.FPassword, Self.FCustomHeaders, Self.FUserAgent, TTina4RequestType.Put);
-  WrapJSONResponse(JSONContent, Result);
+  Result := WrapJSONResponse(JSONContent);
 end;
 
 procedure TTina4REST.ReadHeaderData(AStream: TStream);
@@ -169,12 +169,12 @@ begin
   end;
 end;
 
-procedure TTina4REST.WrapJSONResponse(JSONContent: TBytes; var Result: TJSONObject);
+function TTina4REST.WrapJSONResponse(JSONContent: TBytes): TJSONObject;
 var
   JSONString: String;
 begin
   //If there is no response return back a blank object
-  JSONString := StringOf(JSONContent);
+  JSONString := Trim(StringOf(JSONContent));
 
   if (JSONString = '') then
   begin

@@ -42,6 +42,7 @@ function SendHttpRequest(BaseURL: String; EndPoint: String = ''; QueryParams: St
   ContentEncoding : String = 'utf-8'; Username:String = ''; Password: String = ''; CustomHeaders: TURLHeaders = nil; UserAgent: String = 'Tina4Delphi'; RequestType: TTina4RequestType = Get;
   ReadTimeOut: Integer = 10000; ConnectTimeOut: Integer = 5000): TBytes;
 function StrToJSONObject(JSON:String): TJSONObject;
+function BytesToJSONObject(JSON:TBytes): TJSONObject;
 function StrToJSONArray(JSON:String): TJSONArray;
 function GetJSONFieldName(FieldName: String) : String;
 function GetJSONDate(const ADate: TDateTime) : String;
@@ -407,6 +408,12 @@ var
 
 begin
   try
+    if (EndPoint = '') and (BaseUrl = '') then
+    begin
+      Result := TEncoding.UTF8.GetBytes('{"error": "No URL"}');
+      exit;
+    end;
+
     if (EndPoint <> '') and (BaseUrl <> '') then
     begin
       Url := BaseURL + '/' + EndPoint;
@@ -527,7 +534,27 @@ end;
 function StrToJSONObject(JSON:String): TJSONObject;
 begin
   try
+
     Result := TJSONObject.ParseJSONValue(JSON) as TJSONObject;
+  except
+    Result := nil;
+  end;
+end;
+
+/// <summary> Converts TBytes into a TJSONObject
+/// </summary>
+/// <param name="JSON">A JSON string
+/// </param>
+/// <remarks>
+/// Converts a string into a JSON object
+/// </remarks>
+/// <returns>
+/// A TJSONObject or nil if the string is invalid
+/// </returns>
+function BytesToJSONObject(JSON:TBytes): TJSONObject;
+begin
+  try
+    Result := TJSONObject.ParseJSONValue(JSON,0, Length(JSON), []) as TJSONObject;
   except
     Result := nil;
   end;

@@ -46,6 +46,7 @@ function BytesToJSONObject(JSON:TBytes): TJSONObject;
 function StrToJSONArray(JSON:String): TJSONArray;
 function GetJSONFieldName(FieldName: String) : String;
 function GetJSONDate(const ADate: TDateTime) : String;
+function JSONDateToDateTime(const ADateString: String) : TDateTime;
 procedure GetFieldDefsFromJSONObject(JSONObject: TJSONObject; var MemTable: TFDMemTable);
 procedure PopulateMemTableFromJSON(var MemTable: TFDMemTable; DataKey: String; JSON: String; IndexedFieldNames: String = ''; SyncMode: TTina4RestSyncMode = Clear; Component: TComponent = nil);
 
@@ -310,6 +311,9 @@ var
   I: Integer;
   FieldNames: Array of String;
   IgnoreFieldList: TStringList;
+  CanAddPair: Boolean;
+  ByteStream: TBytesStream;
+  Base64EncodedStream: TStringStream;
 
 begin
   Result := TJSONObject.Create;
@@ -348,24 +352,42 @@ begin
 
           if (Pos('"'+FieldNames[I]+'"', IgnoreFields) = 0) then
           begin
-            if IgnoreBlanks then
+            CanAddPair := True;
+            if IgnoreBlanks and (Table.FieldByName(FieldNames[I]).AsString = '') then
             begin
-              if (Table.FieldByName(FieldNames[I]).AsString <> '') then
+              CanAddPair := False;
+            end;
+
+            if CanAddPair then
+            begin
+              if Table.FieldDefs[I].DataType = TFieldType.ftBlob then
               begin
-                DataRecord.AddPair(FieldNames[I],
-                Table.FieldByName(FieldNames[I]).AsString);
+                //Base 64 encode
+                ByteStream := TBytesStream.Create(Table.FieldByName(FieldNames[I]).AsBytes);
+                Base64EncodedStream := TStringStream.Create();
+                try
+                  TNetEncoding.Base64.Encode(ByteStream, Base64EncodedStream);
+
+                   DataRecord.AddPair(FieldNames[I], Base64EncodedStream.DataString);
+                finally
+                  Base64EncodedStream.Free;
+                  ByteStream.Free;
+                end;
+              end
+                else
+              if Table.FieldDefs[I].DataType = TFieldType.ftDateTime then
+              begin
+                DataRecord.AddPair(FieldNames[I], GetJSONDate(Table.FieldByName(FieldNames[I]).AsDateTime));
+              end
+                else
+              begin
+                DataRecord.AddPair(FieldNames[I], Table.FieldByName(FieldNames[I]).AsString);
               end;
-            end
-              else
-            begin
-              DataRecord.AddPair(FieldNames[I],
-              Table.FieldByName(FieldNames[I]).AsString);
             end;
           end;
         end;
 
         DataArray.Add(DataRecord);
-
         Table.Next;
       end;
 
@@ -641,6 +663,22 @@ begin
 end;
 
 
+/// <summary> Converts an ISO  date string from JSON to TDateTime
+/// </summary>
+/// <param name="ADateString">
+/// </param>
+/// <remarks>
+/// Returns back a TDateTime
+/// </remarks>
+/// <returns>
+/// Returns back a TDateTime
+/// </returns>
+function JSONDateToDateTime(const ADateString: String) : TDateTime;
+begin
+  Result := ISO8601ToDate(ADateString, False);
+end;
+
+
 /// <summary> Gets Field definitions from a TJSONObject
 /// </summary>
 /// <param name="JSONObject">A TJSONObject
@@ -708,6 +746,7 @@ var
   Initialized: Boolean;
   OnExecuteDone : TTina4Event;
   OnAddRecord: TTina4AddRecordEvent;
+
 
 procedure CreateOrUpdateRecord(JSONInfo: TJSONValue);
 begin
@@ -814,7 +853,20 @@ begin
 
         if KeyIndex >= 0 then
         begin
-          MemTable.FieldByName(JSONRecord.Pairs[Index].JsonString.Value).AsString := PairValue;
+          if MemTable.FieldDefs[KeyIndex].DataType = TFieldType.ftDateTime then
+          begin
+            MemTable.FieldByName(JSONRecord.Pairs[Index].JsonString.Value).AsDateTime := JSONDateToDateTime(PairValue);
+          end
+            else
+          if MemTable.FieldDefs[KeyIndex].DataType = TFieldType.ftString then
+          begin
+            MemTable.FieldByName(JSONRecord.Pairs[Index].JsonString.Value).AsString := PairValue;
+          end
+            else
+          if MemTable.FieldDefs[KeyIndex].DataType = TFieldType.ftBlob then
+          begin
+            MemTable.FieldByName(JSONRecord.Pairs[Index].JsonString.Value).AsBytes := TNetEncoding.Base64.DecodeStringToBytes(PairValue);
+          end;
         end;
       end;
 

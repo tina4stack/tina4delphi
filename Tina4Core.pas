@@ -194,6 +194,9 @@ var
   I: Integer;
   FieldNames: Array of String;
   IgnoreFieldList: TStringList;
+  CanAddPair: Boolean;
+  ByteStream: TBytesStream;
+  Base64EncodedStream: TStringStream;
 
 begin
   Result := TJSONObject.Create;
@@ -232,18 +235,37 @@ begin
 
           if (Pos('"'+FieldNames[I]+'"', IgnoreFields) = 0) then
           begin
-            if IgnoreBlanks then
+            CanAddPair := True;
+            if IgnoreBlanks and (Table.FieldByName(FieldNames[I]).AsString = '') then
             begin
-              if (Table.FieldByName(FieldNames[I]).AsString <> '') then
+              CanAddPair := False;
+            end;
+
+            if CanAddPair then
+            begin
+              if Table.FieldDefs[I].DataType = TFieldType.ftBlob then
               begin
-                DataRecord.AddPair(FieldNames[I],
-                Table.FieldByName(FieldNames[I]).AsString);
+                //Base 64 encode
+                ByteStream := TBytesStream.Create(Table.FieldByName(FieldNames[I]).AsBytes);
+                Base64EncodedStream := TStringStream.Create();
+                try
+                  TNetEncoding.Base64.Encode(ByteStream, Base64EncodedStream);
+
+                   DataRecord.AddPair(FieldNames[I], Base64EncodedStream.DataString);
+                finally
+                  Base64EncodedStream.Free;
+                  ByteStream.Free;
+                end;
+              end
+                else
+              if Table.FieldDefs[I].DataType = TFieldType.ftDateTime then
+              begin
+                DataRecord.AddPair(FieldNames[I], GetJSONDate(Table.FieldByName(FieldNames[I]).AsDateTime));
+              end
+                else
+              begin
+                DataRecord.AddPair(FieldNames[I], Table.FieldByName(FieldNames[I]).AsString);
               end;
-            end
-              else
-            begin
-              DataRecord.AddPair(FieldNames[I],
-              Table.FieldByName(FieldNames[I]).AsString);
             end;
           end;
         end;

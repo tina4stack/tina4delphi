@@ -87,6 +87,17 @@ begin
   inherited;
 end;
 
+function TTina4REST.GetCustomHeaders: TURLHeaders;
+begin
+  Result := FCustomHeaders;
+end;
+
+procedure TTina4REST.Loaded;
+begin
+  inherited;
+
+end;
+
 function TTina4REST.Get(EndPoint: String; QueryParams: String=''; ContentType: String= 'application/json'; ContentEncoding: String = 'utf-8'): TJSONObject;
 var
   JSONContent : TBytes;
@@ -103,19 +114,6 @@ begin
   JSONContent := SendHttpRequest(Self.FBaseUrl, EndPoint, QueryParams, '', ContentType, ContentEncoding, Self.FUsername, Self.FPassword, Self.FCustomHeaders, Self.FUserAgent, TTina4RequestType.Delete, Self.FReadTimeOut, Self.FConnectTimeOut);
   Result := WrapJSONResponse(JSONContent);
 end;
-
-
-function TTina4REST.GetCustomHeaders: TURLHeaders;
-begin
-  Result := FCustomHeaders;
-end;
-
-procedure TTina4REST.Loaded;
-begin
-  inherited;
-
-end;
-
 
 function TTina4REST.Post(EndPoint, QueryParams, Body, ContentType,
   ContentEncoding: String): TJSONObject;

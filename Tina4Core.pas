@@ -231,7 +231,7 @@ begin
           if (Length(FieldNames) <> Table.FieldDefs.Count) then
           begin
             SetLength(FieldNames, Length(FieldNames) + 1);
-            FieldNames[I] := CamelCase(Table.FieldDefs[I].Name);
+            FieldNames[I] := Table.FieldDefs[I].Name;
           end;
 
           if (Pos('"'+FieldNames[I]+'"', IgnoreFields) = 0) then

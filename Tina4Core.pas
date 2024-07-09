@@ -855,7 +855,14 @@ begin
         begin
           if MemTable.FieldDefs[KeyIndex].DataType = TFieldType.ftDateTime then
           begin
-            MemTable.FieldByName(JSONRecord.Pairs[Index].JsonString.Value).AsDateTime := JSONDateToDateTime(PairValue);
+            if (PairValue <> '') then
+            begin
+              MemTable.FieldByName(JSONRecord.Pairs[Index].JsonString.Value).AsDateTime := JSONDateToDateTime(PairValue);
+            end
+              else
+            begin
+              MemTable.FieldByName(JSONRecord.Pairs[Index].JsonString.Value).AsString := '';
+            end;
           end
             else
           if MemTable.FieldDefs[KeyIndex].DataType = TFieldType.ftString then
@@ -866,6 +873,10 @@ begin
           if MemTable.FieldDefs[KeyIndex].DataType = TFieldType.ftBlob then
           begin
             MemTable.FieldByName(JSONRecord.Pairs[Index].JsonString.Value).AsBytes := TNetEncoding.Base64.DecodeStringToBytes(PairValue);
+          end
+            else
+          begin
+            MemTable.FieldByName(JSONRecord.Pairs[Index].JsonString.Value).AsString := PairValue;
           end;
         end;
       end;

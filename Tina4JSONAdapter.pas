@@ -39,7 +39,15 @@ begin
   //Populates the target mem table
   if Assigned(FMemTable) and Assigned(FMasterSource) then
   begin
-    PopulateMemTableFromJSON(FMemTable, FDataKey, FMasterSource.ResponseBody.Text);
+    var MasterJSONData: String :=  FMasterSource.ResponseBody.Text;
+
+    //check if master source has a mem table
+    if Assigned(FMasterSource.MemTable) then
+    begin
+      MasterJSONData := '{"'+FDataKey+'": '+FMasterSource.MemTable.FieldByName(FDataKey).AsString+'}';
+    end;
+
+    PopulateMemTableFromJSON(FMemTable, FDataKey, MasterJSONData); //data key is checkList
   end;
 end;
 

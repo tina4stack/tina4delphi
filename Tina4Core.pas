@@ -42,6 +42,7 @@ function SendHttpRequest(BaseURL: String; EndPoint: String = ''; QueryParams: St
   ContentEncoding : String = 'utf-8'; Username:String = ''; Password: String = ''; CustomHeaders: TURLHeaders = nil; UserAgent: String = 'Tina4Delphi'; RequestType: TTina4RequestType = Get;
   ReadTimeOut: Integer = 10000; ConnectTimeOut: Integer = 5000): TBytes;
 function StrToJSONObject(JSON:String): TJSONObject;
+function StrToJSONValue(JSON:String): TJSONValue;
 function BytesToJSONObject(JSON:TBytes): TJSONObject;
 function StrToJSONArray(JSON:String): TJSONArray;
 function GetJSONFieldName(FieldName: String) : String;
@@ -584,6 +585,27 @@ begin
     Result := nil;
   end;
 end;
+
+/// <summary> Converts a String into a TJSONValue
+/// </summary>
+/// <param name="JSON">A JSON string
+/// </param>
+/// <remarks>
+/// Converts a string into a JSON object
+/// </remarks>
+/// <returns>
+/// A TJSONValue or nil if the string is invalid
+/// </returns>
+function StrToJSONValue(JSON:String): TJSONValue;
+begin
+  try
+
+    Result := TJSONObject.ParseJSONValue(JSON) as TJSONValue;
+  except
+    Result := nil;
+  end;
+end;
+
 
 /// <summary> Converts TBytes into a TJSONObject
 /// </summary>

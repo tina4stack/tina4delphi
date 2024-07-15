@@ -50,7 +50,14 @@ begin
       end
         else
       begin
-        MasterJSONData := '{"'+FDataKey+'": '+FMasterSource.MemTable.FieldByName(FDataKey).AsString+'}';
+        if FMasterSource.MemTable.FieldByName(FDataKey).AsString[1] = '{' then
+        begin
+          MasterJSONData := '{"'+FDataKey+'": ['+FMasterSource.MemTable.FieldByName(FDataKey).AsString+']}';
+        end
+          else
+        begin
+          MasterJSONData := '{"'+FDataKey+'": '+FMasterSource.MemTable.FieldByName(FDataKey).AsString+'}';
+        end;
       end;
     end;
 

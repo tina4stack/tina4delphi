@@ -50,17 +50,19 @@ begin
       end
         else
       begin
-        if FMasterSource.MemTable.FieldByName(FDataKey).AsString[1] = '{' then
+        if (FMasterSource.MemTable.FieldByName(FDataKey).AsString <> '') then
         begin
-          MasterJSONData := '{"'+FDataKey+'": ['+FMasterSource.MemTable.FieldByName(FDataKey).AsString+']}';
-        end
-          else
-        begin
-          MasterJSONData := '{"'+FDataKey+'": '+FMasterSource.MemTable.FieldByName(FDataKey).AsString+'}';
+          if FMasterSource.MemTable.FieldByName(FDataKey).AsString[1] = '{' then
+          begin
+            MasterJSONData := '{"'+FDataKey+'": ['+FMasterSource.MemTable.FieldByName(FDataKey).AsString+']}';
+          end
+            else
+          begin
+            MasterJSONData := '{"'+FDataKey+'": '+FMasterSource.MemTable.FieldByName(FDataKey).AsString+'}';
+          end;
         end;
       end;
     end;
-
     PopulateMemTableFromJSON(FMemTable, FDataKey, MasterJSONData); //data key is checkList
   end;
 end;

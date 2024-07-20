@@ -38,7 +38,7 @@ function GetJSONFromDB(Connection: TFDConnection; SQL: String;
    Params: TFDParams = nil; DataSetName: String = 'records'): TJSONObject;
 function GetJSONFromTable(var Table: TFDMemTable; DataSetName: String = 'records'; IgnoreFields: String = ''; IgnoreBlanks: Boolean = False): TJSONObject; overload;
 function GetJSONFromTable(Table: TFDTable; DataSetName: String = 'records'; IgnoreFields: String = ''; IgnoreBlanks: Boolean = False): TJSONObject; overload;
-function SendHttpRequest(BaseURL: String; EndPoint: String = ''; QueryParams: String = ''; Body: String=''; ContentType: String = 'application/json';
+function SendHttpRequest(var StatusCode: Integer; BaseURL: String; EndPoint: String = ''; QueryParams: String = ''; Body: String=''; ContentType: String = 'application/json';
   ContentEncoding : String = 'utf-8'; Username:String = ''; Password: String = ''; CustomHeaders: TURLHeaders = nil; UserAgent: String = 'Tina4Delphi'; RequestType: TTina4RequestType = Get;
   ReadTimeOut: Integer = 10000; ConnectTimeOut: Integer = 5000): TBytes;
 function StrToJSONObject(JSON:String): TJSONObject;
@@ -440,12 +440,13 @@ end;
 /// <returns>
 /// A string containing the results from the REST endpoint
 /// </returns>
-function SendHttpRequest(BaseURL: String; EndPoint: String = ''; QueryParams: String = ''; Body: String=''; ContentType: String = 'application/json';
+function SendHttpRequest(var StatusCode: Integer; BaseURL: String; EndPoint: String = ''; QueryParams: String = ''; Body: String=''; ContentType: String = 'application/json';
   ContentEncoding : String = 'utf-8'; Username:String = ''; Password: String = ''; CustomHeaders: TURLHeaders = nil; UserAgent: String = 'Tina4Delphi';
   RequestType: TTina4RequestType = Get; ReadTimeOut: Integer = 10000; ConnectTimeOut: Integer = 5000): TBytes;
 var
   HttpClient: TNetHTTPClient;
   HTTPRequest: TNetHTTPRequest;
+  HTTPResponse: IHTTPResponse;
   BodyList: TStringStream;
   BytesStream : TBytesStream;
   Url: String;
@@ -518,31 +519,34 @@ begin
         try
           if RequestType = Post then
           begin
-            HTTPRequest.Post(Url, BodyList, BytesStream);
+            HTTPResponse := HTTPRequest.Post(Url, BodyList, BytesStream);
           end
             else
           if RequestType = Patch then
           begin
-            HTTPRequest.Patch(Url, BodyList, BytesStream);
+            HTTPResponse := HTTPRequest.Patch(Url, BodyList, BytesStream);
           end
             else
           if RequestType = Put then
           begin
-            HTTPRequest.Put(Url, BodyList, BytesStream);
+            HTTPResponse := HTTPRequest.Put(Url, BodyList, BytesStream);
           end
            else
           if RequestType = Get then
           begin
-            HTTPRequest.Get(Url, BytesStream);
+            HTTPResponse := HTTPRequest.Get(Url, BytesStream);
           end
             else
           if RequestType = Delete then
           begin
-            HTTPRequest.Delete(Url, BytesStream);
+            HTTPResponse := HTTPRequest.Delete(Url, BytesStream);
           end;
+
+          StatusCode := HTTPResponse.StatusCode;
 
           SetLength(Result, Length(BytesStream.Bytes));
           Move(BytesStream.Bytes[0],Result[0],Length(BytesStream.Bytes));
+
         except
           on E:Exception do
           begin

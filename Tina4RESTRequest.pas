@@ -175,6 +175,10 @@ begin
 
       FResponseBody.Text := Response.ToString;
       PopulateMemTableFromJSON(FMemTable, DataKey, Self.FResponseBody.Text, Self.FIndexFieldNames, SyncMode, Self);
+      if (Assigned(Self.FOnExecuteDone)) then
+      begin
+        Self.FOnExecuteDone(Self);
+      end;
 
     finally
       Response.Free;

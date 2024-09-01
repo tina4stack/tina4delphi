@@ -3,7 +3,11 @@ unit Tina4REST;
 interface
 
 uses
-  System.SysUtils, System.Classes, JSON, Tina4Core, System.Net.URLClient, FMX.Dialogs, System.StrUtils;
+  System.SysUtils, System.Classes, JSON, Tina4Core, System.Net.URLClient, System.StrUtils
+  {$IFDEF MSWINDOWS}
+  ,FMX.Dialogs
+  {$ENDIF}
+  ;
 
 type
   TTina4REST = class(TComponent)

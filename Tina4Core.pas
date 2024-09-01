@@ -7,9 +7,23 @@ uses JSON, System.SysUtils, FireDAC.DApt, FireDAC.Stan.Intf,
   FireDAC.Phys.Intf, FireDAC.Stan.Def, FireDAC.Stan.Pool, FireDAC.Stan.Async,
   FireDAC.Phys, FireDAC.ConsoleUI.Wait,
   Data.DB, FireDAC.Comp.Client, FireDAC.Stan.Param, System.NetEncoding, System.DateUtils,
-  System.Classes, System.Generics.Collections, System.Net.HttpClientComponent, System.Net.URLClient, System.Net.HttpClient;
+  System.Classes, System.Generics.Collections, System.Net.HttpClientComponent, System.Net.URLClient, System.Net.HttpClient,
+  {$IFDEF MSWINDOWS}
+  Winapi.ShellAPI, Winapi.Windows;
+  {$ELSE}
+    Posix.Base,
+    Posix.Fcntl,
+    Posix.Stdlib;
+  {$ENDIF}
 
 type
+  TStreamHandle = pointer;
+
+  TAnoPipe = record
+    Input: THandle;
+    Output: THandle;
+  end;
+
   /// <summary> The type of REST calls we can make
   /// </summary>
   TTina4RequestType = (Get,Post,Patch,Put,Delete);
@@ -50,54 +64,60 @@ function GetJSONDate(const ADate: TDateTime) : String;
 function JSONDateToDateTime(const ADateString: String) : TDateTime;
 procedure GetFieldDefsFromJSONObject(JSONObject: TJSONObject; var MemTable: TFDMemTable);
 procedure PopulateMemTableFromJSON(var MemTable: TFDMemTable; DataKey: String; JSON: String; IndexedFieldNames: String = ''; SyncMode: TTina4RestSyncMode = Clear; Component: TComponent = nil);
+{$IFDEF MSWINDOWS}
+function ExecuteShellCommand(const ACmdLine: string; var AOutput: string): Integer;
+{$ELSE}
+function ExecuteShellCommand(ACommand : string) : TStringList;
+{$ENDIF}
 
 implementation
 
 uses Tina4RESTRequest;
 
-  /// <summary> Converts a database underscored field to a camel case field for returing in JSON
-  /// </summary>
-  /// <param name="FieldName">The field name to camel case
-  /// </param>
-  /// <remarks>
-  /// If there are no underscores or an exception happens the orginal field name is returned
-  /// </remarks>
-  /// <returns>
-  /// Camel cased field name
-  /// </returns>
-  function CamelCase(FieldName: String): String;
-  var
-    NewName: String;
-    I : Integer;
-  begin
-    I := 1;
-    try
-      if (Pos('_', FieldName) <> 0) then
+
+/// <summary> Converts a database underscored field to a camel case field for returing in JSON
+/// </summary>
+/// <param name="FieldName">The field name to camel case
+/// </param>
+/// <remarks>
+/// If there are no underscores or an exception happens the orginal field name is returned
+/// </remarks>
+/// <returns>
+/// Camel cased field name
+/// </returns>
+function CamelCase(FieldName: String): String;
+var
+  NewName: String;
+  I : Integer;
+begin
+  I := 1;
+  try
+    if (Pos('_', FieldName) <> 0) then
+    begin
+      FieldName := LowerCase(FieldName);
+      while I <= Length(FieldName) do
       begin
-        FieldName := LowerCase(FieldName);
-        while I <= Length(FieldName) do
+        if (FieldName[I] = '_') then
         begin
-          if (FieldName[I] = '_') then
-          begin
-            I := I + 1;
-            NewName := NewName + UpperCase(FieldName[I]);
-          end
-            else
-          begin
-            NewName := NewName + FieldName[I];
-          end;
           I := I + 1;
+          NewName := NewName + UpperCase(FieldName[I]);
+        end
+          else
+        begin
+          NewName := NewName + FieldName[I];
         end;
-        Result := NewName;
-      end
-        else
-      begin
-        Result := FieldName;
+        I := I + 1;
       end;
-    except
+      Result := NewName;
+    end
+      else
+    begin
       Result := FieldName;
     end;
+  except
+    Result := FieldName;
   end;
+end;
 
 /// <summary> Returns a JSON Object response based on an SQL text
 /// </summary>
@@ -1019,5 +1039,125 @@ begin
     Response.Free;
   end;
 end;
+
+
+{$IFDEF MSWINDOWS}
+function ExecuteShellCommand(const ACmdLine: string; var AOutput: string): Integer;
+const
+  cBufferSize = 2048;
+var
+  vBuffer: Pointer;
+  vStartupInfo: TStartUpInfo;
+  vSecurityAttributes: TSecurityAttributes;
+  vReadBytes: DWord;
+  vProcessInfo: TProcessInformation;
+  vStdInPipe : TAnoPipe;
+  vStdOutPipe: TAnoPipe;
+begin
+  Result := 0;
+
+  with vSecurityAttributes do
+  begin
+    nlength := SizeOf(TSecurityAttributes);
+    binherithandle := True;
+    lpsecuritydescriptor := nil;
+  end;
+
+  // Create anonymous pipe for standard input
+  if not CreatePipe(vStdInPipe.Output, vStdInPipe.Input, @vSecurityAttributes, 0) then
+    raise Exception.Create('Failed to create pipe for standard input. System error message: ' + SysErrorMessage(GetLastError));
+
+  try
+    // Create anonymous pipe for standard output (and also for standard error)
+    if not CreatePipe(vStdOutPipe.Output, vStdOutPipe.Input, @vSecurityAttributes, 0) then
+      raise Exception.Create('Failed to create pipe for standard output. System error message: ' + SysErrorMessage(GetLastError));
+
+    try
+      GetMem(vBuffer, cBufferSize);
+      try
+        // initialize the startup info to match our purpose
+        FillChar(vStartupInfo, Sizeof(TStartUpInfo), #0);
+        vStartupInfo.cb         := SizeOf(TStartUpInfo);
+        vStartupInfo.wShowWindow:= SW_HIDE;  // we don't want to show the process
+        // assign our pipe for the process' standard input
+        vStartupInfo.hStdInput  := vStdInPipe.Output;
+        // assign our pipe for the process' standard output
+        vStartupInfo.hStdOutput := vStdOutPipe.Input;
+        vStartupInfo.dwFlags    := STARTF_USESTDHANDLES or STARTF_USESHOWWINDOW;
+
+        if not CreateProcess(nil
+                             , PChar(ACmdLine)
+                             , @vSecurityAttributes
+                             , @vSecurityAttributes
+                             , True
+                             , NORMAL_PRIORITY_CLASS
+                             , nil
+                             , nil
+                             , vStartupInfo
+                             , vProcessInfo) then
+          raise Exception.Create('Failed creating the console process. System error msg: ' + SysErrorMessage(GetLastError));
+
+        try
+          // wait until the console program terminated
+          while WaitForSingleObject(vProcessInfo.hProcess, 50)=WAIT_TIMEOUT do
+            Sleep(0);
+
+          // clear the output storage
+          AOutput := '';
+          // Read text returned by the console program in its StdOut channel
+          repeat
+            ReadFile(vStdOutPipe.Output, vBuffer^, cBufferSize, vReadBytes, nil);
+            if vReadBytes > 0 then
+            begin
+              AOutput := AOutput + StrPas(PAnsiChar(vBuffer));
+              Inc(Result, vReadBytes);
+            end;
+          until (vReadBytes < cBufferSize);
+        finally
+          CloseHandle(vProcessInfo.hProcess);
+          CloseHandle(vProcessInfo.hThread);
+        end;
+      finally
+        FreeMem(vBuffer);
+      end;
+    finally
+      CloseHandle(vStdOutPipe.Input);
+      CloseHandle(vStdOutPipe.Output);
+    end;
+  finally
+    CloseHandle(vStdInPipe.Input);
+    CloseHandle(vStdInPipe.Output);
+  end;
+end;
+{$ELSE}
+
+function popen(const command: MarshaledAString; const _type: MarshaledAString): TStreamHandle; cdecl; external libc name _PU + 'popen';
+function pclose(filehandle: TStreamHandle): int32; cdecl; external libc name _PU + 'pclose';
+function fgets(buffer: pointer; size: int32; Stream: TStreamHAndle): pointer; cdecl; external libc name _PU + 'fgets';
+
+
+function ExecuteShellCommand(ACommand : string) : TStringList;
+var
+  Handle: TStreamHandle;
+  Data: array[0..511] of uint8;
+  M : TMarshaller;
+
+begin
+  Result := TStringList.Create;
+  try
+    Handle := popen(M.AsAnsi(PWideChar(ACommand)).ToPointer,'r');
+    try
+      while fgets(@data[0],Sizeof(Data),Handle)<>nil do begin
+        Result.Add(Copy(UTF8ToString(@Data[0]),1,UTF8ToString(@Data[0]).Length -1));//,sizeof(Data)));
+      end;
+    finally
+      pclose(Handle);
+    end;
+  except
+    on E: Exception do
+      Result.Add(E.ClassName + ': ' + E.Message);
+  end;
+end;
+{$ENDIF}
 
 end.

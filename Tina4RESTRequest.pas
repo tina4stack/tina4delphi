@@ -4,7 +4,11 @@ interface
 
 uses
   System.SysUtils, System.Variants, System.Generics.Collections, System.Classes, Data.DB, FireDAC.Comp.DataSet,
-  FireDAC.Comp.Client, Tina4Core, Tina4REST, FMX.Dialogs, JSON, System.RegularExpressions;
+  FireDAC.Comp.Client, Tina4Core, Tina4REST, JSON, System.RegularExpressions
+  {$IFDEF MSWINDOWS}
+  ,FMX.Dialogs
+  {$ENDIF}
+  ;
 
 type
   TTina4RESTRequest = class(TComponent)
@@ -186,7 +190,9 @@ begin
   end
     else
   begin
+    {$IFDEF MSWINDOWS}
     ShowMessage('Assign a Tina4REST component to '+Self.Name);
+    {$ENDIF}
   end;
 end;
 

@@ -5,7 +5,7 @@ interface
 uses JSON, System.SysUtils, FireDAC.DApt, FireDAC.Stan.Intf,
   FireDAC.Stan.Option, FireDAC.Stan.Error, FireDAC.UI.Intf,
   FireDAC.Phys.Intf, FireDAC.Stan.Def, FireDAC.Stan.Pool, FireDAC.Stan.Async,
-  FireDAC.Phys, FireDAC.ConsoleUI.Wait,
+  FireDAC.Phys, FireDAC.ConsoleUI.Wait, FireDAC.Comp.DataSet,
   Data.DB, FireDAC.Comp.Client, FireDAC.Stan.Param, System.NetEncoding, System.DateUtils,
   System.Classes, System.Generics.Collections, System.Net.HttpClientComponent, System.Net.URLClient, System.Net.HttpClient,
   {$IFDEF MSWINDOWS}
@@ -48,6 +48,7 @@ type
 
 
 function CamelCase(FieldName: String): String;
+function SnakeCase(FieldName: String): String;
 function GetJSONFromDB(Connection: TFDConnection; SQL: String;
    Params: TFDParams = nil; DataSetName: String = 'records'): TJSONObject;
 function GetJSONFromTable(var Table: TFDMemTable; DataSetName: String = 'records'; IgnoreFields: String = ''; IgnoreBlanks: Boolean = False): TJSONObject; overload;
@@ -64,10 +65,11 @@ function GetJSONDate(const ADate: TDateTime) : String;
 function JSONDateToDateTime(const ADateString: String) : TDateTime;
 procedure GetFieldDefsFromJSONObject(JSONObject: TJSONObject; var MemTable: TFDMemTable);
 procedure PopulateMemTableFromJSON(var MemTable: TFDMemTable; DataKey: String; JSON: String; IndexedFieldNames: String = ''; SyncMode: TTina4RestSyncMode = Clear; Component: TComponent = nil);
+function PopulateTableFromJSON(Connection: TFDConnection; TableName:String; JSON:String; DataKey: String = 'response'; PrimaryKey:String = 'id') : TJSONObject;
 {$IFDEF MSWINDOWS}
 function ExecuteShellCommand(const ACmdLine: string; var AOutput: string): Integer;
 {$ELSE}
-function ExecuteShellCommand(ACommand : string) : TStringList;
+function ExecuteShellCommand(ACommand : string; var AOutput: string) : Integer;
 {$ENDIF}
 
 implementation
@@ -112,6 +114,49 @@ begin
     end
       else
     begin
+      Result := LowerCase(FieldName);
+    end;
+  except
+    Result := FieldName;
+  end;
+end;
+
+function SnakeCase(FieldName: String): String;
+/// <summary> Converts a JSON camel cased field to a snake case for updating a database
+/// </summary>
+/// <param name="FieldName">The field name to snake case
+/// </param>
+/// <remarks>
+/// If there are underscores or an exception happens the orginal field name is returned
+/// </remarks>
+/// <returns>
+/// Snake cased field name
+/// </returns>
+
+var
+  NewName: String;
+  I : Integer;
+begin
+  I := 1;
+  try
+    if (Pos('_', FieldName) = 0) then
+    begin
+      while I <= Length(FieldName) do
+      begin
+        if (FieldName[I] = UpperCase(FieldName[I])) then
+        begin
+          NewName := NewName +'_'+ LowerCase(FieldName[I]);
+        end
+          else
+        begin
+          NewName := NewName + LowerCase(FieldName[I]);
+        end;
+        I := I + 1;
+      end;
+      Result := NewName;
+    end
+      else
+    begin
       Result := FieldName;
     end;
   except
@@ -143,6 +188,8 @@ var
   DataArray: TJSONArray;
   I: Integer;
   FieldNames: Array of String;
+  ByteStream: TBytesStream;
+  Base64EncodedStream: TStringStream;
 
 begin
   Result := TJSONObject.Create;
@@ -164,16 +211,32 @@ begin
 
         for I := 0 to Query.FieldDefs.Count - 1 do
         begin
-          if (Length(FieldNames) = Query.FieldDefs.Count) then
-          // gets the field names in camel case on first iteration to save processing
-          begin
-            DataRecord.AddPair(FieldNames[I],
-              Query.FieldByName(Query.FieldDefs[I].Name).AsString);
-          end
-          else
+          if (Length(FieldNames) <> Query.FieldDefs.Count) then
           begin
             SetLength(FieldNames, Length(FieldNames) + 1);
             FieldNames[I] := CamelCase(Query.FieldDefs[I].Name);
+          end;
+
+          if Query.FieldDefs[I].DataType = ftBlob then
+          begin
+            ByteStream := TBytesStream.Create(Query.FieldByName(FieldNames[I]).AsBytes);
+            Base64EncodedStream := TStringStream.Create();
+            try
+              TNetEncoding.Base64.Encode(ByteStream, Base64EncodedStream);
+
+               DataRecord.AddPair(FieldNames[I], Base64EncodedStream.DataString);
+            finally
+              Base64EncodedStream.Free;
+              ByteStream.Free;
+            end;
+          end
+            else
+          if Query.FieldDefs[I].DataType = TFieldType.ftDateTime then
+          begin
+            DataRecord.AddPair(FieldNames[I], GetJSONDate(Query.FieldByName(FieldNames[I]).AsDateTime));
+          end
+            else
+          begin
             DataRecord.AddPair(FieldNames[I],
               Query.FieldByName(Query.FieldDefs[I].Name).AsString);
           end;
@@ -1041,7 +1104,216 @@ begin
 end;
 
 
+/// <summary> Inserts data from a JSON object into a Table using the data from the DataKey
+/// </summary>
+/// <param name="Connection">The connection used to connect to the database
+/// </param>
+/// <param name="JSON">The JSON to be used
+/// </param>
+/// <param name="DataKey">The key to be used to populate table
+/// </param>
+/// <param name="PrimaryKey">The field which is the primary key
+/// </param>
+/// <remarks>
+/// Inserts data from a JSON object into a Table using the data from the DataKey
+/// </remarks>
+function PopulateTableFromJSON(Connection: TFDConnection; TableName:String; JSON:String; DataKey: String = 'response'; PrimaryKey:String = 'id') : TJSONObject;
+var
+  JSONObject: TJSONObject;
+  Table: TFDTable;
+  Query: TFDQuery;
+  PrimaryKeys: TStringList;
+  DataArray: TJSONArray;
+  ByteStream: TBytesStream;
+  Base64EncodedStream: TStringStream;
+  FieldNames: Array of String;
+  TableFieldNames: Array of String;
+
+begin
+  JSONObject := StrToJSONObject(JSON);
+  PrimaryKeys := TStringList.Create();
+  Result := TJSONObject.Create;
+
+  try
+    Table := TFDTable.Create(Nil);
+    try
+      Table.Connection := Connection;
+      Table.TableName := TableName;
+      Table.AddIndex('idxName', 'id', '', [TFDSortOption.soPrimary], '', '', True);
+      Table.IndexesActive := True;
+
+      Table.Open;
+      Table.FieldByName(PrimaryKey).AutoGenerateValue := arAutoInc;
+
+      for var JSONValue in JSONObject do
+      begin
+        if (GetJSONFieldName(JSONValue.JsonString.ToString) = DataKey) then
+        begin
+          if (JSONValue.JsonValue is TJSONArray) then
+          begin
+            for var JSONInfo in TJSONArray(JSONValue.JsonValue) do
+            begin
+              var JSONRecord := StrToJSONObject(JSONInfo.ToJSON);
+              //Check if record exists already otherwise insert it
+              var PrimaryKeyValue: String;
+              if JSONRecord.TryGetValue<String>(PrimaryKey, PrimaryKeyValue) then
+              begin
+                Table.Filter := PrimaryKey + ' = '''+PrimaryKeyValue+'''';
+                Table.Filtered := True;
+                if Table.RecordCount = 1 then
+                begin
+                  Table.Edit;
+                end
+                  else
+                begin
+                  Table.Append;
+                end;
+              end
+                else
+              begin
+                Table.Append;
+                Query := TFDQuery.Create(nil);
+                try
+                  Query.Connection := Connection;
+                  Query.Close;
+                  Query.SQL.Text := 'select max('+PrimaryKey+') as max_id from '+TableName;
+                  Query.Open;
+
+                  //Add ability to increment text
+                  var NewId := Query.FieldByName('max_id').AsInteger;
+
+                  Inc(NewId);
+
+                  Table.FieldByName(PrimaryKey).AsInteger := NewId;
+                finally
+                  Query.Free;
+                end;
+              end;
+
+              PrimaryKeys.Add(Table.FieldByName(PrimaryKey).AsString);
+
+              for var Index : Integer := 0 to JSONRecord.Count -1 do
+              begin
+                var PairValue : String;
+                var KeyValue : String;
+
+                if (JSONRecord.Pairs[Index].JsonValue is TJSONObject) or (JSONRecord.Pairs[Index].JsonValue is TJSONArray) then
+                begin
+                  PairValue := JSONRecord.Pairs[Index].JsonValue.ToString;
+                  KeyValue := JSONRecord.Pairs[Index].JsonString.ToString;
+                end
+                  else
+                begin
+                  KeyValue := JSONRecord.Pairs[Index].JsonString.Value;
+                  PairValue := JSONRecord.Pairs[Index].JsonValue.Value;
+                end;
+
+                if KeyValue = PrimaryKey then Continue;
+
+                if Table.FieldDefs.Find(SnakeCase(KeyValue)).DataType = TFieldType.ftBlob then
+                begin
+                  Table.FieldByName(SnakeCase(KeyValue)).AsBytes := TNetEncoding.Base64.DecodeStringToBytes(PairValue);
+                end
+                  else
+                if ((Table.FieldDefs.Find(SnakeCase(KeyValue)).DataType = TFieldType.ftDateTime) or (Table.FieldDefs.Find(SnakeCase(KeyValue)).DataType = TFieldType.ftTimeStamp)) then
+                begin
+                  Table.FieldByName(SnakeCase(KeyValue)).AsDateTime := JSONDateToDateTime(PairValue);
+                end
+                  else
+                begin
+                  Table.FieldByName(SnakeCase(KeyValue)).AsString := PairValue;
+                end;
+              end;
+
+              Table.Post;
+            end;
+          end;
+        end;
+      end;
+
+
+      Connection.CommitRetaining;
+
+      DataArray := TJSONArray.Create();
+      for var J := 0 to PrimaryKeys.Count-1 do
+      begin
+        Table.Filter := PrimaryKey+' = '''+PrimaryKeys[J]+'''';
+        Table.Filtered := True;
+
+        while not Table.Eof do
+        begin
+          var DataRecord := TJSONObject.Create;
+
+          for var I := 0 to Table.FieldDefs.Count - 1 do
+          begin
+            // gets the field names in camel case on first iteration to save processing
+
+            if (Length(FieldNames) <> Table.FieldDefs.Count) then
+            begin
+              SetLength(FieldNames, Length(FieldNames) + 1);
+              FieldNames[I] := CamelCase(Table.FieldDefs[I].Name);
+
+              SetLength(TableFieldNames, Length(TableFieldNames) + 1);
+              TableFieldNames[I] := Table.FieldDefs[I].Name;
+            end;
+
+            if Table.FieldDefs[I].DataType = TFieldType.ftBlob then
+            begin
+              //Base 64 encode
+              ByteStream := TBytesStream.Create(Table.FieldByName(TableFieldNames[I]).AsBytes);
+              Base64EncodedStream := TStringStream.Create();
+              try
+                TNetEncoding.Base64.Encode(ByteStream, Base64EncodedStream);
+
+                 DataRecord.AddPair(FieldNames[I], Base64EncodedStream.DataString);
+              finally
+                Base64EncodedStream.Free;
+                ByteStream.Free;
+              end;
+            end
+              else
+            if ((Table.FieldDefs[I].DataType = TFieldType.ftDateTime) or (Table.FieldDefs[I].DataType = TFieldType.ftTimeStamp)) then
+            begin
+              DataRecord.AddPair(FieldNames[I], GetJSONDate(Table.FieldByName(TableFieldNames[I]).AsDateTime));
+            end
+              else
+            begin
+              DataRecord.AddPair(FieldNames[I], Table.FieldByName(TableFieldNames[I]).AsString);
+            end;
+
+          end;
+          DataArray.Add(DataRecord);
+          Table.Next;
+        end;
+      end;
+
+      Table.Close;
+
+      //Fetch the changed / added records
+      Result.AddPair(DataKey, DataArray);
+    finally
+      Table.Free;
+    end;
+  finally
+    JSONObject.Free;
+    PrimaryKeys.Free;
+  end;
+end;
+
+
 {$IFDEF MSWINDOWS}
+/// <summary> Runs a shell command, the command takes in the full path to the command to be run
+/// </summary>
+/// <param name="ACommand"> Full path to where the script or command is to be run
+/// </param>
+/// <param name="AOutput"> The std out text output from running the command
+/// </param>
+/// <remarks>
+/// The "error is returned in the result - 0 for no errors and 1 for an error or exception
+/// </remarks>
+/// <returns>
+/// Integer 0 = no errors or 1 = exception happened
+/// </returns>
 function ExecuteShellCommand(const ACmdLine: string; var AOutput: string): Integer;
 const
   cBufferSize = 2048;
@@ -1136,27 +1408,45 @@ function pclose(filehandle: TStreamHandle): int32; cdecl; external libc name _PU
 function fgets(buffer: pointer; size: int32; Stream: TStreamHAndle): pointer; cdecl; external libc name _PU + 'fgets';
 
 
-function ExecuteShellCommand(ACommand : string) : TStringList;
+/// <summary> Runs a shell command, the command takes in the full path to the command to be run
+/// </summary>
+/// <param name="ACommand"> Full path to where the script or command is to be run
+/// </param>
+/// <param name="AOutput"> The std out text output from running the command
+/// </param>
+/// <remarks>
+/// The "error is returned in the result - 0 for no errors and 1 for an error or exception
+/// </remarks>
+/// <returns>
+/// Integer 0 = no errors or 1 = exception happened
+/// </returns>
+function ExecuteShellCommand(ACommand : string; var AOutput: string) : Integer;
 var
   Handle: TStreamHandle;
   Data: array[0..511] of uint8;
   M : TMarshaller;
+  Output: TStringList;
 
 begin
-  Result := TStringList.Create;
+  Result := 0;
+  Output := TStringList.Create;
   try
     Handle := popen(M.AsAnsi(PWideChar(ACommand)).ToPointer,'r');
     try
       while fgets(@data[0],Sizeof(Data),Handle)<>nil do begin
-        Result.Add(Copy(UTF8ToString(@Data[0]),1,UTF8ToString(@Data[0]).Length -1));//,sizeof(Data)));
+        Output.Add(Copy(UTF8ToString(@Data[0]),1,UTF8ToString(@Data[0]).Length -1));//,sizeof(Data)));
       end;
     finally
       pclose(Handle);
     end;
   except
     on E: Exception do
-      Result.Add(E.ClassName + ': ' + E.Message);
+    begin
+      Result := 1;
+      Output.Add(E.ClassName + ': ' + E.Message);
+    end;
   end;
+  AOutput := Output.Text;
 end;
 {$ENDIF}
 

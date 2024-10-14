@@ -8,6 +8,7 @@ uses JSON, System.SysUtils, FireDAC.DApt, FireDAC.Stan.Intf,
   FireDAC.Phys, FireDAC.ConsoleUI.Wait, FireDAC.Comp.DataSet,
   Data.DB, FireDAC.Comp.Client, FireDAC.Stan.Param, System.NetEncoding, System.DateUtils,
   System.Classes, System.Generics.Collections, System.Net.HttpClientComponent, System.Net.URLClient, System.Net.HttpClient,
+  FMX.Graphics,
   {$IFDEF MSWINDOWS}
   Winapi.ShellAPI, Winapi.Windows;
   {$ELSE}
@@ -47,8 +48,10 @@ type
   TTina4AddRecordEvent = procedure (Sender: TObject; var MemTable: TFDMemTable) of object;
 
 
+function GetGUID : String;
 function CamelCase(FieldName: String): String;
 function SnakeCase(FieldName: String): String;
+function BitmapToBase64EncodedString(Bitmap: FMX.Graphics.TBitmap; Resize: Boolean = True; Width: Integer = 256; Height: Integer = 256): String;
 function GetJSONFromDB(Connection: TFDConnection; SQL: String;
    Params: TFDParams = nil; DataSetName: String = 'records'): TJSONObject;
 function GetJSONFromTable(var Table: TFDMemTable; DataSetName: String = 'records'; IgnoreFields: String = ''; IgnoreBlanks: Boolean = False): TJSONObject; overload;
@@ -76,6 +79,29 @@ implementation
 
 uses Tina4RESTRequest;
 
+
+/// <summary> Gets a GUID
+/// </summary>
+/// <remarks>
+/// This seems to be an arduos task so this function was written to make it simpler
+/// </remarks>
+/// <returns>
+/// A well formatted GUID
+/// </returns>
+function GetGUID : String;
+var
+  UID : TGuid;
+  UIDStringList : TStringList;
+begin
+   UIDStringList := TStringList.Create();
+   try
+     CreateGuid(UID);
+     ExtractStrings(['{','}'], [' '], PChar(GuidToString(UID)), UIDStringList);
+     Result := UIDStringList.Strings[0];
+   finally
+     UIDStringList.Free;
+   end;
+end;
 
 /// <summary> Converts a database underscored field to a camel case field for returing in JSON
 /// </summary>
@@ -164,6 +190,39 @@ begin
   end;
 end;
 
+
+/// <summary> Encodes a bitmap to a base 64 encoded string
+/// </summary>
+/// <param name="Bitmap">A FMX.Graphics.TBitmap from which the encoding is done
+/// </param>
+/// <remarks>
+/// A Base64 encoded string is returned representing the image
+/// </remarks>
+/// <returns>
+/// Encodes a bitmap to a base 64 encoded string
+/// </returns>
+function BitmapToBase64EncodedString(Bitmap: FMX.Graphics.TBitmap; Resize: Boolean = True; Width: Integer = 256; Height: Integer = 256): String;
+var
+  ByteStream: TBytesStream;
+  Base64EncodedStream: TStringStream;
+begin
+  ByteStream := TBytesStream.Create();
+  if Resize then
+  begin
+    Bitmap.Resize(Width, Height);
+  end;
+  Bitmap.SaveToStream(ByteStream);
+  Base64EncodedStream := TStringStream.Create();
+  try
+    ByteStream.Position := 0;
+    TNetEncoding.Base64.Encode(ByteStream, Base64EncodedStream);
+    Result := Base64EncodedStream.DataString;
+  finally
+    Base64EncodedStream.Free;
+    ByteStream.Free;
+  end;
+end;
+
 /// <summary> Returns a JSON Object response based on an SQL text
 /// </summary>
 /// <param name="Connection">A TFDConnection from which to query
@@ -188,6 +247,7 @@ var
   DataArray: TJSONArray;
   I: Integer;
   FieldNames: Array of String;
+  TableFieldNames: Array of String;
   ByteStream: TBytesStream;
   Base64EncodedStream: TStringStream;
 
@@ -215,11 +275,14 @@ begin
           begin
             SetLength(FieldNames, Length(FieldNames) + 1);
             FieldNames[I] := CamelCase(Query.FieldDefs[I].Name);
+
+            SetLength(TableFieldNames, Length(TableFieldNames) + 1);
+            TableFieldNames[I] := Query.FieldDefs[I].Name;
           end;
 
           if Query.FieldDefs[I].DataType = ftBlob then
           begin
-            ByteStream := TBytesStream.Create(Query.FieldByName(FieldNames[I]).AsBytes);
+            ByteStream := TBytesStream.Create(Query.FieldByName(TableFieldNames[I]).AsBytes);
             Base64EncodedStream := TStringStream.Create();
             try
               TNetEncoding.Base64.Encode(ByteStream, Base64EncodedStream);
@@ -231,14 +294,14 @@ begin
             end;
           end
             else
-          if Query.FieldDefs[I].DataType = TFieldType.ftDateTime then
+          if ((Query.FieldDefs[I].DataType = TFieldType.ftDateTime) or (Query.FieldDefs[I].DataType = TFieldType.ftTimeStamp)) then
           begin
-            DataRecord.AddPair(FieldNames[I], GetJSONDate(Query.FieldByName(FieldNames[I]).AsDateTime));
+            DataRecord.AddPair(FieldNames[I], GetJSONDate(Query.FieldByName(TableFieldNames[I]).AsDateTime));
           end
             else
           begin
             DataRecord.AddPair(FieldNames[I],
-              Query.FieldByName(Query.FieldDefs[I].Name).AsString);
+              Query.FieldByName(TableFieldNames[I]).AsString);
           end;
         end;
 
@@ -1139,7 +1202,7 @@ begin
     try
       Table.Connection := Connection;
       Table.TableName := TableName;
-      Table.AddIndex('idxName', 'id', '', [TFDSortOption.soPrimary], '', '', True);
+      Table.AddIndex('idx'+PrimaryKey, PrimaryKey, '', [TFDSortOption.soPrimary], '', '', True);
       Table.IndexesActive := True;
 
       Table.Open;
@@ -1167,6 +1230,7 @@ begin
                   else
                 begin
                   Table.Append;
+                  Table.FieldByName(PrimaryKey).AsString := PrimaryKeyValue;
                 end;
               end
                 else

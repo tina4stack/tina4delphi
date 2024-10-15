@@ -8,7 +8,9 @@ uses JSON, System.SysUtils, FireDAC.DApt, FireDAC.Stan.Intf,
   FireDAC.Phys, FireDAC.ConsoleUI.Wait, FireDAC.Comp.DataSet,
   Data.DB, FireDAC.Comp.Client, FireDAC.Stan.Param, System.NetEncoding, System.DateUtils,
   System.Classes, System.Generics.Collections, System.Net.HttpClientComponent, System.Net.URLClient, System.Net.HttpClient,
+  {$IFNDEF LINUX}
   FMX.Graphics,
+  {$ENDIF}
   {$IFDEF MSWINDOWS}
   Winapi.ShellAPI, Winapi.Windows;
   {$ELSE}
@@ -48,32 +50,34 @@ type
   TTina4AddRecordEvent = procedure (Sender: TObject; var MemTable: TFDMemTable) of object;
 
 
-function GetGUID : String;
-function CamelCase(FieldName: String): String;
-function SnakeCase(FieldName: String): String;
-function BitmapToBase64EncodedString(Bitmap: FMX.Graphics.TBitmap; Resize: Boolean = True; Width: Integer = 256; Height: Integer = 256): String;
-function GetJSONFromDB(Connection: TFDConnection; SQL: String;
-   Params: TFDParams = nil; DataSetName: String = 'records'): TJSONObject;
-function GetJSONFromTable(var Table: TFDMemTable; DataSetName: String = 'records'; IgnoreFields: String = ''; IgnoreBlanks: Boolean = False): TJSONObject; overload;
-function GetJSONFromTable(Table: TFDTable; DataSetName: String = 'records'; IgnoreFields: String = ''; IgnoreBlanks: Boolean = False): TJSONObject; overload;
-function SendHttpRequest(var StatusCode: Integer; BaseURL: String; EndPoint: String = ''; QueryParams: String = ''; Body: String=''; ContentType: String = 'application/json';
-  ContentEncoding : String = 'utf-8'; Username:String = ''; Password: String = ''; CustomHeaders: TURLHeaders = nil; UserAgent: String = 'Tina4Delphi'; RequestType: TTina4RequestType = Get;
-  ReadTimeOut: Integer = 10000; ConnectTimeOut: Integer = 5000): TBytes;
-function StrToJSONObject(JSON:String): TJSONObject;
-function StrToJSONValue(JSON:String): TJSONValue;
-function BytesToJSONObject(JSON:TBytes): TJSONObject;
-function StrToJSONArray(JSON:String): TJSONArray;
-function GetJSONFieldName(FieldName: String) : String;
-function GetJSONDate(const ADate: TDateTime) : String;
-function JSONDateToDateTime(const ADateString: String) : TDateTime;
-procedure GetFieldDefsFromJSONObject(JSONObject: TJSONObject; var MemTable: TFDMemTable);
-procedure PopulateMemTableFromJSON(var MemTable: TFDMemTable; DataKey: String; JSON: String; IndexedFieldNames: String = ''; SyncMode: TTina4RestSyncMode = Clear; Component: TComponent = nil);
-function PopulateTableFromJSON(Connection: TFDConnection; TableName:String; JSON:String; DataKey: String = 'response'; PrimaryKey:String = 'id') : TJSONObject;
-{$IFDEF MSWINDOWS}
-function ExecuteShellCommand(const ACmdLine: string; var AOutput: string): Integer;
-{$ELSE}
-function ExecuteShellCommand(ACommand : string; var AOutput: string) : Integer;
-{$ENDIF}
+  function GetGUID : String;
+  function CamelCase(FieldName: String): String;
+  function SnakeCase(FieldName: String): String;
+  {$IFNDEF LINUX}
+  function BitmapToBase64EncodedString(Bitmap: FMX.Graphics.TBitmap; Resize: Boolean = True; Width: Integer = 256; Height: Integer = 256): String;
+  {$ENDIF}
+  function GetJSONFromDB(Connection: TFDConnection; SQL: String;
+     Params: TFDParams = nil; DataSetName: String = 'records'): TJSONObject;
+  function GetJSONFromTable(var Table: TFDMemTable; DataSetName: String = 'records'; IgnoreFields: String = ''; IgnoreBlanks: Boolean = False): TJSONObject; overload;
+  function GetJSONFromTable(Table: TFDTable; DataSetName: String = 'records'; IgnoreFields: String = ''; IgnoreBlanks: Boolean = False): TJSONObject; overload;
+  function SendHttpRequest(var StatusCode: Integer; BaseURL: String; EndPoint: String = ''; QueryParams: String = ''; Body: String=''; ContentType: String = 'application/json';
+    ContentEncoding : String = 'utf-8'; Username:String = ''; Password: String = ''; CustomHeaders: TURLHeaders = nil; UserAgent: String = 'Tina4Delphi'; RequestType: TTina4RequestType = Get;
+    ReadTimeOut: Integer = 10000; ConnectTimeOut: Integer = 5000): TBytes;
+  function StrToJSONObject(JSON:String): TJSONObject;
+  function StrToJSONValue(JSON:String): TJSONValue;
+  function BytesToJSONObject(JSON:TBytes): TJSONObject;
+  function StrToJSONArray(JSON:String): TJSONArray;
+  function GetJSONFieldName(FieldName: String) : String;
+  function GetJSONDate(const ADate: TDateTime) : String;
+  function JSONDateToDateTime(const ADateString: String) : TDateTime;
+  procedure GetFieldDefsFromJSONObject(JSONObject: TJSONObject; var MemTable: TFDMemTable);
+  procedure PopulateMemTableFromJSON(var MemTable: TFDMemTable; DataKey: String; JSON: String; IndexedFieldNames: String = ''; SyncMode: TTina4RestSyncMode = Clear; Component: TComponent = nil);
+  function PopulateTableFromJSON(Connection: TFDConnection; TableName:String; JSON:String; DataKey: String = 'response'; PrimaryKey:String = 'id') : TJSONObject;
+  {$IFDEF MSWINDOWS}
+  function ExecuteShellCommand(const ACmdLine: string; var AOutput: string): Integer;
+  {$ELSE}
+  function ExecuteShellCommand(ACommand : string; var AOutput: string) : Integer;
+  {$ENDIF}
 
 implementation
 
@@ -190,7 +194,7 @@ begin
   end;
 end;
 
-
+{$IFNDEF LINUX}
 /// <summary> Encodes a bitmap to a base 64 encoded string
 /// </summary>
 /// <param name="Bitmap">A FMX.Graphics.TBitmap from which the encoding is done
@@ -222,6 +226,7 @@ begin
     ByteStream.Free;
   end;
 end;
+{$ENDIF}
 
 /// <summary> Returns a JSON Object response based on an SQL text
 /// </summary>

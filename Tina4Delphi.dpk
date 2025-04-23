@@ -46,8 +46,8 @@ contains
   Tina4REST in 'Tina4REST.pas',
   Tina4RESTRequest in 'Tina4RESTRequest.pas',
   Tina4JSONAdapter in 'Tina4JSONAdapter.pas',
-  Tina4InterposerClasses in 'Tina4InterposerClasses.pas';
-
+  Tina4InterposerClasses in 'Tina4InterposerClasses.pas',
+  Tina4SocketServer in 'Tina4SocketServer.pas';
 
 end.
 

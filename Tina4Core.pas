@@ -2,7 +2,7 @@ unit Tina4Core;
 
 interface
 
-uses JSON, System.SysUtils, FireDAC.DApt, FireDAC.Stan.Intf,
+uses JSON, System.SysUtils, FireDAC.DApt, FireDAC.Stan.Intf, System.RegularExpressions,
   FireDAC.Stan.Option, FireDAC.Stan.Error, FireDAC.UI.Intf,
   FireDAC.Phys.Intf, FireDAC.Stan.Def, FireDAC.Stan.Pool, FireDAC.Stan.Async,
   FireDAC.Phys, FireDAC.ConsoleUI.Wait, FireDAC.Comp.DataSet,
@@ -256,6 +256,37 @@ var
   ByteStream: TBytesStream;
   Base64EncodedStream: TStringStream;
 
+
+//Checks to see if a string is base64 encode so we don't double encode blobs or strings that are already encoded
+function IsBase64Encoded(const S: string): Boolean;
+var
+  DecodedBytes: TBytes;
+  ReEncoded: string;
+  CleanInput: string;
+begin
+  Result := False;
+
+  // Check length (must be multiple of 4)
+  if (Length(S) mod 4) <> 0 then
+    Exit;
+
+  // Check character set
+  if not TRegEx.IsMatch(S, '^[A-Za-z0-9+/]*={0,2}$') then
+    Exit;
+
+  try
+    DecodedBytes := TNetEncoding.Base64.DecodeStringToBytes(S);
+    ReEncoded := TNetEncoding.Base64.EncodeBytesToString(DecodedBytes);
+
+    // Some base64 libraries ignore or vary padding, so compare trimmed versions
+    CleanInput := S.TrimRight(['=']);
+    Result := CleanInput = ReEncoded.TrimRight(['=']);
+  except
+    on E: Exception do
+      Result := False;
+  end;
+end;
+
 begin
   Result := TJSONObject.Create;
   DataArray := TJSONArray.Create;
@@ -287,15 +318,22 @@ begin
 
           if Query.FieldDefs[I].DataType = ftBlob then
           begin
-            ByteStream := TBytesStream.Create(Query.FieldByName(TableFieldNames[I]).AsBytes);
-            Base64EncodedStream := TStringStream.Create();
-            try
-              TNetEncoding.Base64.Encode(ByteStream, Base64EncodedStream);
+            if not IsBase64Encoded(Query.FieldByName(TableFieldNames[I]).AsString) then
+            begin
+              ByteStream := TBytesStream.Create(Query.FieldByName(TableFieldNames[I]).AsBytes);
+              Base64EncodedStream := TStringStream.Create();
+              try
+                TNetEncoding.Base64.Encode(ByteStream, Base64EncodedStream);
 
-               DataRecord.AddPair(FieldNames[I], Base64EncodedStream.DataString);
-            finally
-              Base64EncodedStream.Free;
-              ByteStream.Free;
+                 DataRecord.AddPair(FieldNames[I], Base64EncodedStream.DataString);
+              finally
+                Base64EncodedStream.Free;
+                ByteStream.Free;
+              end;
+            end
+              else
+            begin
+              DataRecord.AddPair(FieldNames[I], Query.FieldByName(TableFieldNames[I]).AsString);
             end;
           end
             else

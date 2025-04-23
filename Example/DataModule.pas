@@ -51,6 +51,7 @@ end;
 function TfrmDataModule.GetEntries: TJSONObject;
 var
   JSONValue : TJSONPair;
+  StatusCode : Integer;
 
 begin
   var CustomHeaders : TUrlHeaders;
@@ -58,7 +59,7 @@ begin
 
   try
   CustomHeaders.Add('Authorization','Bearer abc');
-  var Entries := SendHttpRequest ('http://localhost:7112/api', 'admin/users', '', '', 'application/json', 'utf-8', '', '', CustomHeaders);
+  var Entries := SendHttpRequest (StatusCode, 'http://localhost:7112/api', 'admin/users', '', '', 'application/json', 'utf-8', '', '', CustomHeaders);
   //BaseURL: String; EndPoint: String = ''; QueryParams: String = ''; Body: String=''; ContentType: String = 'application/json';  ContentEncoding : String = 'utf-8'; Username:String = ''; Password: String = ''; CustomHeaders: TStringList = nil;
   //WriteLn(Entries);
 

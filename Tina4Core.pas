@@ -53,6 +53,7 @@ type
   function GetGUID : String;
   function CamelCase(FieldName: String): String;
   function SnakeCase(FieldName: String): String;
+  function DecodeBase64(const Base64String: String): String;
   {$IFNDEF LINUX}
   function BitmapToBase64EncodedString(Bitmap: FMX.Graphics.TBitmap; Resize: Boolean = True; Width: Integer = 256; Height: Integer = 256): String;
   {$ENDIF}
@@ -192,6 +193,28 @@ begin
   except
     Result := FieldName;
   end;
+end;
+
+
+/// <summary> Decodes a Base64 encoded String
+/// </summary>
+/// <param name="Base64String">A Base64 Encoded String
+/// </param>
+/// <remarks>
+/// A Normal String is returned
+/// </remarks>
+/// <returns>
+/// Normal String
+/// </returns>
+function DecodeBase64(const Base64String: String): String;
+var
+  DecodedBytes: TBytes;
+begin
+  // Decode the Base64 string into bytes
+  DecodedBytes := TNetEncoding.Base64.DecodeStringToBytes(Base64String);
+
+  // Convert bytes to UTF-8 string
+  Result := TEncoding.UTF8.GetString(DecodedBytes);
 end;
 
 {$IFNDEF LINUX}

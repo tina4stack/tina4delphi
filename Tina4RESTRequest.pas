@@ -178,7 +178,11 @@ begin
       end;
 
       FResponseBody.Text := Response.ToString;
-      PopulateMemTableFromJSON(FMemTable, DataKey, Self.FResponseBody.Text, Self.FIndexFieldNames, SyncMode, Self);
+      if FMemTable <> nil then
+      begin
+        PopulateMemTableFromJSON(FMemTable, DataKey, Self.FResponseBody.Text, Self.FIndexFieldNames, SyncMode, Self);
+      end
+        else
       if (Assigned(Self.FOnExecuteDone)) then
       begin
         Self.FOnExecuteDone(Self);

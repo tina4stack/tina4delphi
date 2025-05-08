@@ -38,11 +38,11 @@ type
     procedure ReadHeaderData(AStream: TStream);
     procedure WriteHeaderData(AStream: TStream);
 
-    function Get(EndPoint: String; QueryParams: String=''; ContentType: String= 'application/json'; ContentEncoding: String = 'utf-8'): TJSONObject;
-    function Delete(EndPoint: String; QueryParams: String=''; ContentType: String= 'application/json'; ContentEncoding: String = 'utf-8'): TJSONObject;
-    function Post(EndPoint: String; QueryParams: String=''; Body: String = ''; ContentType: String= 'application/json'; ContentEncoding: String = 'utf-8'): TJSONObject;
-    function Patch(EndPoint: String; QueryParams: String=''; Body: String = ''; ContentType: String= 'application/json'; ContentEncoding: String = 'utf-8'): TJSONObject;
-    function Put(EndPoint: String; QueryParams: String=''; Body: String = ''; ContentType: String= 'application/json'; ContentEncoding: String = 'utf-8'): TJSONObject;
+    function Get(var StatusCode: Integer; EndPoint: String; QueryParams: String=''; ContentType: String= 'application/json'; ContentEncoding: String = 'utf-8'): TJSONObject;
+    function Delete(var StatusCode: Integer; EndPoint: String; QueryParams: String=''; ContentType: String= 'application/json'; ContentEncoding: String = 'utf-8'): TJSONObject;
+    function Post(var StatusCode: Integer; EndPoint: String; QueryParams: String=''; Body: String = ''; ContentType: String= 'application/json'; ContentEncoding: String = 'utf-8'): TJSONObject;
+    function Patch(var StatusCode: Integer; EndPoint: String; QueryParams: String=''; Body: String = ''; ContentType: String= 'application/json'; ContentEncoding: String = 'utf-8'): TJSONObject;
+    function Put(var StatusCode: Integer; EndPoint: String; QueryParams: String=''; Body: String = ''; ContentType: String= 'application/json'; ContentEncoding: String = 'utf-8'): TJSONObject;
 
   published
     { Published declarations }
@@ -102,50 +102,45 @@ begin
 
 end;
 
-function TTina4REST.Get(EndPoint: String; QueryParams: String=''; ContentType: String= 'application/json'; ContentEncoding: String = 'utf-8'): TJSONObject;
+function TTina4REST.Get(var StatusCode: Integer; EndPoint: String; QueryParams: String=''; ContentType: String= 'application/json'; ContentEncoding: String = 'utf-8'): TJSONObject;
 var
   JSONContent : TBytes;
-  StatusCode: Integer;
 begin
   JSONContent := SendHttpRequest(StatusCode, Self.FBaseUrl, EndPoint, QueryParams, '', ContentType, ContentEncoding, Self.FUsername, Self.FPassword, Self.FCustomHeaders, Self.FUserAgent, TTina4RequestType.Get, Self.FReadTimeOut, Self.FConnectTimeOut);
   Result := WrapJSONResponse(JSONContent, StatusCode);
 end;
 
-function TTina4REST.Delete(EndPoint, QueryParams, ContentType,
+function TTina4REST.Delete(var StatusCode: Integer; EndPoint, QueryParams, ContentType,
   ContentEncoding: String): TJSONObject;
 var
   JSONContent : TBytes;
-  StatusCode: Integer;
 begin
   JSONContent := SendHttpRequest(StatusCode, Self.FBaseUrl, EndPoint, QueryParams, '', ContentType, ContentEncoding, Self.FUsername, Self.FPassword, Self.FCustomHeaders, Self.FUserAgent, TTina4RequestType.Delete, Self.FReadTimeOut, Self.FConnectTimeOut);
   Result := WrapJSONResponse(JSONContent, StatusCode);
 end;
 
-function TTina4REST.Post(EndPoint, QueryParams, Body, ContentType,
+function TTina4REST.Post(var StatusCode: Integer; EndPoint, QueryParams, Body, ContentType,
   ContentEncoding: String): TJSONObject;
 var
   JSONContent : TBytes;
-  StatusCode: Integer;
 begin
   JSONContent := SendHttpRequest(StatusCode, Self.FBaseUrl, EndPoint, QueryParams, Body, ContentType, ContentEncoding, Self.FUsername, Self.FPassword, Self.FCustomHeaders, Self.FUserAgent, TTina4RequestType.Post);
   Result := WrapJSONResponse(JSONContent, StatusCode);
 end;
 
-function TTina4REST.Patch(EndPoint, QueryParams, Body, ContentType,
+function TTina4REST.Patch(var StatusCode: Integer; EndPoint, QueryParams, Body, ContentType,
   ContentEncoding: String): TJSONObject;
 var
   JSONContent : TBytes;
-  StatusCode: Integer;
 begin
   JSONContent := SendHttpRequest(StatusCode, Self.FBaseUrl, EndPoint, QueryParams, Body, ContentType, ContentEncoding, Self.FUsername, Self.FPassword, Self.FCustomHeaders, Self.FUserAgent, TTina4RequestType.Patch);
   Result := WrapJSONResponse(JSONContent, StatusCode);
 end;
 
-function TTina4REST.Put(EndPoint, QueryParams, Body, ContentType,
+function TTina4REST.Put(var StatusCode: Integer; EndPoint, QueryParams, Body, ContentType,
   ContentEncoding: String): TJSONObject;
 var
   JSONContent : TBytes;
-  StatusCode: Integer;
 begin
   JSONContent := SendHttpRequest(StatusCode, Self.FBaseUrl, EndPoint, QueryParams, Body, ContentType, ContentEncoding, Self.FUsername, Self.FPassword, Self.FCustomHeaders, Self.FUserAgent, TTina4RequestType.Put);
   Result := WrapJSONResponse(JSONContent, StatusCode);

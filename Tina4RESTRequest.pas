@@ -30,6 +30,7 @@ type
     FSourceIgnoreBlanks: Boolean;
     FSyncMode: TTina4RestSyncMode;
     FIndexFieldNames: String;
+    FStatusCode: Integer;
     procedure SetMasterSource(const Source: TTina4RESTRequest);
     procedure SetResponseBody(List: TStringList);
     procedure SetRequestBody(List: TStringList);
@@ -48,6 +49,7 @@ type
     property RequestType: TTina4RequestType read FRequestType write FRequestType;
     property DataKey: String read FDataKey write FDataKey;
     property EndPoint: String read FEndPoint write FEndPoint;
+    property StatusCode: Integer read FStatusCode write FStatusCode;
     property QueryParams: String read FQueryParams write FQueryParams;
     property MemTable: TFDMemTable read FMemTable write FMemTable;
     property SourceMemTable: TFDMemTable read FSourceMemTable write FSourceMemTable;
@@ -89,6 +91,7 @@ end;
 procedure TTina4RESTRequest.ExecuteRESTCall;
 var
   Response: TJSONObject;
+  StatusCode: Integer;
 
 
 procedure InjectMasterSourceParams(const MasterSource: TTina4RestRequest; var EndPoint:String; var RequestBody: String; var QueryParams: String);
@@ -143,27 +146,27 @@ begin
 
     if (FRequestType = TTina4RequestType.Get) then
     begin
-      Response := FTina4REST.Get(EndPoint, QueryParams);
+      Response := FTina4REST.Get(FStatusCode, EndPoint, QueryParams);
     end
       else
     if (FRequestType = TTina4RequestType.Delete) then
     begin
-      Response := FTina4REST.Delete(EndPoint, QueryParams);
+      Response := FTina4REST.Delete(FStatusCode, EndPoint, QueryParams);
     end
       else
     if (FRequestType = TTina4RequestType.Post) then
     begin
-      Response := FTina4REST.Post(EndPoint, QueryParams, RequestBody);
+      Response := FTina4REST.Post(FStatusCode, EndPoint, QueryParams, RequestBody);
     end
       else
     if (FRequestType = TTina4RequestType.Patch) then
     begin
-      Response := FTina4REST.Patch(EndPoint, QueryParams, RequestBody);
+      Response := FTina4REST.Patch(FStatusCode, EndPoint, QueryParams, RequestBody);
     end
       else
     if (FRequestType = TTina4RequestType.Put) then
     begin
-      Response := FTina4REST.Put(EndPoint, QueryParams, RequestBody);
+      Response := FTina4REST.Put(FStatusCode, EndPoint, QueryParams, RequestBody);
     end;
 
     try

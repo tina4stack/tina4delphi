@@ -4,31 +4,34 @@ interface
 
 uses
   System.SysUtils, System.Classes, System.Generics.Collections, System.RegularExpressions,
-  System.Rtti, JSON, System.NetEncoding, System.Math;
+  System.Rtti, JSON, System.NetEncoding, System.Math, Variants;
 
 
 type
-  TStringDict = TDictionary<String, String>;
+  TStringDict = TDictionary<String, TValue>;
   TFilterFunc = reference to function(const Input: String; const Args: TArray<String>): String;
-  TFunctionFunc = reference to function(const Args: TArray<String>): String;
+  TFunctionFunc = reference to function(const Args: TArray<String>; const Context: TDictionary<String, TValue>): String;
+
 
   TTina4Twig = class(TObject)
   private
-    FContext: TDictionary<String, String>;
-    FArrayContext: TDictionary<String, TArray<TDictionary<String, String>>>;
+    FContext: TDictionary<String, TValue>;
+    FArrayContext: TDictionary<String, TArray<TDictionary<String, TValue>>>;
     FFilters: TDictionary<String, TFilterFunc>;
     FFunctions: TDictionary<String, TFunctionFunc>;
     FTemplatePath: String;
     function LoadTemplate(const TemplateName: String): String;
-    function ReplaceContextVariables(const TemplateSource: String): String;
-    function EvaluateIfBlocks(const Template: String): String;
-    function EvaluateIncludes(const Template: String): String;
-    function EvaluateForBlocks(const Template: String): String;
-    function EvaluateExtends(const Template: String): String;
-    function EvaluateSetBlocks(const Template: String; Context: TDictionary<String, String>): String;
-    function EvaluateWithBlocks(const Template: String; Context: TDictionary<String, String>): String;
+    function ReplaceContextVariables(const Template: String; Context: TDictionary<String, TValue>): String;
+    function EvaluateIfBlocks(const Template: String; Context: TDictionary<String, TValue>): String;
+    function EvaluateIncludes(const Template: String; Context: TDictionary<String, TValue>): String;
+    function EvaluateForBlocks(const Template: String; Context: TDictionary<String, TValue>): String;
+    function EvaluateExtends(const Template: String; Context: TDictionary<String, TValue>): String;
+    function EvaluateSetBlocks(const Template: String; Context: TDictionary<String, TValue>): String;
+    function EvaluateWithBlocks(const Template: String; Context: TDictionary<String, TValue>): String;
     function RemoveComments(const Template: String): String;
-    function ParseVariableDict(const DictStr: String; OuterContext: TDictionary<String,String>): TDictionary<String,String>;
+    function ParseVariableDict(const DictStr: String; OuterContext: TDictionary<String,TValue>): TDictionary<String,TValue>;
+    function RenderInternal(const TemplateOrContent: String; Context: TStringDict): String;
+    function ResolveVariablePath(const VariablePath: string): TValue;
   public
     constructor Create(const TemplatePath: String = '');
     destructor Destroy; override;
@@ -59,8 +62,8 @@ end;
 constructor TTina4Twig.Create(const TemplatePath: String);
 begin
   inherited Create;
-  FContext := TDictionary<String, String>.Create;
-  FArrayContext := TDictionary<String, TArray<TDictionary<String, String>>>.Create;
+  FContext := TDictionary<String, TValue>.Create;
+  FArrayContext := TDictionary<String, TArray<TDictionary<String, TValue>>>.Create;
   if TemplatePath = '' then
   begin
     FTemplatePath := ExtractFileDir(ParamStr(0));
@@ -79,51 +82,83 @@ begin
   FFunctions := TDictionary<String, TFunctionFunc>.Create;
 
   FFunctions.Add('dump',
-  function(const Args: TArray<String>): String
+  function(const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
   var
-    I: Integer;
+    I, J: Integer;
     DumpResult: TStringList;
+    Value: TValue;
+    Arr: TArray<TValue>;
+    Dict: TDictionary<String, TValue>;
+    Pair: TPair<String, TValue>;
   begin
     DumpResult := TStringList.Create;
     try
       if Length(Args) = 0 then
-      begin
-        Result := '(no arguments)';
-        Exit;
-      end;
-      DumpResult.Add('Dump output:');
+        Exit('(no arguments)');
+
       for I := 0 to High(Args) do
-        DumpResult.Add('  [' + IntToStr(I) + '] = ' + Args[I]);
-      Result := DumpResult.Text;
+      begin
+        if not Context.TryGetValue(Args[I], Value) then
+        begin
+          DumpResult.Add(Args[I] + ' = (not found)');
+          Continue;
+        end;
+
+        if Value.IsArray then
+        begin
+          DumpResult.Add(Args[I] + ' = [');
+          Arr := Value.AsType<TArray<TValue>>;
+          for J := 0 to High(Arr) do
+            DumpResult.Add('  [' + IntToStr(J) + '] = ' + Arr[J].ToString);
+          DumpResult.Add(']');
+        end
+        else if Value.IsObject and (Value.AsObject is TDictionary<String, TValue>) then
+        begin
+          Dict := TDictionary<String, TValue>(Value.AsObject);
+          DumpResult.Add(Args[I] + ' = {');
+          for Pair in Dict do
+            DumpResult.Add('  ' + Pair.Key + ': ' + Pair.Value.ToString);
+          DumpResult.Add('}');
+        end
+        else
+        begin
+          DumpResult.Add(Args[I] + ' = ' + Value.ToString);
+        end;
+      end;
+
+      Result := '<pre>' + DumpResult.Text + '</pre>';
     finally
       DumpResult.Free;
     end;
   end);
 
   FFunctions.Add('range',
-  function(const Args: TArray<String>): String
+  function(const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
   var
     i, startNum, endNum: Integer;
-    Output: TStringList;
+    Output: TStringBuilder;
   begin
-    Output := TStringList.Create;
+    if Length(Args) < 2 then
+      Exit('[]');
+
+    startNum := StrToIntDef(Args[0], 0);
+    endNum := StrToIntDef(Args[1], 0);
+
+    Output := TStringBuilder.Create;
     try
-      if Length(Args) < 2 then
-      begin
-        Result := '';
-        Exit;
-      end;
-      startNum := StrToIntDef(Args[0], 0);
-      endNum := StrToIntDef(Args[1], 0);
+      Output.Append('[');
       for i := startNum to endNum do
-        Output.Add(IntToStr(i));
-      Result := Output.Text;
+      begin
+        if i > startNum then
+          Output.Append(',');
+        Output.Append(IntToStr(i));
+      end;
+      Output.Append(']');
+      Result := Output.ToString;
     finally
       Output.Free;
     end;
   end);
-
-
 end;
 
 destructor TTina4Twig.Destroy;
@@ -148,151 +183,250 @@ begin
   Result := Regex.Replace(Template, '');
 end;
 
-function TTina4Twig.EvaluateIfBlocks(const Template: String): String;
+function TTina4Twig.EvaluateIfBlocks(const Template: String; Context: TDictionary<String, TValue>): String;
 var
   Regex: TRegEx;
   Match: TMatch;
-  FullMatch, ConditionVar, InnerBlock, IfContent, ElseContent, Replacement: String;
-  IfPos, ElsePos: Integer;
+  FullMatch, VarName, Op, ValueRaw, IfContent, ElseContent, Replacement: String;
+  VarValue, CompareValue: TValue;
+  HasCondition: Boolean;
+  IsEqual: Boolean;
+
+  function TrimQuotes(const S: String): String;
+  begin
+    Result := S;
+    if ((Result.StartsWith('"') and Result.EndsWith('"')) or
+        (Result.StartsWith('''') and Result.EndsWith(''''))) and
+       (Result.Length >= 2) then
+      Result := Result.Substring(1, Result.Length - 2);
+  end;
+
+  function ParseValue(const S: String): TValue;
+  var
+    LowerVal: String;
+    IntVal: Int64;
+    FloatVal: Double;
+    BoolVal: Boolean;
+  begin
+    LowerVal := S.ToLower;
+    if LowerVal = 'true' then
+      Exit(TValue.From<Boolean>(True))
+    else if LowerVal = 'false' then
+      Exit(TValue.From<Boolean>(False));
+
+    if TryStrToInt64(S, IntVal) then
+      Exit(TValue.From<Int64>(IntVal));
+
+    if TryStrToFloat(S, FloatVal) then
+      Exit(TValue.From<Double>(FloatVal));
+
+    // Fallback as string
+    Exit(TValue.From<string>(S));
+  end;
+
+  function ValuesAreEqual(const A, B: TValue): Boolean;
+  begin
+    if A.Kind <> B.Kind then
+    begin
+      // Optionally try to compare numeric types even if kind differs
+      if (A.IsOrdinal) and (B.IsOrdinal) then
+        Result := A.AsExtended = B.AsExtended
+      else
+        Result := False;
+      Exit;
+    end;
+
+    case A.Kind of
+      tkInteger, tkInt64, tkEnumeration:
+        Result := A.AsInt64 = B.AsInt64;
+      tkFloat:
+        Result := Abs(A.AsExtended - B.AsExtended) < 1E-12;
+      tkString, tkLString, tkWString, tkUString:
+        Result := A.AsString = B.AsString;
+      tkClass:
+        Result := A.AsObject = B.AsObject;
+    else
+      Result := False;
+    end;
+  end;
+
+
 begin
   Result := Template;
-  Regex := TRegEx.Create('{% if\s+(\w+)\s*%}(.*?){% endif %}', [roSingleLine, roIgnoreCase]);
+  Regex := TRegEx.Create(
+    '{%\s*if\s+([\w\.]+)(\s*(==|!=)\s*(".*?"|''.*?''|\d+(\.\d+)?|true|false))?\s*%}(.*?)({%\s*else\s*%}(.*?))?{%\s*endif\s*%}',
+    [roSingleLine, roIgnoreCase]);
 
-  repeat
+  while True do
+  begin
     Match := Regex.Match(Result);
-    if not Match.Success then Break;
+    if not Match.Success then
+      Break;
 
     FullMatch := Match.Value;
-    ConditionVar := Match.Groups[1].Value;
-    InnerBlock := Match.Groups[2].Value;
+    VarName := Match.Groups[1].Value;
 
-    // Try splitting on {% else %}
-    ElsePos := Pos('{% else %}', InnerBlock);
-    if ElsePos > 0 then
+    HasCondition := Match.Groups[2].Success;
+    if HasCondition then
     begin
-      IfContent := Trim(Copy(InnerBlock, 1, ElsePos - 1));
-      ElseContent := Trim(Copy(InnerBlock, ElsePos + Length('{% else %}'), MaxInt));
+      Op := Match.Groups[3].Value;
+      ValueRaw := Match.Groups[4].Value;
+      ValueRaw := TrimQuotes(ValueRaw);
+      CompareValue := ParseValue(ValueRaw);
     end
     else
     begin
-      IfContent := Trim(InnerBlock);
-      ElseContent := '';
+      Op := '';
+      CompareValue := TValue.Empty;
     end;
 
-    if FContext.ContainsKey(ConditionVar) and SameText(FContext[ConditionVar], 'true') then
+    if Op = '' then
+    begin
+      HasCondition := False;
+    end;
+
+    IfContent := Match.Groups[6].Value;
+    ElseContent := '';
+    if Match.Groups[7].Success then
+      ElseContent := Match.Groups[8].Value;
+
+    // Resolve VarValue from Context dictionary with nested properties if needed
+    if not Context.TryGetValue(VarName, VarValue) then
+    begin
+      // If not found as whole var, try your ResolveVariablePath if you have it,
+      // or just consider it false
+      VarValue := TValue.Empty;
+    end;
+
+    if not HasCondition then
+    begin
+      // Treat VarValue as boolean
+      if VarValue.IsEmpty then
+        IsEqual := False
+      else if VarValue.Kind = tkString then
+        IsEqual := (VarValue.AsString.ToLower = 'true')
+      else if VarValue.Kind = tkInteger then
+        IsEqual := VarValue.AsInteger <> 0
+      else if VarValue.Kind = tkFloat then
+        IsEqual := VarValue.AsExtended <> 0.0
+      else if VarValue.Kind = tkEnumeration then
+        IsEqual := VarValue.AsBoolean
+      else if VarValue.IsObject then
+        IsEqual := True // non-nil object considered true
+      else
+        IsEqual := False;
+    end
+    else
+    begin
+      if Op = '==' then
+        IsEqual := ValuesAreEqual(VarValue, CompareValue)
+      else if Op = '!=' then
+        IsEqual := not ValuesAreEqual(VarValue, CompareValue);
+    end;
+
+    if IsEqual then
       Replacement := IfContent
     else
       Replacement := ElseContent;
 
-    // Replace the whole {% if ... %} ... {% endif %} block
-    Result := StringReplace(Result, FullMatch, Replacement, []);
-  until False;
+    Result := Result.Replace(FullMatch, Replacement, [rfReplaceAll]);
+  end;
 end;
 
-function TTina4Twig.ReplaceContextVariables(const TemplateSource: String): String;
+
+function TTina4Twig.ReplaceContextVariables(const Template: String; Context: TDictionary<String, TValue>): String;
 var
   Regex: TRegEx;
-  Matches: TMatchCollection;
   Match: TMatch;
-  Expr, VarName, FilterPart, FilterName: String;
-  Replacement, InputValue: String;
-  Filters: TArray<String>;
-  FilterArgs: TArray<String>;
-  FuncName: String;
-  FuncArgs: TArray<String>;
-  IsFunctionCall: Boolean;
-  I: Integer;
+  FullMatch, VarName, FuncName, ArgsStr: String;
+  Args: TArray<String>;
+  TempVal: TValue;
   Func: TFunctionFunc;
-  FilterFunc: TFilterFunc;
-  Builder: TStringBuilder;
-  LastPos, CurrPos: Integer;
-
-  function ParseFunctionCall(const Expr: String; out FuncName: String; out Args: TArray<String>): Boolean;
-  var
-    OpenParenPos, CloseParenPos: Integer;
-    ArgsStr: String;
-  begin
-    Result := False;
-    FuncName := '';
-    SetLength(Args, 0);
-
-    OpenParenPos := Pos('(', Expr);
-    if OpenParenPos = 0 then Exit;
-
-    CloseParenPos := LastDelimiter(')', Expr);
-    if CloseParenPos < OpenParenPos then Exit;
-
-    FuncName := Trim(Copy(Expr, 1, OpenParenPos - 1));
-    ArgsStr := Copy(Expr, OpenParenPos + 1, CloseParenPos - OpenParenPos - 1);
-
-    Args := ArgsStr.Split([',']);
-    for var i := Low(Args) to High(Args) do
-      Args[i] := Trim(Args[i]);
-
-    Result := True;
-  end;
-
 begin
-  Regex := TRegEx.Create('{{\s*(.+?)\s*}}', [roSingleLine]);
-  Matches := Regex.Matches(TemplateSource);
+  Result := Template;
+  Regex := TRegEx.Create('{{\s*([\w\.]+|\w+\(([^)]*)\))\s*}}', [roSingleLine, roIgnoreCase]);
 
-  Builder := TStringBuilder.Create;
-  try
-    LastPos := 0; // zero-based string indexing
+  while True do
+  begin
+    Match := Regex.Match(Result);
+    if not Match.Success then
+      Break;
 
-    for Match in Matches do
+    FullMatch := Match.Value;
+    VarName := Trim(Match.Groups[1].Value);
+
+    if VarName.Contains('(') and VarName.EndsWith(')') then
     begin
-      CurrPos := Match.Index-1; // zero-based start position of '{{ ... }}'
+      FuncName := Copy(VarName, 1, Pos('(', VarName) - 1);
+      ArgsStr := Copy(VarName, Pos('(', VarName) + 1, Length(VarName) - Pos('(', VarName) - 1);
+      Args := ArgsStr.Split([','], TStringSplitOptions.ExcludeEmpty);
+      for var I := 0 to High(Args) do
+        Args[I] := Trim(Args[I]);
 
-      // Append text from last position up to current match start
-      Builder.Append(TemplateSource.Substring(LastPos, CurrPos - LastPos));
-
-      Expr := Match.Groups[1].Value.Trim;
-
-      IsFunctionCall := ParseFunctionCall(Expr, FuncName, FuncArgs);
-
-      if IsFunctionCall then
+      if FFunctions.TryGetValue(FuncName, Func) then
       begin
-        if FFunctions.TryGetValue(FuncName, Func) then
-          Replacement := Func(FuncArgs)
-        else
-          Replacement := '';
+        Result := StringReplace(Result, FullMatch, Func(Args, Context), [rfReplaceAll]);
+        Continue;
       end
-       else
+      else
       begin
-        Filters := Expr.Split(['|']);
-        VarName := Filters[0].Trim;
-
-        if not FContext.TryGetValue(VarName, InputValue) then
-          InputValue := '';
-
-        for I := 1 to High(Filters) do
-        begin
-          FilterPart := Filters[I].Trim;
-          FilterName := FilterPart;
-          SetLength(FilterArgs, 0);
-
-          if FFilters.TryGetValue(FilterName, FilterFunc) then
-            InputValue := FilterFunc(InputValue, FilterArgs);
-        end;
-
-        Replacement := InputValue;
+        Result := StringReplace(Result, FullMatch, '(function ' + FuncName + ' not found)', [rfReplaceAll]);
+        Continue;
       end;
-
-      Builder.Append(Replacement);
-
-      // Move LastPos to after the current match (skip all of '{{ ... }}')
-      LastPos := CurrPos + Match.Length;
     end;
 
-    // Append the remaining tail after the last match
-    Builder.Append(TemplateSource.Substring(LastPos, TemplateSource.Length - LastPos));
+    // Try direct variable lookup
+    if Context.TryGetValue(VarName, TempVal) then
+    begin
+      Result := StringReplace(Result, FullMatch, TempVal.ToString, [rfReplaceAll]);
+      Continue;
+    end;
 
-    Result := Builder.ToString;
-  finally
-    Builder.Free;
+    // Try dot notation
+    TempVal := ResolveVariablePath(VarName);
+    if not TempVal.IsEmpty then
+    begin
+      Result := StringReplace(Result, FullMatch, TempVal.ToString, [rfReplaceAll]);
+      Continue;
+    end;
+
+    Result := StringReplace(Result, FullMatch, '(not found)', [rfReplaceAll]);
   end;
 end;
+
+function TTina4Twig.ResolveVariablePath(const VariablePath: string): TValue;
+var
+  Parts: TArray<string>;
+  Current: TValue;
+  i: Integer;
+  Key: string;
+  Dict: TDictionary<String, TValue>;
+begin
+  Parts := VariablePath.Split(['.']);
+
+  if not FContext.TryGetValue(Parts[0], Current) then
+    Exit(TValue.Empty);
+
+  for i := 1 to High(Parts) do
+  begin
+    Key := Parts[i];
+
+    if (Current.Kind = tkClass) and (Current.AsObject <> nil) and
+       (Current.AsObject is TDictionary<String, TValue>) then
+    begin
+      Dict := TDictionary<String, TValue>(Current.AsObject);
+      if Dict.TryGetValue(Key, Current) then
+        Continue
+      else
+        Exit(TValue.Empty);
+    end
+    else
+      Exit(TValue.Empty);
+  end;
+
+  Result := Current;
+end;
+
 
 
 function TTina4Twig.LoadTemplate(const TemplateName: String): String;
@@ -319,17 +453,18 @@ begin
 end;
 
 function TTina4Twig.ParseVariableDict(const DictStr: String;
-  OuterContext: TDictionary<String, String>): TDictionary<String, String>;
+  OuterContext: TDictionary<String, TValue>): TDictionary<String, TValue>;
 var
   Content: String;
   Pairs: TArray<String>;
   Pair: String;
   KV: TArray<String>;
-  Key, Value, V: String;
-  Dict: TDictionary<String,String>;
+  Key, Value : String;
+  V: TValue;
+  Dict: TDictionary<String,TValue>;
   I: Integer;
 begin
-  Dict := TDictionary<String,String>.Create;
+  Dict := TDictionary<String,TValue>.Create;
 
   Content := Trim(DictStr);  // Use global Trim function
 
@@ -370,271 +505,431 @@ begin
   Result := Dict;
 end;
 
-function TTina4Twig.EvaluateIncludes(const Template: String): String;
+function TTina4Twig.EvaluateIncludes(const Template: String; Context: TDictionary<String, TValue>): String;
 var
   Regex: TRegEx;
   Match: TMatch;
-  IncludeName, IncludeContent, FullMatch: String;
-begin
-  Result := Template;
-  Regex := TRegEx.Create('{% include\s+["'']([^"''}]+)["'']\s*%}', [roIgnoreCase]);
+  FullMatch, IncludeName, WithRaw, IncludeContent: String;
+  IncludeContext, ParsedDict: TDictionary<String, TValue>;
+  Pair: TPair<String, TValue>;
 
-  repeat
-    Match := Regex.Match(Result);
-    if not Match.Success then Break;
-
-    IncludeName := Match.Groups[1].Value;
-    FullMatch := Match.Value;
-
-    IncludeContent := LoadTemplate(IncludeName); // load and inject
-
-    // Render includes recursively (optional: could isolate to avoid infinite includes)
-    IncludeContent := Render(IncludeName);
-
-    Result := StringReplace(Result, FullMatch, IncludeContent, []);
-  until False;
-end;
-
-
-function TTina4Twig.EvaluateSetBlocks(const Template: String; Context: TDictionary<String, String>): String;
-var
-  Regex: TRegEx;
-  Match: TMatch;
-  FullMatch, VarName, VarValue: String;
-
-function ParseVariableDict(const DictStr: String;
-  OuterContext: TDictionary<String, String>): TDictionary<String, String>;
-var
-  Content: String;
-  Pairs: TArray<String>;
-  Pair, Key, Value, ResolvedValue: String;
-  KV: TArray<String>;
-  Dict: TDictionary<String, String>;
-  I: Integer;
-begin
-  Dict := TDictionary<String, String>.Create;
-
-  Content := Trim(DictStr);
-  if (Length(Content) > 1) and (Content[1] = '{') and (Content[Length(Content)] = '}') then
-    Content := Trim(Copy(Content, 2, Length(Content) - 2));
-
-  if Content = '' then
-    Exit(Dict);
-
-  Pairs := Content.Split([',']);
-  for I := 0 to High(Pairs) do
+  function ParseVariableDict(const DictStr: String; BaseContext: TDictionary<String, TValue>): TDictionary<String, TValue>;
+  var
+    CleanStr: String;
+    Pairs, KeyVal: TArray<String>;
+    I: Integer;
+    Key, ValStr: String;
+    Val: TValue;
+    Int64Val: Int64;
+    FloatVal: Double;
   begin
-    Pair := Trim(Pairs[I]);
-    KV := Pair.Split([':']);
-    if Length(KV) = 2 then
+    Result := TDictionary<String, TValue>.Create;
+    CleanStr := DictStr.Trim;
+    if CleanStr.StartsWith('{') and CleanStr.EndsWith('}') then
+      CleanStr := CleanStr.Substring(1, CleanStr.Length - 2).Trim
+    else
+      Exit;
+
+    if CleanStr = '' then Exit;
+
+    Pairs := CleanStr.Split([','], TStringSplitOptions.ExcludeEmpty);
+    for I := 0 to High(Pairs) do
     begin
-      Key := Trim(KV[0]);
-      Value := Trim(KV[1]);
+      KeyVal := Pairs[I].Split([':'], 2);
+      if Length(KeyVal) = 2 then
+      begin
+        Key := KeyVal[0].Trim;
+        ValStr := KeyVal[1].Trim;
 
-      // Remove quotes from value if present
-      if ((Value.StartsWith('"') and Value.EndsWith('"')) or
-          (Value.StartsWith('''') and Value.EndsWith(''''))) then
-        Value := Value.Substring(1, Value.Length - 2);
-
-      // Try resolve from context, else keep as is
-      if OuterContext.TryGetValue(Value, ResolvedValue) then
-        Dict.AddOrSetValue(Key, ResolvedValue)
-      else
-        Dict.AddOrSetValue(Key, Value);
+        // Try resolve ValStr from BaseContext (e.g. variable name)
+        if BaseContext.TryGetValue(ValStr, Val) then
+          Result.Add(Key, Val)
+        else if TryStrToInt64(ValStr, Int64Val) then
+          Result.Add(Key, TValue.From<Int64>(Int64Val))
+        else if TryStrToFloat(ValStr, FloatVal) then
+          Result.Add(Key, TValue.From<Double>(FloatVal))
+        else
+        begin
+          // Remove quotes if any
+          if (ValStr.StartsWith('"') and ValStr.EndsWith('"')) or
+             (ValStr.StartsWith('''') and ValStr.EndsWith('''')) then
+            ValStr := ValStr.Substring(1, ValStr.Length - 2);
+          Result.Add(Key, TValue.From<String>(ValStr));
+        end;
+      end;
     end;
   end;
 
-  Result := Dict;
-end;
-
-var
-  ParsedDict: TDictionary<String, String>;
-  Pair: TPair<String, String>;
 begin
   Result := Template;
-  Regex := TRegEx.Create('{%\s*set\s+(\w+)\s*=\s*(.+?)\s*%}', [roIgnoreCase]);
+  Regex := TRegEx.Create('{%\s*include\s+["'']([^"''}]+)["''](?:\s+with\s+(\{[^\}]*\}))?\s*%}', [roIgnoreCase]);
 
-  repeat
+  while True do
+  begin
     Match := Regex.Match(Result);
-    if not Match.Success then Break;
+    if not Match.Success then
+      Break;
 
     FullMatch := Match.Value;
-    VarName := Match.Groups[1].Value;
-    VarValue := Match.Groups[2].Value.Trim;
+    IncludeName := Match.Groups[1].Value;
+    WithRaw := '';
+    if Match.Groups.Count > 2 then
+      WithRaw := Match.Groups[2].Value;
 
-    if VarValue.StartsWith('{') and VarValue.EndsWith('}') then
-    begin
-      ParsedDict := ParseVariableDict(VarValue, Context);
-      try
-        for Pair in ParsedDict do
-          Context.AddOrSetValue(VarName + '.' + Pair.Key, Pair.Value);
-      finally
-        ParsedDict.Free;
-      end;
-    end
-    else
-    begin
-      // Trim quotes if present
-      if ((VarValue.StartsWith('"')) and (VarValue.EndsWith('"'))) or
-         ((VarValue.StartsWith('''')) and (VarValue.EndsWith(''''))) then
-        VarValue := VarValue.Substring(1, VarValue.Length - 2);
-
-      Context.AddOrSetValue(VarName, VarValue);
-    end;
-
-    Result := StringReplace(Result, FullMatch, '', []);
-  until False;
-end;
-
-
-function TTina4Twig.EvaluateWithBlocks(const Template: String; Context: TDictionary<String, String>): String;
-var
-  Regex: TRegEx;
-  Match: TMatch;
-  FullMatch, WithVarRaw, WithVarName, InnerBlock: String;
-  WithContext, MergedContext: TDictionary<String, String>;
-  VarValue: String;
-  UseOnly: Boolean;
-begin
-  Result := Template;
-  Regex := TRegEx.Create('{%\s*with\s+(.+?)\s*%}(.*?){%\s*endwith\s*%}', [roIgnoreCase, roSingleLine]);
-
-  repeat
-    Match := Regex.Match(Result);
-    if not Match.Success then Break;
-
-    FullMatch := Match.Value;
-    WithVarRaw := Trim(Match.Groups[1].Value);
-    InnerBlock := Match.Groups[2].Value;
-
-    // Detect "only" at the end
-    UseOnly := False;
-    if WithVarRaw.ToLower.EndsWith(' only') then
-    begin
-      UseOnly := True;
-      WithVarRaw := Trim(Copy(WithVarRaw, 1, Length(WithVarRaw) - 5));
-    end;
-
-    WithContext := nil;
-    MergedContext := TDictionary<String, String>.Create;
-
+    IncludeContext := TDictionary<String, TValue>.Create;
     try
-      if not UseOnly then
-      begin
-        // Merge outer context
-        for var Pair in Context do
-          MergedContext.AddOrSetValue(Pair.Key, Pair.Value);
-      end;
+      // Copy current context
+      for Pair in Context do
+        IncludeContext.AddOrSetValue(Pair.Key, Pair.Value);
 
-      if WithVarRaw.StartsWith('{') then
+      // Merge variables from with { ... }
+      if WithRaw <> '' then
       begin
-        // Inline object
-        WithContext := ParseVariableDict(WithVarRaw, Context);
-        for var Pair in WithContext do
-          MergedContext.AddOrSetValue(Pair.Key, Pair.Value);
-      end
-      else
-      begin
-        WithVarName := WithVarRaw;
-
-        // Named variable from context
-        if Context.TryGetValue(WithVarName, VarValue) then
-          MergedContext.AddOrSetValue(WithVarName, VarValue);
-
-        // Named variable from array context
-        if FArrayContext.ContainsKey(WithVarName) then
-        begin
-          for var Item in FArrayContext[WithVarName] do
-            for var SubPair in Item do
-              MergedContext.AddOrSetValue(WithVarName + '.' + SubPair.Key, SubPair.Value);
+        ParsedDict := ParseVariableDict(WithRaw, Context);
+        try
+          for Pair in ParsedDict do
+            IncludeContext.AddOrSetValue(Pair.Key, Pair.Value);
+        finally
+          ParsedDict.Free;
         end;
       end;
 
-      var Evaluated := Self.Render(InnerBlock, MergedContext);
-      Result := StringReplace(Result, FullMatch, Evaluated, []);
-
-    finally
-      MergedContext.Free;
-      if Assigned(WithContext) then
-        WithContext.Free;
+      IncludeContent := LoadTemplate(IncludeName);
+      IncludeContent := RenderInternal(IncludeContent, IncludeContext);
+    except
+      on E: Exception do
+        IncludeContent := '';
     end;
-  until False;
+    IncludeContext.Free;
+
+    Result := StringReplace(Result, FullMatch, IncludeContent, [rfReplaceAll]);
+  end;
 end;
 
 
-function TTina4Twig.EvaluateForBlocks(const Template: String): String;
+
+
+function TTina4Twig.EvaluateSetBlocks(const Template: String; Context: TDictionary<String, TValue>): String;
 var
   Regex: TRegEx;
   Match: TMatch;
-  FullMatch, VarName, ListName, BlockContent, Output: String;
-  Items: TArray<TDictionary<String, String>>;
-  Item: TDictionary<String, String>;
-  LoopContent: String;
-  ctxBackup: TDictionary<String, String>;
-  pair: TPair<String, String>;
+  VarName, ValueStr: String;
+  Value: TValue;
+  JSONValue: TJSONValue;
+  Dict: TDictionary<String, TValue>;
+  Arr: TArray<TValue>;
+  I: Int64;
+  F: Double;
 begin
   Result := Template;
-  Regex := TRegEx.Create('{% for (\w+)\s+in\s+(\w+)\s*%}(.*?){% endfor %}', [roSingleLine, roIgnoreCase]);
+  Regex := TRegEx.Create('{%\s*set\s+(\w+)\s*=\s*(\{[^\}]*\}|\[[^\]]*\])\s*%}', [roSingleLine, roIgnoreCase]);
 
-  repeat
+  while True do
+  begin
     Match := Regex.Match(Result);
-    if not Match.Success then Break;
+    if not Match.Success then
+      Break;
+
+    VarName := Match.Groups[1].Value.Trim;
+    ValueStr := Match.Groups[2].Value.Trim;
+
+    if ValueStr.StartsWith('[') and ValueStr.EndsWith(']') then
+    begin
+      ValueStr := Copy(ValueStr, 2, Length(ValueStr) - 2).Trim;
+      if ValueStr = '' then
+        Arr := []
+      else
+      begin
+        var Items := ValueStr.Split([','], TStringSplitOptions.ExcludeEmpty);
+        SetLength(Arr, Length(Items));
+        for I := 0 to High(Items) do
+        begin
+          var Item := Items[I].Trim;
+          if (Item.StartsWith('"') and Item.EndsWith('"')) or
+             (Item.StartsWith('''') and Item.EndsWith('''')) then
+            Item := Copy(Item, 2, Length(Item) - 2)
+          else if Item.ToLower = 'true' then
+            Item := 'True'
+          else if Item.ToLower = 'false' then
+            Item := 'False'
+          
+          else if TryStrToFloat(Item, F) then
+            Item := Item;
+          Arr[I] := TValue.From(Item);
+        end;
+      end;
+      Value := TValue.From<TArray<TValue>>(Arr);
+    end
+    else if ValueStr.StartsWith('{') and ValueStr.EndsWith('}') then
+    begin
+      JSONValue := TJSONObject.ParseJSONValue(ValueStr);
+      try
+        if JSONValue is TJSONObject then
+        begin
+          Dict := TDictionary<String, TValue>.Create;
+          for var Pair in TJSONObject(JSONValue) do
+          begin
+            if Pair.JsonValue is TJSONNumber then
+              Dict.Add(Pair.JsonString.Value, TValue.From(Pair.JsonValue.AsType<Double>))
+            else if Pair.JsonValue is TJSONTrue then
+              Dict.Add(Pair.JsonString.Value, TValue.From(True))
+            else if Pair.JsonValue is TJSONFalse then
+              Dict.Add(Pair.JsonString.Value, TValue.From(False))
+            else
+              Dict.Add(Pair.JsonString.Value, TValue.From(Pair.JsonValue.Value));
+          end;
+          Value := TValue.From<TDictionary<String, TValue>>(Dict);
+        end
+        else
+          Value := TValue.Empty;
+      finally
+        JSONValue.Free;
+      end;
+    end
+    else
+      Value := TValue.From(ValueStr);
+
+    Context.AddOrSetValue(VarName, Value);
+    Result := StringReplace(Result, Match.Value, '', [rfReplaceAll]);
+  end;
+end;
+
+
+
+
+
+
+function TTina4Twig.EvaluateWithBlocks(const Template: String; Context: TDictionary<String, TValue>): String;
+var
+  Regex: TRegEx;
+  Match: TMatch;
+  FullMatch, WithVarRaw, InnerBlock: String;
+  UseOnly: Boolean;
+  ParsedDict, MergedContext: TDictionary<String, TValue>;
+  VarValue: TValue;
+  Evaluated: String;
+  Pair: TPair<String, TValue>;
+begin
+  Result := Template;
+  Regex := TRegEx.Create('{%\s*with\s*([^%]*?)(\s+only)?\s*%}(.*?){%\s*endwith\s*%}', [roIgnoreCase, roSingleLine]);
+
+  while True do
+  begin
+    Match := Regex.Match(Result);
+    if not Match.Success then
+      Break;
 
     FullMatch := Match.Value;
-    VarName := Match.Groups[1].Value;  // e.g. "person"
-    ListName := Match.Groups[2].Value; // e.g. "people"
+    WithVarRaw := Trim(Match.Groups[1].Value);
+    UseOnly := Trim(Match.Groups[2].Value).ToLower = 'only';
+    InnerBlock := Match.Groups[3].Value;
+
+    MergedContext := TDictionary<String, TValue>.Create;
+    try
+      // Start with empty or full copy depending on "only"
+      if not UseOnly then
+      begin
+        for Pair in Context do
+          MergedContext.AddOrSetValue(Pair.Key, Pair.Value);
+      end;
+
+      if WithVarRaw <> '' then
+      begin
+        // Check if WithVarRaw exists in context
+        if Context.TryGetValue(WithVarRaw, VarValue) then
+        begin
+          if VarValue.IsType<TDictionary<String, TValue>> then
+          begin
+            ParsedDict := VarValue.AsType<TDictionary<String, TValue>>;
+            for Pair in ParsedDict do
+              MergedContext.AddOrSetValue(Pair.Key, Pair.Value);
+          end
+          else if VarValue.IsType<string> then
+          begin
+            var s := VarValue.AsString;
+            if (s.StartsWith('{')) and (s.EndsWith('}')) then
+            begin
+              ParsedDict := ParseVariableDict(s, Context);
+              try
+                for Pair in ParsedDict do
+                  MergedContext.AddOrSetValue(Pair.Key, Pair.Value);
+              finally
+                ParsedDict.Free;
+              end;
+            end
+            else
+              MergedContext.AddOrSetValue(WithVarRaw, VarValue);
+          end
+          else
+          begin
+            // If it's neither dict nor string, add as is
+            MergedContext.AddOrSetValue(WithVarRaw, VarValue);
+          end;
+        end
+        else
+        begin
+          // If WithVarRaw looks like a dictionary literal, parse it directly
+          if (WithVarRaw.StartsWith('{')) and (WithVarRaw.EndsWith('}')) then
+          begin
+            ParsedDict := ParseVariableDict(WithVarRaw, Context);
+            try
+              for Pair in ParsedDict do
+                MergedContext.AddOrSetValue(Pair.Key, Pair.Value);
+            finally
+              ParsedDict.Free;
+            end;
+          end
+          else
+          begin
+            // Unknown variable, just skip or consider adding empty context
+          end;
+        end;
+      end;
+
+      Evaluated := Self.RenderInternal(InnerBlock, MergedContext);
+      Result := StringReplace(Result, FullMatch, Evaluated, [rfReplaceAll]);
+    finally
+      MergedContext.Free;
+    end;
+  end;
+end;
+
+
+
+function TTina4Twig.EvaluateForBlocks(const Template: String; Context: TDictionary<String, TValue>): String;
+var
+  Regex: TRegEx;
+  Match: TMatch;
+  FullMatch, VarName, ListExpr, BlockContent, Output, ArrayContent: String;
+  Items: TArray<TDictionary<String, TValue>>;
+  Item: TDictionary<String, TValue>;
+  MergedContext: TDictionary<String, TValue>;
+  Pair: TPair<String, TValue>;
+  ArrayItems: TArray<String>;
+  I: Integer;
+  Value: TValue;
+  ValueArray: TArray<TValue>;
+begin
+  Result := Template;
+  Regex := TRegEx.Create('{%\s*for\s+(\w+)\s+in\s+((?:\[[^\]]*\])|\w+)\s*%}(.*?){%\s*endfor\s*%}', [roSingleLine, roIgnoreCase]);
+
+  while True do
+  begin
+    Match := Regex.Match(Result);
+    if not Match.Success then
+      Break;
+
+    FullMatch := Match.Value;
+    VarName := Match.Groups[1].Value.Trim;
+    ListExpr := Match.Groups[2].Value.Trim;
     BlockContent := Match.Groups[3].Value;
-
     Output := '';
+    Items := nil;
 
-    if not FArrayContext.TryGetValue(ListName, Items) then
+    if ListExpr.StartsWith('[') and ListExpr.EndsWith(']') then
     begin
-      // No array found for the list name, remove the block
-      Result := StringReplace(Result, FullMatch, '', []);
+      ArrayContent := Copy(ListExpr, 2, Length(ListExpr) - 2).Trim;
+      if ArrayContent <> '' then
+      begin
+        ArrayItems := ArrayContent.Split([','], TStringSplitOptions.ExcludeEmpty);
+        SetLength(Items, Length(ArrayItems));
+        for I := 0 to High(ArrayItems) do
+        begin
+          var Element := ArrayItems[I].Trim;
+          Element := StringReplace(Element, '''', '', [rfReplaceAll]);
+          Element := StringReplace(Element, '"', '', [rfReplaceAll]);
+          Item := TDictionary<String, TValue>.Create;
+          Item.Add(VarName, TValue.From(Element));
+          Items[I] := Item;
+        end;
+      end;
+    end
+    else if Context.TryGetValue(ListExpr, Value) then
+    begin
+      if Value.IsArray then
+      begin
+        ValueArray := Value.AsType<TArray<TValue>>;
+        SetLength(Items, Length(ValueArray));
+        for I := 0 to High(ValueArray) do
+        begin
+          Item := TDictionary<String, TValue>.Create;
+          Item.Add(VarName, ValueArray[I]);
+          Items[I] := Item;
+        end;
+      end
+      else if Value.IsType<TDictionary<String, TValue>> then
+      begin
+        SetLength(Items, 1);
+        Items[0] := Value.AsType<TDictionary<String, TValue>>;
+      end;
+    end
+    else if FArrayContext.TryGetValue(ListExpr, Items) then
+    begin
+      // Already prepared array-of-dictionaries
+    end
+    else
+    begin
+      Result := StringReplace(Result, FullMatch, '', [rfReplaceAll]);
       Continue;
     end;
 
     for Item in Items do
     begin
-      // Backup existing context to restore later
-      ctxBackup := TDictionary<String, String>.Create;
+      MergedContext := TDictionary<String, TValue>.Create;
       try
-        for pair in FContext do
-          ctxBackup.Add(pair.Key, pair.Value);
-
-        // Add current item fields to context prefixed by VarName
-        for pair in Item do
-          FContext.AddOrSetValue(VarName + '.' + pair.Key, pair.Value);
-
-        // Render the block with the updated context
-        LoopContent := ReplaceContextVariables(BlockContent);
-
-        Output := Output + LoopContent;
+        for Pair in Context do
+          MergedContext.AddOrSetValue(Pair.Key, Pair.Value);
+        for Pair in Item do
+        begin
+          if Pair.Key = VarName then
+            MergedContext.AddOrSetValue(VarName, Pair.Value)
+          else
+            MergedContext.AddOrSetValue(Pair.Key, Pair.Value);
+        end;
+        Output := Output + Self.RenderInternal(BlockContent, MergedContext);
       finally
-        // Restore original context
-        FContext.Clear;
-        for pair in ctxBackup do
-          FContext.AddOrSetValue(pair.Key, pair.Value);
-        ctxBackup.Free;
+        MergedContext.Free;
       end;
     end;
 
-    Result := StringReplace(Result, FullMatch, Output, []);
-  until False;
+    if ListExpr.StartsWith('[') or (Context.ContainsKey(ListExpr) and Value.IsArray) then
+    begin
+      for Item in Items do
+        Item.Free;
+    end;
+
+    Result := StringReplace(Result, FullMatch, Output, [rfReplaceAll]);
+  end;
 end;
 
 
-function TTina4Twig.EvaluateExtends(const Template: String): String;
+
+
+
+function TTina4Twig.EvaluateExtends(const Template: String; Context: TDictionary<String, TValue>): String;
 var
   ExtendRegex, BlockRegex: TRegEx;
   Match, BlockMatch: TMatch;
   ParentTemplateName, BaseTemplate, BlockName, BlockContent: String;
   Blocks: TDictionary<String, String>;
+
+  function ReplaceBlockInTemplate(const TemplateText, BlockName, NewContent: String): String;
+  var
+    Regex: TRegEx;
+  begin
+    // Replace {% block blockname %} ... {% endblock %} with NewContent
+    Regex := TRegEx.Create(
+      '{%\s*block\s+' + TRegEx.Escape(BlockName) + '\s*%}.*?{%\s*endblock\s*%}',
+      [roSingleLine, roIgnoreCase]
+    );
+    Result := Regex.Replace(TemplateText, NewContent);
+  end;
+
 begin
   Result := Template;
 
   // Find {% extends "base.twig" %}
-  ExtendRegex := TRegEx.Create('{% extends\s+["'']([^"''}]+)["'']\s*%}', [roIgnoreCase]);
+  ExtendRegex := TRegEx.Create('{%\s*extends\s+["'']([^"''}]+)["'']\s*%}', [roIgnoreCase]);
   Match := ExtendRegex.Match(Template);
   if not Match.Success then
     Exit(Template); // no extends, return as-is
@@ -644,31 +939,27 @@ begin
   // Remove extends tag from child's template content
   var ChildTemplateWithoutExtends := ExtendRegex.Replace(Template, '');
 
+  // Load parent/base template
   BaseTemplate := LoadTemplate(ParentTemplateName);
 
-  // Collect blocks from the child template (without extends)
+  // Collect blocks from child template (without extends)
   Blocks := TDictionary<String, String>.Create;
   try
-    BlockRegex := TRegEx.Create('{% block\s+(\w+)\s*%}(.*?){% endblock %}', [roSingleLine, roIgnoreCase]);
+    BlockRegex := TRegEx.Create('{%\s*block\s+(\w+)\s*%}(.*?){%\s*endblock\s*%}', [roSingleLine, roIgnoreCase]);
     BlockMatch := BlockRegex.Match(ChildTemplateWithoutExtends);
     while BlockMatch.Success do
     begin
       BlockName := BlockMatch.Groups[1].Value;
-      BlockContent := BlockMatch.Groups[2].Value;
+      BlockContent := BlockMatch.Groups[2].Value.Trim;
       Blocks.AddOrSetValue(BlockName, BlockContent);
       BlockMatch := BlockMatch.NextMatch;
     end;
 
-    // Replace blocks in base template with child's content
-    BlockMatch := BlockRegex.Match(BaseTemplate);
-    while BlockMatch.Success do
+    // Replace blocks in base template with child's block content
+    for BlockName in Blocks.Keys do
     begin
-      BlockName := BlockMatch.Groups[1].Value;
-      if Blocks.TryGetValue(BlockName, BlockContent) then
-      begin
-        BaseTemplate := StringReplace(BaseTemplate, BlockMatch.Value, BlockContent, []);
-      end;
-      BlockMatch := BlockMatch.NextMatch;
+      BlockContent := Blocks[BlockName];
+      BaseTemplate := ReplaceBlockInTemplate(BaseTemplate, BlockName, BlockContent);
     end;
 
     Result := BaseTemplate;
@@ -681,9 +972,6 @@ end;
 
 
 procedure TTina4Twig.RegisterDefaultFilters;
-
-
-
 begin
   FFilters.Clear;
 
@@ -1228,40 +1516,40 @@ begin
 end;
 
 function TTina4Twig.Render(const TemplateOrContent: String; Variables: TStringDict = nil): String;
+begin
+  Result := RenderInternal(TemplateOrContent, FContext);
+end;
+
+function TTina4Twig.RenderInternal(const TemplateOrContent: String; Context: TStringDict): String;
 var
   TemplateText, FullPath: String;
-  ContextToUse: TStringDict;
-  OldContext: TStringDict;
+  LocalContext: TDictionary<String, TValue>;
 begin
-  if Assigned(Variables) then
-    ContextToUse := Variables
-  else
-    ContextToUse := FContext;
-
-  FullPath := IncludeTrailingPathDelimiter(FTemplatePath) + TemplateOrContent;
-
-  // Auto-detect if input is a file
-  if FileExists(FullPath) then
-    TemplateText := LoadTemplate(TemplateOrContent)
-  else
-    TemplateText := TemplateOrContent;
-
-  OldContext := FContext;
+  LocalContext := TDictionary<String, TValue>.Create;
   try
-    FContext := ContextToUse;
+    for var Pair in Context do
+      LocalContext.AddOrSetValue(Pair.Key, Pair.Value);
+
+    FullPath := IncludeTrailingPathDelimiter(FTemplatePath) + TemplateOrContent;
+
+    if FileExists(FullPath) then
+      TemplateText := LoadTemplate(TemplateOrContent)
+    else
+      TemplateText := TemplateOrContent;
 
     TemplateText := RemoveComments(TemplateText);
-    TemplateText := EvaluateSetBlocks(TemplateText, FContext);
 
-    TemplateText := EvaluateExtends(TemplateText);
-    TemplateText := EvaluateIncludes(TemplateText);
-    TemplateText := EvaluateWithBlocks(TemplateText, FContext);
-    TemplateText := EvaluateForBlocks(TemplateText);
-    TemplateText := EvaluateIfBlocks(TemplateText);
-    TemplateText := ReplaceContextVariables(TemplateText);
+    TemplateText := EvaluateSetBlocks(TemplateText, LocalContext);
+    TemplateText := EvaluateExtends(TemplateText, LocalContext);
+    TemplateText := EvaluateForBlocks(TemplateText, LocalContext);
+    TemplateText := EvaluateIncludes(TemplateText, LocalContext);
+    TemplateText := EvaluateWithBlocks(TemplateText, LocalContext);
+    TemplateText := EvaluateIfBlocks(TemplateText, LocalContext);
+    TemplateText := ReplaceContextVariables(TemplateText, LocalContext);
+
     Result := TemplateText;
   finally
-    FContext := OldContext;
+    LocalContext.Free;
   end;
 end;
 
@@ -1279,15 +1567,18 @@ begin
   if AValue.Kind = tkRecord then
   begin
     ctx := TDictionary<string, string>.Create;
-    recType := recRtti.GetType(AValue.TypeInfo);
-    for recProp in recType.GetProperties do
-    begin
-      valStr := recProp.GetValue(AValue.GetReferenceToRawData).ToString;
-      ctx.AddOrSetValue(recProp.Name, valStr);
+    try
+      recType := recRtti.GetType(AValue.TypeInfo);
+      for recProp in recType.GetProperties do
+      begin
+        valStr := recProp.GetValue(AValue.GetReferenceToRawData).ToString;
+        ctx.AddOrSetValue(recProp.Name, valStr);
+      end;
+      for pair in ctx do
+        FContext.AddOrSetValue(AName + '.' + pair.Key, pair.Value);
+    finally
+      ctx.Free;
     end;
-    for pair in ctx do
-      FContext.AddOrSetValue(AName + '.' + pair.Key, pair.Value);
-    ctx.Free;
   end
   else if AValue.IsObject and (AValue.AsObject is TJSONObject) then
   begin
@@ -1297,8 +1588,7 @@ begin
   end
   else
   begin
-    // fallback to simple ToString
-    FContext.AddOrSetValue(AName, AValue.ToString);
+    FContext.AddOrSetValue(AName, AValue); // Store directly
   end;
 end;
 
@@ -1309,8 +1599,8 @@ var
   jsonArr: TJSONArray;
   jsonObj: TJSONObject;
   jsonPair: TJSONPair;
-  dict: TDictionary<String, String>;
-  arr: TArray<TDictionary<String, String>>;
+  dict: TDictionary<String, TValue>;
+  arr: TArray<TDictionary<String, TValue>>;
 begin
   if FArrayContext.ContainsKey(AName) then
     FArrayContext.Remove(AName);
@@ -1322,7 +1612,7 @@ begin
 
     for i := 0 to jsonArr.Count - 1 do
     begin
-      dict := TDictionary<String, String>.Create;
+      dict := TDictionary<String, TValue>.Create;
       jsonObj := jsonArr.Items[i] as TJSONObject;
       for j := 0 to jsonObj.Count - 1 do
       begin
@@ -1339,3 +1629,4 @@ begin
 end;
 
 end.
+

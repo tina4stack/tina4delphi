@@ -703,12 +703,15 @@ begin
 
       HttpClient.HandleRedirects := True;
 
-      HttpCLient.UserAgent := UserAgent;
+      HttpClient.UserAgent := UserAgent;
 
       if (Username <> '') then
       begin
-        var Auth := TNetEncoding.Base64.Encode(Username+':'+Password);
-        HttpCLient.CustHeaders.Add('Authorization', 'Basic '+Auth);
+        HttpClient.CredentialsStorage.AddCredential(
+          TCredentialsStorage.TCredential.Create(
+            TAuthTargetType.Server, '', Url, username, password
+        ));
+        HttpClient.PreemptiveAuthentication := True;
       end;
 
       if Assigned(CustomHeaders) then

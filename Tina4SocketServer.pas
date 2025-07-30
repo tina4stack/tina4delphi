@@ -2,11 +2,35 @@ unit Tina4SocketServer;
 
 interface
 
-uses System.SysUtils, System.Classes, System.Net.Socket, System.Types, JSON;
+uses System.SysUtils, System.Classes, System.Net.Socket, System.Types, JSON, System.Threading;
 
 type
-  TTina4SocketServer = class(TComponent)
+  TTina4SocketEvent = procedure (const Client: TSocket; Content: TBytes) of Object;
 
+  TTina4SocketServer = class(TComponent)
+  private
+    FSocketType: TSocketType;
+    FHost: String;
+    FPort: Integer;
+    FActive: Boolean;
+    FOnMessage: TTina4SocketEvent;
+    CanRun: Boolean;
+    ServerSocket : TSocket;
+    ServiceTask: ITask;
+  protected
+    { Protected declarations }
+    procedure HandleConnection(const ASyncResult: IAsyncResult);
+    procedure ProcessSocketConnection(const Client: TSocket);
+  public
+    procedure SetActive(const Active: Boolean);
+    procedure StartService(Host: String; Port: Integer; SocketType: TSocketType; HandleConnection: TAsyncCallbackEvent);
+    procedure StopService();
+  published
+    property Active: Boolean read FActive write SetActive;
+    property Port : Integer read FPort write FPort;
+    property Host : String read FHost write FHost;
+    property SocketType : TSocketType read FSocketType write FSocketType;
+    property OnMessage : TTina4SocketEvent read FOnMessage write FOnMessage;
   end;
 
 procedure Register;
@@ -18,62 +42,88 @@ begin
   RegisterComponents('Tina4Delphi', [TTina4SocketServer]);
 end;
 
-end.
+{ TTina4SocketServer }
 
-
-(*procedure HandleSocketConnection(const Socket: TSocket);
+procedure TTina4SocketServer.ProcessSocketConnection(const Client: TSocket);
 var
   Disconnected : Boolean;
 
 begin
-  WriteLn('Receiving the Socket Connection');
-
   Disconnected := False;
 
-  while not Disconnected do
+  while not Disconnected and CanRun do
   begin
-    WriteLn('Waiting for a connection');
-    var Content: TBytes := Socket.Receive();
-    if StringOf(Content) <> '' then
-    begin
-      WriteLn (StringOf(Content));
-      if Pos( 'quit', StringOf(Content)) <> 0 then
+    try
+      var Content: TBytes := Client.Receive();
+      if Assigned(FOnMessage) and (Length(Content) > 0) then
       begin
-        Disconnected := True;
-        Socket.Close;
+        FOnMessage(Client, Content);
       end;
+      Sleep(1000);
+    except
+      Disconnected := True;
     end;
-    Sleep(1000);
+  end;
+
+  Client.Close(True);
+end;
+
+procedure TTina4SocketServer.SetActive(const Active: Boolean);
+begin
+  if not FActive and Active then
+  begin
+    StartService(FHost, FPort, FSocketType, HandleConnection);
+  end
+    else
+  begin
+    StopService();
+  end;
+
+  FActive := Active;
+end;
+
+procedure TTina4SocketServer.StartService(Host: String; Port: Integer; SocketType: TSocketType; HandleConnection: TAsyncCallbackEvent);
+begin
+  if not Assigned(ServiceTask) then
+  begin
+    ServiceTask := TTask.Create(
+    procedure
+    begin
+      ServerSocket := TSocket.Create(SocketType);
+      ServerSocket.Listen(Host, '', Port);
+      CanRun := True;
+
+      try
+        while CanRun do
+        begin
+          var Handler := ServerSocket.BeginAccept(HandleConnection);
+          Sleep(1000);
+        end;
+      finally
+        ServerSocket.Free;
+      end;
+    end);
+    ServiceTask.Start;
   end;
 end;
 
-procedure HandleConnection(const ASyncResult: IAsyncResult);
+procedure TTina4SocketServer.HandleConnection(const ASyncResult: IAsyncResult);
 begin
-  WriteLn('New Connection');
   var Socket := (ASyncResult.AsyncContext  as TSocket);
 
-  var Connection := Socket.EndAccept(ASyncResult);
+  var Client := Socket.EndAccept(ASyncResult);
 
-  HandleSocketConnection(Connection);
+  ProcessSocketConnection(Client);
 end;
 
-var
-  ServerSocket: TSocket;
-
+procedure TTina4SocketServer.StopService;
 begin
-  ReportMemoryLeaksOnShutDown := True;
-  ServerSocket := TSocket.Create(TSocketType.TCP);
-
-  ServerSocket.Listen('127.0.0.1', '', 9006);
-  try
-    while True do
-    begin
-      var Handler := ServerSocket.BeginAccept(HandleConnection);
-      WriteLn('Listening');
-      Sleep(1000);
-    end;
-
-  finally
-    ServerSocket.Free;
+  CanRun := False;
+  if Assigned(ServiceTask) then
+  begin
+    ServiceTask.Cancel;
   end;
-end.   *)
+end;
+
+end.
+

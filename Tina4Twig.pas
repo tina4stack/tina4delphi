@@ -16,7 +16,6 @@ type
   TTina4Twig = class(TObject)
   private
     FContext: TDictionary<String, TValue>;
-    FArrayContext: TDictionary<String, TArray<TDictionary<String, TValue>>>;
     FFilters: TDictionary<String, TFilterFunc>;
     FFunctions: TDictionary<String, TFunctionFunc>;
     FTemplatePath: String;
@@ -36,7 +35,6 @@ type
     constructor Create(const TemplatePath: String = '');
     destructor Destroy; override;
     procedure SetVariable(AName: string; AValue: TValue);
-    procedure SetArray(AName: string; AValue: TValue);
     function Render(const TemplateOrContent: String; Variables: TStringDict = nil): String;
     procedure RegisterDefaultFilters;
   end;
@@ -63,7 +61,7 @@ constructor TTina4Twig.Create(const TemplatePath: String);
 begin
   inherited Create;
   FContext := TDictionary<String, TValue>.Create;
-  FArrayContext := TDictionary<String, TArray<TDictionary<String, TValue>>>.Create;
+
   if TemplatePath = '' then
   begin
     FTemplatePath := ExtractFileDir(ParamStr(0));
@@ -167,7 +165,7 @@ begin
   FFilters.Free;
   FFunctions.Free;
   FContext.Free;
-  FArrayContext.Free;
+
   inherited;
 end;
 
@@ -293,7 +291,6 @@ begin
     // Resolve VarValue from Context dictionary with nested properties if needed
     if not Context.TryGetValue(VarName, VarValue) then
     begin
-      // If not found as whole var, try your ResolveVariablePath if you have it,
       // or just consider it false
       VarValue := TValue.Empty;
     end;
@@ -404,12 +401,14 @@ var
 begin
   Parts := VariablePath.Split(['.']);
 
-  if not FContext.TryGetValue(Parts[0], Current) then
+  if not FContext.TryGetValue(Parts[1], Current) then
     Exit(TValue.Empty);
 
   for i := 1 to High(Parts) do
   begin
     Key := Parts[i];
+
+    var Avalue := Current.AsString;
 
     if (Current.Kind = tkClass) and (Current.AsObject <> nil) and
        (Current.AsObject is TDictionary<String, TValue>) then
@@ -809,6 +808,8 @@ var
   I: Integer;
   Value: TValue;
   ValueArray: TArray<TValue>;
+  JSONArray : TJSONArray;
+
 begin
   Result := Template;
   Regex := TRegEx.Create('{%\s*for\s+(\w+)\s+in\s+((?:\[[^\]]*\])|\w+)\s*%}(.*?){%\s*endfor\s*%}', [roSingleLine, roIgnoreCase]);
@@ -861,13 +862,22 @@ begin
       begin
         SetLength(Items, 1);
         Items[0] := Value.AsType<TDictionary<String, TValue>>;
+      end
+      else if Value.IsType<TJsonArray> then
+      begin
+        //Items[0] := Value.AsType<TJsonArray>;
+        JSONArray := Value.AsType<TJsonArray>;
+        SetLength(Items, JSONArray.Count);
+        for I := 0 to JSONArray.Count-1 do
+        begin
+          Item := TDictionary<String, TValue>.Create;
+          Item.Add(VarName, JSONArray[I]);
+          Items[I] := Item;
+        end;
       end;
+
     end
-    else if FArrayContext.TryGetValue(ListExpr, Items) then
-    begin
-      // Already prepared array-of-dictionaries
-    end
-    else
+      else
     begin
       Result := StringReplace(Result, FullMatch, '', [rfReplaceAll]);
       Continue;
@@ -882,7 +892,18 @@ begin
         for Pair in Item do
         begin
           if Pair.Key = VarName then
-            MergedContext.AddOrSetValue(VarName, Pair.Value)
+            if Pair.Value.IsType<TJSONObject> then
+            begin
+              for var JSONValue in Pair.Value.AsType<TJSONObject> do
+              begin
+                var text := JSONValue.JsonString.Value+ ' = ' + JSONValue.JsonValue.Value;
+                MergedContext.AddOrSetValue(VarName+'.'+JSONValue.JsonString.Value, JSONValue.JsonValue.Value);
+              end;
+            end
+              else
+            begin
+              MergedContext.AddOrSetValue(VarName, Pair.Value)
+            end
           else
             MergedContext.AddOrSetValue(Pair.Key, Pair.Value);
         end;
@@ -1538,7 +1559,6 @@ begin
       TemplateText := TemplateOrContent;
 
     TemplateText := RemoveComments(TemplateText);
-
     TemplateText := EvaluateSetBlocks(TemplateText, LocalContext);
     TemplateText := EvaluateExtends(TemplateText, LocalContext);
     TemplateText := EvaluateForBlocks(TemplateText, LocalContext);
@@ -1592,41 +1612,6 @@ begin
   end;
 end;
 
-
-procedure TTina4Twig.SetArray(AName: string; AValue: TValue);
-var
-  i, j: Integer;
-  jsonArr: TJSONArray;
-  jsonObj: TJSONObject;
-  jsonPair: TJSONPair;
-  dict: TDictionary<String, TValue>;
-  arr: TArray<TDictionary<String, TValue>>;
-begin
-  if FArrayContext.ContainsKey(AName) then
-    FArrayContext.Remove(AName);
-
-  if AValue.IsObject and (AValue.AsObject is TJSONArray) then
-  begin
-    jsonArr := TJSONArray(AValue.AsObject);
-    SetLength(arr, jsonArr.Count);
-
-    for i := 0 to jsonArr.Count - 1 do
-    begin
-      dict := TDictionary<String, TValue>.Create;
-      jsonObj := jsonArr.Items[i] as TJSONObject;
-      for j := 0 to jsonObj.Count - 1 do
-      begin
-        jsonPair := jsonObj.Pairs[j];
-        dict.AddOrSetValue(jsonPair.JsonString.Value, jsonPair.JsonValue.Value);
-      end;
-      arr[i] := dict;
-    end;
-
-    FArrayContext.Add(AName, arr);
-  end
-  else
-    raise Exception.Create('Unsupported type for SetArray');
-end;
 
 end.
 

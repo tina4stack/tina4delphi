@@ -401,14 +401,15 @@ var
 begin
   Parts := VariablePath.Split(['.']);
 
-  if not FContext.TryGetValue(Parts[1], Current) then
+  if Length(Parts) = 0 then
+    Exit(TValue.Empty);
+
+  if not FContext.TryGetValue(Parts[0], Current) then
     Exit(TValue.Empty);
 
   for i := 1 to High(Parts) do
   begin
     Key := Parts[i];
-
-    var Avalue := Current.AsString;
 
     if (Current.Kind = tkClass) and (Current.AsObject <> nil) and
        (Current.AsObject is TDictionary<String, TValue>) then
@@ -451,57 +452,109 @@ begin
   end;
 end;
 
-function TTina4Twig.ParseVariableDict(const DictStr: String;
-  OuterContext: TDictionary<String, TValue>): TDictionary<String, TValue>;
+function TTina4Twig.ParseVariableDict(const DictStr: String; OuterContext: TDictionary<String, TValue>): TDictionary<String, TValue>;
 var
   Content: String;
-  Pairs: TArray<String>;
-  Pair: String;
-  KV: TArray<String>;
-  Key, Value : String;
-  V: TValue;
-  Dict: TDictionary<String,TValue>;
-  I: Integer;
+  JSONValue: TJSONValue;
+  JSONObject: TJSONObject;
+  Pair: TJSONPair;
+  Key, ValueStr: String;
+  Value: TValue;
+  Int64Val: Int64;
+  FloatVal: Double;
 begin
-  Dict := TDictionary<String,TValue>.Create;
+  Result := TDictionary<String, TValue>.Create;
+  Content := Trim(DictStr);
 
-  Content := Trim(DictStr);  // Use global Trim function
-
-  if (Content.StartsWith('{')) and (Content.EndsWith('}')) then
+  // Remove surrounding braces if present
+  if Content.StartsWith('{') and Content.EndsWith('}') then
     Content := Content.Substring(1, Content.Length - 2).Trim;
 
   if Content = '' then
-    Exit(Dict);
+    Exit;
 
-  Pairs := Content.Split([',']);
-  for I := 0 to High(Pairs) do
-  begin
-    Pair := Pairs[I].Trim;
-    KV := Pair.Split([':']);
-    if Length(KV) = 2 then
+  // Try to parse as JSON object
+  JSONValue := TJSONObject.ParseJSONValue('{' + Content + '}');
+  try
+    if (JSONValue <> nil) and (JSONValue is TJSONObject) then
     begin
-      Key := KV[0].Trim;
-      Value := KV[1].Trim;
+      JSONObject := TJSONObject(JSONValue);
+      for Pair in JSONObject do
+      begin
+        Key := Pair.JsonString.Value;
+        ValueStr := Pair.JsonValue.ToString;
 
-      // Remove optional quotes around key and value (e.g., "key" : "value")
-      if (Key.StartsWith('"') and Key.EndsWith('"')) or (Key.StartsWith('''') and Key.EndsWith('''')) then
-        Key := Key.Substring(1, Key.Length - 2);
-
-      if (Value.StartsWith('"') and Value.EndsWith('"')) or (Value.StartsWith('''') and Value.EndsWith('''')) then
-        Value := Value.Substring(1, Value.Length - 2);
-
-      // Try resolve Value from OuterContext if exists
-      if OuterContext <> nil then
-        if OuterContext.TryGetValue(Value, V) then
-          Dict.AddOrSetValue(Key, V)
+        // Handle different JSON value types
+        if Pair.JsonValue is TJSONNumber then
+        begin
+          if TryStrToInt64(ValueStr, Int64Val) then
+            Value := TValue.From<Int64>(Int64Val)
+          else if TryStrToFloat(ValueStr, FloatVal) then
+            Value := TValue.From<Double>(FloatVal)
+          else
+            Value := TValue.From<String>(ValueStr);
+        end
+        else if Pair.JsonValue is TJSONTrue then
+          Value := TValue.From<Boolean>(True)
+        else if Pair.JsonValue is TJSONFalse then
+          Value := TValue.From<Boolean>(False)
         else
-          Dict.AddOrSetValue(Key, Value)
-      else
-        Dict.AddOrSetValue(Key, Value);
-    end;
-  end;
+        begin
+          // Remove quotes from string values
+          if (ValueStr.StartsWith('"') and ValueStr.EndsWith('"')) or
+             (ValueStr.StartsWith('''') and ValueStr.EndsWith('''')) then
+            ValueStr := ValueStr.Substring(1, ValueStr.Length - 2);
+          // Try to resolve from OuterContext if it's a variable name
+          if (OuterContext <> nil) and OuterContext.TryGetValue(ValueStr, Value) then
+            // Value already set from context
+          else
+            Value := TValue.From<String>(ValueStr);
+        end;
 
-  Result := Dict;
+        Result.AddOrSetValue(Key, Value);
+      end;
+    end
+    else
+    begin
+      // Fallback for simple key-value pairs (e.g., "key: value, key2: value2")
+      var Pairs := Content.Split([','], TStringSplitOptions.ExcludeEmpty);
+      for var PairStr in Pairs do
+      begin
+        var KV := PairStr.Split([':'], 2);
+        if Length(KV) = 2 then
+        begin
+          Key := Trim(KV[0]);
+          ValueStr := Trim(KV[1]);
+
+          // Remove quotes from key and value
+          if (Key.StartsWith('"') and Key.EndsWith('"')) or
+             (Key.StartsWith('''') and Key.EndsWith('''')) then
+            Key := Key.Substring(1, Key.Length - 2);
+          if (ValueStr.StartsWith('"') and ValueStr.EndsWith('"')) or
+             (ValueStr.StartsWith('''') and ValueStr.EndsWith('''')) then
+            ValueStr := ValueStr.Substring(1, ValueStr.Length - 2);
+
+          // Try to parse value type
+          if TryStrToInt64(ValueStr, Int64Val) then
+            Value := TValue.From<Int64>(Int64Val)
+          else if TryStrToFloat(ValueStr, FloatVal) then
+            Value := TValue.From<Double>(FloatVal)
+          else if ValueStr.ToLower = 'true' then
+            Value := TValue.From<Boolean>(True)
+          else if ValueStr.ToLower = 'false' then
+            Value := TValue.From<Boolean>(False)
+          else if (OuterContext <> nil) and OuterContext.TryGetValue(ValueStr, Value) then
+            // Value resolved from context
+          else
+            Value := TValue.From<String>(ValueStr);
+
+          Result.AddOrSetValue(Key, Value);
+        end;
+      end;
+    end;
+  finally
+    JSONValue.Free;
+  end;
 end;
 
 function TTina4Twig.EvaluateIncludes(const Template: String; Context: TDictionary<String, TValue>): String;
@@ -617,11 +670,14 @@ var
   JSONValue: TJSONValue;
   Dict: TDictionary<String, TValue>;
   Arr: TArray<TValue>;
-  I: Int64;
+  I: Integer;
   F: Double;
+  IntVal: Int64;
+  BoolVal: Boolean;
 begin
   Result := Template;
-  Regex := TRegEx.Create('{%\s*set\s+(\w+)\s*=\s*(\{[^\}]*\}|\[[^\]]*\])\s*%}', [roSingleLine, roIgnoreCase]);
+  // Updated regex to handle simple values, arrays, or objects
+  Regex := TRegEx.Create('{%\s*set\s+(\w+)\s*=\s*([^%]*?)\s*%}', [roSingleLine, roIgnoreCase]);
 
   while True do
   begin
@@ -648,13 +704,15 @@ begin
              (Item.StartsWith('''') and Item.EndsWith('''')) then
             Item := Copy(Item, 2, Length(Item) - 2)
           else if Item.ToLower = 'true' then
-            Item := 'True'
+            Arr[I] := TValue.From<Boolean>(True)
           else if Item.ToLower = 'false' then
-            Item := 'False'
-          
+            Arr[I] := TValue.From<Boolean>(False)
+          else if TryStrToInt64(Item, IntVal) then
+            Arr[I] := TValue.From<Int64>(IntVal)
           else if TryStrToFloat(Item, F) then
-            Item := Item;
-          Arr[I] := TValue.From(Item);
+            Arr[I] := TValue.From<Double>(F)
+          else
+            Arr[I] := TValue.From<String>(Item);
         end;
       end;
       Value := TValue.From<TArray<TValue>>(Arr);
@@ -686,15 +744,27 @@ begin
       end;
     end
     else
-      Value := TValue.From(ValueStr);
+    begin
+      // Handle simple values (number, string, boolean)
+      if TryStrToInt64(ValueStr, IntVal) then
+        Value := TValue.From<Int64>(IntVal)
+      else if TryStrToFloat(ValueStr, F) then
+        Value := TValue.From<Double>(F)
+      else if ValueStr.ToLower = 'true' then
+        Value := TValue.From<Boolean>(True)
+      else if ValueStr.ToLower = 'false' then
+        Value := TValue.From<Boolean>(False)
+      else if (ValueStr.StartsWith('"') and ValueStr.EndsWith('"')) or
+              (ValueStr.StartsWith('''') and ValueStr.EndsWith('''')) then
+        Value := TValue.From<String>(Copy(ValueStr, 2, Length(ValueStr) - 2))
+      else
+        Value := TValue.From<String>(ValueStr);
+    end;
 
     Context.AddOrSetValue(VarName, Value);
     Result := StringReplace(Result, Match.Value, '', [rfReplaceAll]);
   end;
 end;
-
-
-
 
 
 
@@ -725,17 +795,27 @@ begin
 
     MergedContext := TDictionary<String, TValue>.Create;
     try
-      // Start with empty or full copy depending on "only"
+      // Copy outer context only if not using "only"
       if not UseOnly then
       begin
         for Pair in Context do
           MergedContext.AddOrSetValue(Pair.Key, Pair.Value);
       end;
 
+      // Process initial variables from WithVarRaw if provided
       if WithVarRaw <> '' then
       begin
-        // Check if WithVarRaw exists in context
-        if Context.TryGetValue(WithVarRaw, VarValue) then
+        if WithVarRaw.StartsWith('{') and WithVarRaw.EndsWith('}') then
+        begin
+          ParsedDict := ParseVariableDict(WithVarRaw, Context);
+          try
+            for Pair in ParsedDict do
+              MergedContext.AddOrSetValue(Pair.Key, Pair.Value);
+          finally
+            ParsedDict.Free;
+          end;
+        end
+        else if Context.TryGetValue(WithVarRaw, VarValue) then
         begin
           if VarValue.IsType<TDictionary<String, TValue>> then
           begin
@@ -743,49 +823,13 @@ begin
             for Pair in ParsedDict do
               MergedContext.AddOrSetValue(Pair.Key, Pair.Value);
           end
-          else if VarValue.IsType<string> then
-          begin
-            var s := VarValue.AsString;
-            if (s.StartsWith('{')) and (s.EndsWith('}')) then
-            begin
-              ParsedDict := ParseVariableDict(s, Context);
-              try
-                for Pair in ParsedDict do
-                  MergedContext.AddOrSetValue(Pair.Key, Pair.Value);
-              finally
-                ParsedDict.Free;
-              end;
-            end
-            else
-              MergedContext.AddOrSetValue(WithVarRaw, VarValue);
-          end
           else
-          begin
-            // If it's neither dict nor string, add as is
             MergedContext.AddOrSetValue(WithVarRaw, VarValue);
-          end;
-        end
-        else
-        begin
-          // If WithVarRaw looks like a dictionary literal, parse it directly
-          if (WithVarRaw.StartsWith('{')) and (WithVarRaw.EndsWith('}')) then
-          begin
-            ParsedDict := ParseVariableDict(WithVarRaw, Context);
-            try
-              for Pair in ParsedDict do
-                MergedContext.AddOrSetValue(Pair.Key, Pair.Value);
-            finally
-              ParsedDict.Free;
-            end;
-          end
-          else
-          begin
-            // Unknown variable, just skip or consider adding empty context
-          end;
         end;
       end;
 
-      Evaluated := Self.RenderInternal(InnerBlock, MergedContext);
+      // Render the inner block with the isolated MergedContext
+      Evaluated := RenderInternal(InnerBlock, MergedContext);
       Result := StringReplace(Result, FullMatch, Evaluated, [rfReplaceAll]);
     finally
       MergedContext.Free;

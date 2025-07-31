@@ -31,6 +31,7 @@ type
     function ParseVariableDict(const DictStr: String; OuterContext: TDictionary<String,TValue>): TDictionary<String,TValue>;
     function RenderInternal(const TemplateOrContent: String; Context: TStringDict): String;
     function ResolveVariablePath(const VariablePath: string): TValue;
+    function Contains(const Left, Right: TValue): Boolean;
   public
     constructor Create(const TemplatePath: String = '');
     destructor Destroy; override;
@@ -180,6 +181,35 @@ begin
   // Replace all matches with empty string
   Result := Regex.Replace(Template, '');
 end;
+
+
+function TTina4Twig.Contains(const Left, Right: TValue): Boolean;
+var
+  Arr: TArray<TValue>;
+  v: TValue;
+  Dict: TDictionary<String, TValue>;
+begin
+  Result := False;
+  if (Right.Kind in [tkString, tkUString]) and (Left.Kind in [tkString, tkUString]) then
+    Result := Pos(Left.AsString, Right.AsString) > 0
+  else if Right.IsArray then
+  begin
+    Arr := Right.AsType<TArray<TValue>>;
+    for v in Arr do
+      if ValuesAreEqual(Left, v) then
+      begin
+        Result := True;
+        Exit;
+      end;
+  end
+  else if Right.IsObject and (Right.AsObject is TDictionary<String, TValue>) then
+  begin
+    Dict := TDictionary<String, TValue>(Right.AsObject);
+    if Left.Kind in [tkString, tkUString] then
+      Result := Dict.ContainsKey(Left.AsString);
+  end;
+end;
+
 
 function TTina4Twig.EvaluateIfBlocks(const Template: String; Context: TDictionary<String, TValue>): String;
 var
@@ -335,13 +365,15 @@ function TTina4Twig.ReplaceContextVariables(const Template: String; Context: TDi
 var
   Regex: TRegEx;
   Match: TMatch;
-  FullMatch, VarName, FuncName, ArgsStr: String;
+  FullMatch, VarName, FilterChain, FuncName, ArgsStr: String;
   Args: TArray<String>;
   TempVal: TValue;
   Func: TFunctionFunc;
+  Filter: TFilterFunc;
+  FilteredValue: String;
 begin
   Result := Template;
-  Regex := TRegEx.Create('{{\s*([\w\.]+|\w+\(([^)]*)\))\s*}}', [roSingleLine, roIgnoreCase]);
+  Regex := TRegEx.Create('{{\s*([\w\.]+(?:\s*\|\s*\w+(?:\s*\([^)]*\))?)*)\s*}}', [roSingleLine, roIgnoreCase]);
 
   while True do
   begin
@@ -352,42 +384,57 @@ begin
     FullMatch := Match.Value;
     VarName := Trim(Match.Groups[1].Value);
 
-    if VarName.Contains('(') and VarName.EndsWith(')') then
+    // Split into variable path and filter chain
+    if VarName.Contains('|') then
     begin
-      FuncName := Copy(VarName, 1, Pos('(', VarName) - 1);
-      ArgsStr := Copy(VarName, Pos('(', VarName) + 1, Length(VarName) - Pos('(', VarName) - 1);
-      Args := ArgsStr.Split([','], TStringSplitOptions.ExcludeEmpty);
-      for var I := 0 to High(Args) do
-        Args[I] := Trim(Args[I]);
+      var Parts := VarName.Split(['|'], TStringSplitOptions.ExcludeEmpty);
+      VarName := Trim(Parts[0]);
+      FilterChain := Trim(Parts[1]);
 
-      if FFunctions.TryGetValue(FuncName, Func) then
+      // Resolve the initial variable
+      if Context.TryGetValue(VarName, TempVal) or not TempVal.IsEmpty then
       begin
-        Result := StringReplace(Result, FullMatch, Func(Args, Context), [rfReplaceAll]);
-        Continue;
+        FilteredValue := TempVal.ToString;
+
+        // Apply filters
+        var Filters := FilterChain.Split([' '], TStringSplitOptions.ExcludeEmpty);
+        for var FilterName in Filters do
+        begin
+          if FilterName.Contains('(') and FilterName.EndsWith(')') then
+          begin
+            FuncName := Copy(FilterName, 1, Pos('(', FilterName) - 1);
+            ArgsStr := Copy(FilterName, Pos('(', FilterName) + 1, Length(FilterName) - Pos('(', FilterName) - 1);
+            Args := ArgsStr.Split([','], TStringSplitOptions.ExcludeEmpty);
+            for var I := 0 to High(Args) do
+              Args[I] := Trim(Args[I]);
+          end
+          else
+          begin
+            FuncName := FilterName;
+            SetLength(Args, 0);
+          end;
+
+          if FFilters.TryGetValue(FuncName, Filter) then
+            FilteredValue := Filter(FilteredValue, Args)
+          else
+            FilteredValue := '(filter ' + FuncName + ' not found)';
+        end;
       end
       else
-      begin
-        Result := StringReplace(Result, FullMatch, '(function ' + FuncName + ' not found)', [rfReplaceAll]);
-        Continue;
-      end;
-    end;
-
-    // Try direct variable lookup
-    if Context.TryGetValue(VarName, TempVal) then
+        FilteredValue := '(not found)';
+    end
+    else
     begin
-      Result := StringReplace(Result, FullMatch, TempVal.ToString, [rfReplaceAll]);
-      Continue;
+      // No filter, resolve variable directly
+      if Context.TryGetValue(VarName, TempVal) then
+        FilteredValue := TempVal.ToString
+      else
+        FilteredValue := ResolveVariablePath(VarName).ToString;
+      if FilteredValue = '' then
+        FilteredValue := '(not found)';
     end;
 
-    // Try dot notation
-    TempVal := ResolveVariablePath(VarName);
-    if not TempVal.IsEmpty then
-    begin
-      Result := StringReplace(Result, FullMatch, TempVal.ToString, [rfReplaceAll]);
-      Continue;
-    end;
-
-    Result := StringReplace(Result, FullMatch, '(not found)', [rfReplaceAll]);
+    Result := StringReplace(Result, FullMatch, FilteredValue, [rfReplaceAll]);
   end;
 end;
 
@@ -1592,6 +1639,7 @@ var
 begin
   LocalContext := TDictionary<String, TValue>.Create;
   try
+    // Copy the provided context to LocalContext
     for var Pair in Context do
       LocalContext.AddOrSetValue(Pair.Key, Pair.Value);
 
@@ -1603,13 +1651,13 @@ begin
       TemplateText := TemplateOrContent;
 
     TemplateText := RemoveComments(TemplateText);
-    TemplateText := EvaluateSetBlocks(TemplateText, LocalContext);
-    TemplateText := EvaluateExtends(TemplateText, LocalContext);
-    TemplateText := EvaluateForBlocks(TemplateText, LocalContext);
-    TemplateText := EvaluateIncludes(TemplateText, LocalContext);
-    TemplateText := EvaluateWithBlocks(TemplateText, LocalContext);
-    TemplateText := EvaluateIfBlocks(TemplateText, LocalContext);
-    TemplateText := ReplaceContextVariables(TemplateText, LocalContext);
+    TemplateText := EvaluateSetBlocks(TemplateText, LocalContext); // Use LocalContext
+    TemplateText := EvaluateExtends(TemplateText, LocalContext);   // Use LocalContext
+    TemplateText := EvaluateForBlocks(TemplateText, LocalContext); // Use LocalContext
+    TemplateText := EvaluateIncludes(TemplateText, LocalContext);  // Use LocalContext
+    TemplateText := EvaluateWithBlocks(TemplateText, LocalContext); // Use LocalContext
+    TemplateText := EvaluateIfBlocks(TemplateText, LocalContext);   // Use LocalContext
+    TemplateText := ReplaceContextVariables(TemplateText, LocalContext); // Use LocalContext
 
     Result := TemplateText;
   finally

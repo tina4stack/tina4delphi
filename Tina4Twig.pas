@@ -30,8 +30,10 @@ type
     function RemoveComments(const Template: String): String;
     function ParseVariableDict(const DictStr: String; OuterContext: TDictionary<String,TValue>): TDictionary<String,TValue>;
     function RenderInternal(const TemplateOrContent: String; Context: TStringDict): String;
-    function ResolveVariablePath(const VariablePath: string): TValue;
+    function ResolveVariablePath(const VariablePath: string; Context: TDictionary<String, TValue>): TValue;
     function Contains(const Left, Right: TValue): Boolean;
+    function ValuesAreEqual(const A, B: TValue): Boolean;
+    function ToBool(const Value: TValue): Boolean;
   public
     constructor Create(const TemplatePath: String = '');
     destructor Destroy; override;
@@ -161,7 +163,12 @@ begin
 end;
 
 destructor TTina4Twig.Destroy;
+var
+  pair: TPair<String, TValue>;
 begin
+  for pair in FContext do
+    if pair.Value.IsObject and (pair.Value.AsObject is TDictionary<String, TValue>) then
+      pair.Value.AsObject.Free;
 
   FFilters.Free;
   FFunctions.Free;
@@ -182,6 +189,37 @@ begin
   Result := Regex.Replace(Template, '');
 end;
 
+
+function TTina4Twig.ValuesAreEqual(const A, B: TValue): Boolean;
+begin
+  if A.IsEmpty and B.IsEmpty then
+    Exit(True);
+
+  if A.IsEmpty <> B.IsEmpty then
+    Exit(False);
+
+  if A.Kind <> B.Kind then
+  begin
+    if A.IsOrdinal and B.IsOrdinal then
+      Result := A.AsExtended = B.AsExtended
+    else
+      Result := False;
+    Exit;
+  end;
+
+  case A.Kind of
+    tkInteger, tkInt64, tkEnumeration:
+      Result := A.AsInt64 = B.AsInt64;
+    tkFloat:
+      Result := Abs(A.AsExtended - B.AsExtended) < 1E-12;
+    tkString, tkLString, tkWString, tkUString:
+      Result := A.AsString = B.AsString;
+    tkClass:
+      Result := A.AsObject = B.AsObject;
+  else
+    Result := False;
+  end;
+end;
 
 function TTina4Twig.Contains(const Left, Right: TValue): Boolean;
 var
@@ -211,6 +249,35 @@ begin
 end;
 
 
+function TTina4Twig.ToBool(const Value: TValue): Boolean;
+begin
+  if Value.IsEmpty then
+    Exit(False);
+
+  case Value.Kind of
+    tkInteger, tkInt64:
+      Result := Value.AsInt64 <> 0;
+    tkFloat:
+      Result := Value.AsExtended <> 0.0;
+    tkString, tkLString, tkWString, tkUString:
+      Result := (Value.AsString <> '') and (Value.AsString <> '0');
+    tkEnumeration:
+      Result := Value.AsBoolean;
+    tkDynArray, tkArray:
+      Result := Value.GetArrayLength > 0;
+    tkClass:
+      Result := Value.AsObject <> nil;
+    tkRecord: // Assuming dict as record or custom
+      if Value.TypeInfo = TypeInfo(TDictionary<String, TValue>) then
+        Result := TDictionary<String, TValue>(Value.AsObject).Count > 0
+      else
+        Result := True; // or handle other records
+  else
+    Result := False;
+  end;
+end;
+
+
 function TTina4Twig.EvaluateIfBlocks(const Template: String; Context: TDictionary<String, TValue>): String;
 var
   Regex: TRegEx;
@@ -218,7 +285,7 @@ var
   FullMatch, VarName, Op, ValueRaw, IfContent, ElseContent, Replacement: String;
   VarValue, CompareValue: TValue;
   HasCondition: Boolean;
-  IsEqual: Boolean;
+  Condition: Boolean;
 
   function TrimQuotes(const S: String): String;
   begin
@@ -248,57 +315,29 @@ var
     if TryStrToFloat(S, FloatVal) then
       Exit(TValue.From<Double>(FloatVal));
 
-    // Fallback as string
+    if Context.TryGetValue(S, Result) then
+      Exit;
+
     Exit(TValue.From<string>(S));
   end;
-
-  function ValuesAreEqual(const A, B: TValue): Boolean;
-  begin
-    if A.Kind <> B.Kind then
-    begin
-      // Optionally try to compare numeric types even if kind differs
-      if (A.IsOrdinal) and (B.IsOrdinal) then
-        Result := A.AsExtended = B.AsExtended
-      else
-        Result := False;
-      Exit;
-    end;
-
-    case A.Kind of
-      tkInteger, tkInt64, tkEnumeration:
-        Result := A.AsInt64 = B.AsInt64;
-      tkFloat:
-        Result := Abs(A.AsExtended - B.AsExtended) < 1E-12;
-      tkString, tkLString, tkWString, tkUString:
-        Result := A.AsString = B.AsString;
-      tkClass:
-        Result := A.AsObject = B.AsObject;
-    else
-      Result := False;
-    end;
-  end;
-
 
 begin
   Result := Template;
   Regex := TRegEx.Create(
-    '{%\s*if\s+([\w\.]+)(\s*(==|!=)\s*(".*?"|''.*?''|\d+(\.\d+)?|true|false))?\s*%}(.*?)({%\s*else\s*%}(.*?))?{%\s*endif\s*%}',
+    '{%\s*if\s+([\w\.]+)(\s*(==|!=|<|>|<=|>=|in|not in|starts with|ends with|matches)\s*(".*?"|''.*?''|\d+(\.\d+)?|true|false|\w+))?\s*%}(.*?)({%\s*else\s*%}(.*?))?{%\s*endif\s*%}',
     [roSingleLine, roIgnoreCase]);
 
-  while True do
+  Match := Regex.Match(Result);
+  while Match.Success do
   begin
-    Match := Regex.Match(Result);
-    if not Match.Success then
-      Break;
-
     FullMatch := Match.Value;
     VarName := Match.Groups[1].Value;
-
     HasCondition := Match.Groups[2].Success;
+
     if HasCondition then
     begin
-      Op := Match.Groups[3].Value;
-      ValueRaw := Match.Groups[4].Value;
+      Op := Match.Groups[3].Value.ToLower;
+      ValueRaw := Trim(Match.Groups[4].Value);
       ValueRaw := TrimQuotes(ValueRaw);
       CompareValue := ParseValue(ValueRaw);
     end
@@ -308,55 +347,51 @@ begin
       CompareValue := TValue.Empty;
     end;
 
-    if Op = '' then
-    begin
-      HasCondition := False;
-    end;
-
     IfContent := Match.Groups[6].Value;
     ElseContent := '';
     if Match.Groups[7].Success then
       ElseContent := Match.Groups[8].Value;
 
-    // Resolve VarValue from Context dictionary with nested properties if needed
-    if not Context.TryGetValue(VarName, VarValue) then
-    begin
-      // or just consider it false
-      VarValue := TValue.Empty;
-    end;
+    VarValue := ResolveVariablePath(VarName, Context);
 
     if not HasCondition then
-    begin
-      // Treat VarValue as boolean
-      if VarValue.IsEmpty then
-        IsEqual := False
-      else if VarValue.Kind = tkString then
-        IsEqual := (VarValue.AsString.ToLower = 'true')
-      else if VarValue.Kind = tkInteger then
-        IsEqual := VarValue.AsInteger <> 0
-      else if VarValue.Kind = tkFloat then
-        IsEqual := VarValue.AsExtended <> 0.0
-      else if VarValue.Kind = tkEnumeration then
-        IsEqual := VarValue.AsBoolean
-      else if VarValue.IsObject then
-        IsEqual := True // non-nil object considered true
+      Condition := ToBool(VarValue)
+
       else
-        IsEqual := False;
-    end
-    else
     begin
       if Op = '==' then
-        IsEqual := ValuesAreEqual(VarValue, CompareValue)
-      else if Op = '!=' then
-        IsEqual := not ValuesAreEqual(VarValue, CompareValue);
+          Condition := ValuesAreEqual(VarValue, CompareValue)
+        else if Op = '!=' then
+          Condition := not ValuesAreEqual(VarValue, CompareValue)
+        else if Op = '<' then
+          Condition := (VarValue.IsOrdinal and CompareValue.IsOrdinal) and (VarValue.AsExtended < CompareValue.AsExtended)
+        else if Op = '>' then
+          Condition := (VarValue.IsOrdinal and CompareValue.IsOrdinal) and (VarValue.AsExtended > CompareValue.AsExtended)
+        else if Op = '<=' then
+          Condition := (VarValue.IsOrdinal and CompareValue.IsOrdinal) and (VarValue.AsExtended <= CompareValue.AsExtended)
+        else if Op = '>=' then
+          Condition := (VarValue.IsOrdinal and CompareValue.IsOrdinal) and (VarValue.AsExtended >= CompareValue.AsExtended)
+        else if Op = 'in' then
+          Condition := Contains(VarValue, CompareValue)
+        else if Op = 'not in' then
+          Condition := not Contains(VarValue, CompareValue)
+        else if Op = 'starts with' then
+          Condition := (VarValue.Kind in [tkString, tkUString]) and (CompareValue.Kind in [tkString, tkUString]) and VarValue.AsString.StartsWith(CompareValue.AsString)
+        else if Op = 'ends with' then
+          Condition := (VarValue.Kind in [tkString, tkUString]) and (CompareValue.Kind in [tkString, tkUString]) and VarValue.AsString.EndsWith(CompareValue.AsString)
+        else if Op = 'matches' then
+          Condition := (VarValue.Kind in [tkString, tkUString]) and (CompareValue.Kind in [tkString, tkUString]) and TRegEx.IsMatch(VarValue.AsString, CompareValue.AsString)
+        else
+          Condition := False;
     end;
 
-    if IsEqual then
+    if Condition then
       Replacement := IfContent
     else
       Replacement := ElseContent;
 
-    Result := Result.Replace(FullMatch, Replacement, [rfReplaceAll]);
+    Result := StringReplace(Result, FullMatch, Replacement, [rfReplaceAll]);
+    Match := Match.NextMatch;
   end;
 end;
 
@@ -365,7 +400,8 @@ function TTina4Twig.ReplaceContextVariables(const Template: String; Context: TDi
 var
   Regex: TRegEx;
   Match: TMatch;
-  FullMatch, VarName, FilterChain, FuncName, ArgsStr: String;
+  FullMatch, Expr: String;
+  FuncName, ArgsStr: String;
   Args: TArray<String>;
   TempVal: TValue;
   Func: TFunctionFunc;
@@ -373,7 +409,7 @@ var
   FilteredValue: String;
 begin
   Result := Template;
-  Regex := TRegEx.Create('{{\s*([\w\.]+(?:\s*\|\s*\w+(?:\s*\([^)]*\))?)*)\s*}}', [roSingleLine, roIgnoreCase]);
+  Regex := TRegEx.Create('{{\s*([^}]+)\s*}}', [roSingleLine, roIgnoreCase]);
 
   while True do
   begin
@@ -382,90 +418,155 @@ begin
       Break;
 
     FullMatch := Match.Value;
-    VarName := Trim(Match.Groups[1].Value);
+    Expr := Trim(Match.Groups[1].Value);
 
-    // Split into variable path and filter chain
-    if VarName.Contains('|') then
+    // Check if it's a function call like func(arg1, arg2)
+    if (Pos('(', Expr) > 0) and Expr.EndsWith(')') then
     begin
-      var Parts := VarName.Split(['|'], TStringSplitOptions.ExcludeEmpty);
-      VarName := Trim(Parts[0]);
-      FilterChain := Trim(Parts[1]);
+      FuncName := Trim(Copy(Expr, 1, Pos('(', Expr) - 1));
+      ArgsStr := Copy(Expr, Pos('(', Expr) + 1, Length(Expr) - Pos('(', Expr) - 1);
+      Args := ArgsStr.Split([','], TStringSplitOptions.ExcludeEmpty);
+      for var I := 0 to High(Args) do
+        Args[I] := Trim(Args[I].Replace('"', '').Replace('''', '')); // Simple trim quotes
 
-      // Resolve the initial variable
-      if Context.TryGetValue(VarName, TempVal) or not TempVal.IsEmpty then
+      if FFunctions.TryGetValue(FuncName, Func) then
       begin
-        FilteredValue := TempVal.ToString;
-
-        // Apply filters
-        var Filters := FilterChain.Split([' '], TStringSplitOptions.ExcludeEmpty);
-        for var FilterName in Filters do
-        begin
-          if FilterName.Contains('(') and FilterName.EndsWith(')') then
-          begin
-            FuncName := Copy(FilterName, 1, Pos('(', FilterName) - 1);
-            ArgsStr := Copy(FilterName, Pos('(', FilterName) + 1, Length(FilterName) - Pos('(', FilterName) - 1);
-            Args := ArgsStr.Split([','], TStringSplitOptions.ExcludeEmpty);
-            for var I := 0 to High(Args) do
-              Args[I] := Trim(Args[I]);
-          end
-          else
-          begin
-            FuncName := FilterName;
-            SetLength(Args, 0);
-          end;
-
-          if FFilters.TryGetValue(FuncName, Filter) then
-            FilteredValue := Filter(FilteredValue, Args)
-          else
-            FilteredValue := '(filter ' + FuncName + ' not found)';
-        end;
+        FilteredValue := Func(Args, Context);
       end
       else
-        FilteredValue := '(not found)';
+        FilteredValue := '(function ' + FuncName + ' not found)';
     end
     else
     begin
-      // No filter, resolve variable directly
-      if Context.TryGetValue(VarName, TempVal) then
-        FilteredValue := TempVal.ToString
+      // Existing variable with filters logic
+      if Expr.Contains('|') then
+      begin
+        var Parts := Expr.Split(['|'], TStringSplitOptions.ExcludeEmpty);
+        var VarName := Trim(Parts[0]);
+        var FilterChain := '';
+        for var i := 1 to High(Parts) do
+          FilterChain := FilterChain + '|' + Trim(Parts[i]);
+
+        // Resolve the initial variable
+        TempVal := ResolveVariablePath(VarName, Context);
+
+        if not TempVal.IsEmpty then
+        begin
+          FilteredValue := TempVal.ToString;
+
+          // Apply filters
+          var Filters := FilterChain.TrimLeft(['|']).Split(['|'], TStringSplitOptions.ExcludeEmpty);
+          for var FilterExp in Filters do
+          begin
+            var FilterExpr := Trim(FilterExp);
+            if FilterExpr.Contains('(') and FilterExpr.EndsWith(')') then
+            begin
+              FuncName := Copy(FilterExpr, 1, Pos('(', FilterExpr) - 1);
+              ArgsStr := Copy(FilterExpr, Pos('(', FilterExpr) + 1, Length(FilterExpr) - Pos('(', FilterExpr) - 1);
+              Args := ArgsStr.Split([','], TStringSplitOptions.ExcludeEmpty);
+              for var I := 0 to High(Args) do
+                Args[I] := Trim(Args[I]);
+            end
+            else
+            begin
+              FuncName := FilterExpr;
+              SetLength(Args, 0);
+            end;
+
+            if FFilters.TryGetValue(FuncName, Filter) then
+              FilteredValue := Filter(FilteredValue, Args)
+            else
+              FilteredValue := '(filter ' + FuncName + ' not found)';
+          end;
+        end
+        else
+          FilteredValue := '(not found)';
+      end
       else
-        FilteredValue := ResolveVariablePath(VarName).ToString;
-      if FilteredValue = '' then
-        FilteredValue := '(not found)';
+      begin
+        // No filter, resolve variable directly
+        TempVal := ResolveVariablePath(Expr, Context);
+        if not TempVal.IsEmpty then
+          FilteredValue := TempVal.ToString
+        else
+          FilteredValue := '(not found)';
+      end;
     end;
 
     Result := StringReplace(Result, FullMatch, FilteredValue, [rfReplaceAll]);
   end;
 end;
 
-function TTina4Twig.ResolveVariablePath(const VariablePath: string): TValue;
+function TTina4Twig.ResolveVariablePath(const VariablePath: string; Context: TDictionary<String, TValue>): TValue;
 var
   Parts: TArray<string>;
   Current: TValue;
   i: Integer;
   Key: string;
   Dict: TDictionary<String, TValue>;
+  Arr: TArray<TValue>;
+  Index: Integer;
+  RttiCtx: TRttiContext;
+  RttiType: TRttiType;
+  Prop: TRttiProperty;
 begin
   Parts := VariablePath.Split(['.']);
-
   if Length(Parts) = 0 then
     Exit(TValue.Empty);
 
-  if not FContext.TryGetValue(Parts[0], Current) then
+  if not Context.TryGetValue(Parts[0], Current) then
     Exit(TValue.Empty);
 
   for i := 1 to High(Parts) do
   begin
     Key := Parts[i];
 
-    if (Current.Kind = tkClass) and (Current.AsObject <> nil) and
-       (Current.AsObject is TDictionary<String, TValue>) then
+    if Current.IsObject and (Current.AsObject is TDictionary<String, TValue>) then
     begin
       Dict := TDictionary<String, TValue>(Current.AsObject);
-      if Dict.TryGetValue(Key, Current) then
-        Continue
+      if not Dict.TryGetValue(Key, Current) then
+        Exit(TValue.Empty);
+    end
+    else if Current.IsArray then
+    begin
+      if TryStrToInt(Key, Index) then
+      begin
+        Arr := Current.AsType<TArray<TValue>>;
+        if (Index >= 0) and (Index < Length(Arr)) then
+          Current := Arr[Index]
+        else
+          Exit(TValue.Empty);
+      end
       else
         Exit(TValue.Empty);
+    end
+    else if Current.IsObject then
+    begin
+      RttiCtx := TRttiContext.Create;
+      try
+        RttiType := RttiCtx.GetType(Current.TypeInfo);
+        Prop := RttiType.GetProperty(Key);
+        if Assigned(Prop) then
+          Current := Prop.GetValue(Current.AsObject)
+        else
+          Exit(TValue.Empty);
+      finally
+        RttiCtx.Free;
+      end;
+    end
+    else if Current.Kind = tkRecord then
+    begin
+      RttiCtx := TRttiContext.Create;
+      try
+        RttiType := RttiCtx.GetType(Current.TypeInfo);
+        Prop := RttiType.GetProperty(Key);
+        if Assigned(Prop) then
+          Current := Prop.GetValue(Current.GetReferenceToRawData)
+        else
+          Exit(TValue.Empty);
+      finally
+        RttiCtx.Free;
+      end;
     end
     else
       Exit(TValue.Empty);

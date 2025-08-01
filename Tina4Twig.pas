@@ -1052,7 +1052,7 @@ function TTina4Twig.EvaluateForBlocks(const Template: String; Context: TDictiona
 var
   Regex: TRegEx;
   Match: TMatch;
-  FullMatch, VarName, ListExpr, BlockContent, Output, ArrayContent: String;
+  FullMatch, VarName, ListExpr, BlockContent, ElseContent, Output, ArrayContent: String;
   Items: TArray<TDictionary<String, TValue>>;
   Item: TDictionary<String, TValue>;
   MergedContext: TDictionary<String, TValue>;
@@ -1061,11 +1061,13 @@ var
   I: Integer;
   Value: TValue;
   ValueArray: TArray<TValue>;
-  JSONArray : TJSONArray;
-
+  JSONArray: TJSONArray;
 begin
   Result := Template;
-  Regex := TRegEx.Create('{%\s*for\s+(\w+)\s+in\s+((?:\[[^\]]*\])|\w+)\s*%}(.*?){%\s*endfor\s*%}', [roSingleLine, roIgnoreCase]);
+  // Updated regex to capture optional {% else %} block
+  Regex := TRegEx.Create(
+    '{%\s*for\s+(\w+)\s+in\s+((?:\[[^\]]*\])|\w+)\s*%}(.*?)({%\s*else\s*%}(.*?))?{%\s*endfor\s*%}',
+    [roSingleLine, roIgnoreCase]);
 
   while True do
   begin
@@ -1076,7 +1078,10 @@ begin
     FullMatch := Match.Value;
     VarName := Match.Groups[1].Value.Trim;
     ListExpr := Match.Groups[2].Value.Trim;
-    BlockContent := Match.Groups[3].Value;
+    BlockContent := Match.Groups[3].Value.Trim;
+    ElseContent := '';
+    if Match.Groups.Count > 5 then
+      ElseContent := Match.Groups[5].Value.Trim;
     Output := '';
     Items := nil;
 
@@ -1116,9 +1121,9 @@ begin
         SetLength(Items, 1);
         Items[0] := Value.AsType<TDictionary<String, TValue>>;
       end
-      else if Value.IsType<TJsonArray> then
+      else if Value.IsType<TJSONArray> then
       begin
-        JSONArray := Value.AsType<TJsonArray>;
+        JSONArray := Value.AsType<TJSONArray>;
         SetLength(Items, JSONArray.Count);
         for I := 0 to JSONArray.Count-1 do
         begin
@@ -1127,68 +1132,71 @@ begin
           Items[I] := Item;
         end;
       end;
+    end;
 
+    if (Items = nil) or (Length(Items) = 0) then
+    begin
+      // If no items, render the else block if it exists
+      if ElseContent <> '' then
+        Output := RenderInternal(ElseContent, Context);
     end
-      else
-    begin
-      Result := StringReplace(Result, FullMatch, '', [rfReplaceAll]);
-      Continue;
-    end;
-
-    for Item in Items do
-    begin
-      var subDict: TDictionary<String, TValue> := nil;
-      MergedContext := TDictionary<String, TValue>.Create;
-      try
-        for Pair in Context do
-          MergedContext.AddOrSetValue(Pair.Key, Pair.Value);
-        for Pair in Item do
-        begin
-          if Pair.Key = VarName then
-            if Pair.Value.IsType<TJSONObject> then
-            begin
-              var jsonObj := Pair.Value.AsType<TJSONObject>;
-              subDict := TDictionary<String, TValue>.Create;
-              for var jsonPair: TJSONPair in jsonObj do
-              begin
-                var val: TValue;
-                if jsonPair.JsonValue is TJSONNumber then
-                begin
-                  var numStr := jsonPair.JsonValue.Value;
-                  if (Pos('.', numStr) > 0) or (Pos('e', LowerCase(numStr)) > 0) then
-                    val := TValue.From<Double>((jsonPair.JsonValue as TJSONNumber).AsDouble)
-                  else
-                    val := TValue.From<Int64>((jsonPair.JsonValue as TJSONNumber).AsInt64);
-                end
-                else if jsonPair.JsonValue is TJSONBool then
-                  val := TValue.From<Boolean>((jsonPair.JsonValue as TJSONBool).AsBoolean)
-                else if jsonPair.JsonValue is TJSONString then
-                  val := TValue.From<String>(jsonPair.JsonValue.Value)
-                else if jsonPair.JsonValue is TJSONNull then
-                  val := TValue.Empty
-                else
-                  val := TValue.From<String>(jsonPair.JsonValue.ToString);
-                subDict.AddOrSetValue(jsonPair.JsonString.Value, val);
-              end;
-              MergedContext.AddOrSetValue(VarName, TValue.From<TDictionary<String,TValue>>(subDict));
-            end
-            else
-              MergedContext.AddOrSetValue(VarName, Pair.Value)
-          else
-            MergedContext.AddOrSetValue(Pair.Key, Pair.Value);
-        end;
-        Output := Output + Self.RenderInternal(BlockContent, MergedContext);
-      finally
-        if subDict <> nil then
-          subDict.Free;
-        MergedContext.Free;
-      end;
-    end;
-
-    if ListExpr.StartsWith('[') or (Context.ContainsKey(ListExpr) and Value.IsArray) then
+    else
     begin
       for Item in Items do
-        Item.Free;
+      begin
+        var subDict: TDictionary<String, TValue> := nil;
+        MergedContext := TDictionary<String, TValue>.Create;
+        try
+          for Pair in Context do
+            MergedContext.AddOrSetValue(Pair.Key, Pair.Value);
+          for Pair in Item do
+          begin
+            if Pair.Key = VarName then
+              if Pair.Value.IsType<TJSONObject> then
+              begin
+                var jsonObj := Pair.Value.AsType<TJSONObject>;
+                subDict := TDictionary<String, TValue>.Create;
+                for var jsonPair: TJSONPair in jsonObj do
+                begin
+                  var val: TValue;
+                  if jsonPair.JsonValue is TJSONNumber then
+                  begin
+                    var numStr := jsonPair.JsonValue.Value;
+                    if (Pos('.', numStr) > 0) or (Pos('e', LowerCase(numStr)) > 0) then
+                      val := TValue.From<Double>((jsonPair.JsonValue as TJSONNumber).AsDouble)
+                    else
+                      val := TValue.From<Int64>((jsonPair.JsonValue as TJSONNumber).AsInt64);
+                  end
+                  else if jsonPair.JsonValue is TJSONBool then
+                    val := TValue.From<Boolean>((jsonPair.JsonValue as TJSONBool).AsBoolean)
+                  else if jsonPair.JsonValue is TJSONString then
+                    val := TValue.From<String>(jsonPair.JsonValue.Value)
+                  else if jsonPair.JsonValue is TJSONNull then
+                    val := TValue.Empty
+                  else
+                    val := TValue.From<String>(jsonPair.JsonValue.ToString);
+                  subDict.AddOrSetValue(jsonPair.JsonString.Value, val);
+                end;
+                MergedContext.AddOrSetValue(VarName, TValue.From<TDictionary<String,TValue>>(subDict));
+              end
+              else
+                MergedContext.AddOrSetValue(VarName, Pair.Value)
+            else
+              MergedContext.AddOrSetValue(Pair.Key, Pair.Value);
+          end;
+          Output := Output + Self.RenderInternal(BlockContent, MergedContext);
+        finally
+          if subDict <> nil then
+            subDict.Free;
+          MergedContext.Free;
+        end;
+      end;
+
+      if ListExpr.StartsWith('[') or (Context.ContainsKey(ListExpr) and Value.IsArray) then
+      begin
+        for Item in Items do
+          Item.Free;
+      end;
     end;
 
     Result := StringReplace(Result, FullMatch, Output, [rfReplaceAll]);
@@ -1197,25 +1205,28 @@ end;
 
 
 
-
-
 function TTina4Twig.EvaluateExtends(const Template: String; Context: TDictionary<String, TValue>): String;
 var
   ExtendRegex, BlockRegex: TRegEx;
   Match, BlockMatch: TMatch;
   ParentTemplateName, BaseTemplate, BlockName, BlockContent: String;
-  Blocks: TDictionary<String, String>;
+  ChildBlocks, BaseBlocks: TDictionary<String, String>;
 
   function ReplaceBlockInTemplate(const TemplateText, BlockName, NewContent: String): String;
   var
     Regex: TRegEx;
+    MatchBlock: TMatch;
   begin
-    // Replace {% block blockname %} ... {% endblock %} with NewContent
+    // Replace {% block blockname %} ... {% endblock %} with NewContent, fall back to default if no match
     Regex := TRegEx.Create(
-      '{%\s*block\s+' + TRegEx.Escape(BlockName) + '\s*%}.*?{%\s*endblock\s*%}',
+      '{%\s*block\s+' + TRegEx.Escape(BlockName) + '\s*%}(.*?){%\s*endblock\s*%}',
       [roSingleLine, roIgnoreCase]
     );
-    Result := Regex.Replace(TemplateText, NewContent);
+    MatchBlock := Regex.Match(TemplateText);
+    if MatchBlock.Success then
+      Result := Regex.Replace(TemplateText, NewContent)
+    else
+      Result := TemplateText; // Retain original template with default content
   end;
 
 begin
@@ -1236,7 +1247,7 @@ begin
   BaseTemplate := LoadTemplate(ParentTemplateName);
 
   // Collect blocks from child template (without extends)
-  Blocks := TDictionary<String, String>.Create;
+  ChildBlocks := TDictionary<String, String>.Create;
   try
     BlockRegex := TRegEx.Create('{%\s*block\s+(\w+)\s*%}(.*?){%\s*endblock\s*%}', [roSingleLine, roIgnoreCase]);
     BlockMatch := BlockRegex.Match(ChildTemplateWithoutExtends);
@@ -1244,20 +1255,35 @@ begin
     begin
       BlockName := BlockMatch.Groups[1].Value;
       BlockContent := BlockMatch.Groups[2].Value.Trim;
-      Blocks.AddOrSetValue(BlockName, BlockContent);
+      ChildBlocks.AddOrSetValue(BlockName, BlockContent);
       BlockMatch := BlockMatch.NextMatch;
     end;
 
-    // Replace blocks in base template with child's block content
-    for BlockName in Blocks.Keys do
+    // Collect blocks from base template
+    BaseBlocks := TDictionary<String, String>.Create;
+    BlockMatch := BlockRegex.Match(BaseTemplate);
+    while BlockMatch.Success do
     begin
-      BlockContent := Blocks[BlockName];
+      BlockName := BlockMatch.Groups[1].Value;
+      BlockContent := BlockMatch.Groups[2].Value.Trim;
+      BaseBlocks.AddOrSetValue(BlockName, BlockContent);
+      BlockMatch := BlockMatch.NextMatch;
+    end;
+
+    // Replace blocks in base template with child's block content if available, otherwise use base default
+    for BlockName in BaseBlocks.Keys do
+    begin
+      if ChildBlocks.ContainsKey(BlockName) then
+        BlockContent := ChildBlocks[BlockName]
+      else
+        BlockContent := BaseBlocks[BlockName];
       BaseTemplate := ReplaceBlockInTemplate(BaseTemplate, BlockName, BlockContent);
     end;
 
     Result := BaseTemplate;
   finally
-    Blocks.Free;
+    ChildBlocks.Free;
+    BaseBlocks.Free;
   end;
 end;
 

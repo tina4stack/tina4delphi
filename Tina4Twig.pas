@@ -34,6 +34,7 @@ type
     function Contains(const Left, Right: TValue): Boolean;
     function ValuesAreEqual(const A, B: TValue): Boolean;
     function ToBool(const Value: TValue): Boolean;
+    procedure DumpValue(const Value: TValue; List: TStringList; const Indent: String);
   public
     constructor Create(const TemplatePath: String = '');
     destructor Destroy; override;
@@ -85,12 +86,9 @@ begin
   FFunctions.Add('dump',
   function(const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
   var
-    I, J: Integer;
+    I: Integer;
     DumpResult: TStringList;
     Value: TValue;
-    Arr: TArray<TValue>;
-    Dict: TDictionary<String, TValue>;
-    Pair: TPair<String, TValue>;
   begin
     DumpResult := TStringList.Create;
     try
@@ -105,26 +103,8 @@ begin
           Continue;
         end;
 
-        if Value.IsArray then
-        begin
-          DumpResult.Add(Args[I] + ' = [');
-          Arr := Value.AsType<TArray<TValue>>;
-          for J := 0 to High(Arr) do
-            DumpResult.Add('  [' + IntToStr(J) + '] = ' + Arr[J].ToString);
-          DumpResult.Add(']');
-        end
-        else if Value.IsObject and (Value.AsObject is TDictionary<String, TValue>) then
-        begin
-          Dict := TDictionary<String, TValue>(Value.AsObject);
-          DumpResult.Add(Args[I] + ' = {');
-          for Pair in Dict do
-            DumpResult.Add('  ' + Pair.Key + ': ' + Pair.Value.ToString);
-          DumpResult.Add('}');
-        end
-        else
-        begin
-          DumpResult.Add(Args[I] + ' = ' + Value.ToString);
-        end;
+        DumpResult.Add(Args[I] + ' =');
+        DumpValue(Value, DumpResult, '  ');
       end;
 
       Result := '<pre>' + DumpResult.Text + '</pre>';
@@ -177,6 +157,68 @@ begin
   inherited;
 end;
 
+procedure TTina4Twig.DumpValue(const Value: TValue; List: TStringList; const Indent: String);
+var
+  Arr: TArray<TValue>;
+  Dict: TDictionary<String, TValue>;
+  Pair: TPair<String, TValue>;
+  J: Integer;
+begin
+  if Value.IsEmpty then
+  begin
+    List.Add(Indent + 'NULL');
+    Exit;
+  end;
+
+  case Value.Kind of
+    tkInteger, tkInt64:
+      List.Add(Indent + 'int(' + Value.ToString + ')');
+    tkFloat:
+      List.Add(Indent + 'float(' + FloatToStr(Value.AsExtended) + ')');
+    tkString, tkLString, tkWString, tkUString:
+      List.Add(Indent + 'string(' + IntToStr(Length(Value.AsString)) + ') "' + Value.AsString + '"');
+    tkEnumeration:
+      if Value.TypeInfo = TypeInfo(Boolean) then
+        if Value.AsBoolean then
+        begin
+          List.Add(Indent + 'bool(true)');
+        end
+          else
+        begin
+          List.Add(Indent + 'bool(false)');
+        end
+      else
+        List.Add(Indent + Value.ToString);
+    tkDynArray, tkArray:
+      begin
+        Arr := Value.AsType<TArray<TValue>>;
+        List.Add(Indent + 'array(' + IntToStr(Length(Arr)) + ') {');
+        for J := 0 to High(Arr) do
+        begin
+          List.Add(Indent + '  [' + IntToStr(J) + ']=>');
+          DumpValue(Arr[J], List, Indent + '    ');
+        end;
+        List.Add(Indent + '}');
+      end;
+    tkClass:
+      if Value.AsObject is TDictionary<String, TValue> then
+      begin
+        Dict := Value.AsType<TDictionary<String, TValue>>;
+        List.Add(Indent + 'array(' + IntToStr(Dict.Count) + ') {');
+        for Pair in Dict do
+        begin
+          List.Add(Indent + '  ["' + Pair.Key + '"]=>');
+          DumpValue(Pair.Value, List, Indent + '    ');
+        end;
+        List.Add(Indent + '}');
+      end
+      else
+        List.Add(Indent + 'object(' + Value.AsObject.ClassName + ')#' + IntToStr(Integer(Pointer(Value.AsObject))) + ' {}');
+    else
+      List.Add(Indent + Value.ToString);
+  end;
+end;
+
 
 function TTina4Twig.RemoveComments(const Template: String): String;
 var
@@ -198,20 +240,10 @@ begin
   if A.IsEmpty <> B.IsEmpty then
     Exit(False);
 
-  if A.Kind <> B.Kind then
-  begin
-    if A.IsOrdinal and B.IsOrdinal then
-      Result := A.AsExtended = B.AsExtended
-    else
-      Result := False;
-    Exit;
-  end;
+  if A.IsOrdinal and B.IsOrdinal then
+    Exit(Abs(A.AsExtended - B.AsExtended) < 1E-12);
 
   case A.Kind of
-    tkInteger, tkInt64, tkEnumeration:
-      Result := A.AsInt64 = B.AsInt64;
-    tkFloat:
-      Result := Abs(A.AsExtended - B.AsExtended) < 1E-12;
     tkString, tkLString, tkWString, tkUString:
       Result := A.AsString = B.AsString;
     tkClass:
@@ -349,40 +381,43 @@ begin
 
     IfContent := Match.Groups[6].Value;
     ElseContent := '';
-    if Match.Groups[7].Success then
-      ElseContent := Match.Groups[8].Value;
+    if Match.Groups.Count > 7  then
+    begin
+      if Match.Groups[7].Success then
+        ElseContent := Match.Groups[8].Value;
+    end;
 
     VarValue := ResolveVariablePath(VarName, Context);
 
-    if not HasCondition then
+    if not HasCondition or (Op = '') then
       Condition := ToBool(VarValue)
-
-      else
+    else
     begin
       if Op = '==' then
-          Condition := ValuesAreEqual(VarValue, CompareValue)
-        else if Op = '!=' then
-          Condition := not ValuesAreEqual(VarValue, CompareValue)
-        else if Op = '<' then
-          Condition := (VarValue.IsOrdinal and CompareValue.IsOrdinal) and (VarValue.AsExtended < CompareValue.AsExtended)
-        else if Op = '>' then
-          Condition := (VarValue.IsOrdinal and CompareValue.IsOrdinal) and (VarValue.AsExtended > CompareValue.AsExtended)
-        else if Op = '<=' then
-          Condition := (VarValue.IsOrdinal and CompareValue.IsOrdinal) and (VarValue.AsExtended <= CompareValue.AsExtended)
-        else if Op = '>=' then
-          Condition := (VarValue.IsOrdinal and CompareValue.IsOrdinal) and (VarValue.AsExtended >= CompareValue.AsExtended)
-        else if Op = 'in' then
-          Condition := Contains(VarValue, CompareValue)
-        else if Op = 'not in' then
-          Condition := not Contains(VarValue, CompareValue)
-        else if Op = 'starts with' then
-          Condition := (VarValue.Kind in [tkString, tkUString]) and (CompareValue.Kind in [tkString, tkUString]) and VarValue.AsString.StartsWith(CompareValue.AsString)
-        else if Op = 'ends with' then
-          Condition := (VarValue.Kind in [tkString, tkUString]) and (CompareValue.Kind in [tkString, tkUString]) and VarValue.AsString.EndsWith(CompareValue.AsString)
-        else if Op = 'matches' then
-          Condition := (VarValue.Kind in [tkString, tkUString]) and (CompareValue.Kind in [tkString, tkUString]) and TRegEx.IsMatch(VarValue.AsString, CompareValue.AsString)
-        else
-          Condition := False;
+        Condition := ValuesAreEqual(VarValue, CompareValue)
+      else if Op = '!=' then
+        Condition := not ValuesAreEqual(VarValue, CompareValue)
+      else if Op = '<' then
+        Condition := (VarValue.IsOrdinal and CompareValue.IsOrdinal) and (VarValue.AsExtended < CompareValue.AsExtended)
+      else if Op = '>' then
+        Condition := (VarValue.IsOrdinal and CompareValue.IsOrdinal) and (VarValue.AsExtended > CompareValue.AsExtended)
+      else if Op = '<=' then
+        Condition := (VarValue.IsOrdinal and CompareValue.IsOrdinal) and (VarValue.AsExtended <= CompareValue.AsExtended)
+      else if Op = '>=' then
+        Condition := (VarValue.IsOrdinal and CompareValue.IsOrdinal) and (VarValue.AsExtended >= CompareValue.AsExtended)
+      else if Op = 'in' then
+        Condition := Contains(VarValue, CompareValue)
+      else if Op = 'not in' then
+        Condition := not Contains(VarValue, CompareValue)
+      else if Op = 'starts with' then
+        Condition := (VarValue.Kind in [tkString, tkUString]) and (CompareValue.Kind in [tkString, tkUString]) and VarValue.AsString.StartsWith(CompareValue.AsString)
+      else if Op = 'ends with' then
+        Condition := (VarValue.Kind in [tkString, tkUString]) and (CompareValue.Kind in [tkString, tkUString]) and VarValue.AsString.EndsWith(CompareValue.AsString)
+      else if Op = 'matches' then
+        Condition := (VarValue.Kind in [tkString, tkUString]) and (CompareValue.Kind in [tkString, tkUString]) and TRegEx.IsMatch(VarValue.AsString, CompareValue.AsString)
+      else
+        Condition := False;
+
     end;
 
     if Condition then
@@ -848,9 +883,35 @@ begin
         for I := 0 to High(Items) do
         begin
           var Item := Items[I].Trim;
-          if (Item.StartsWith('"') and Item.EndsWith('"')) or
+          if Item.StartsWith('{') and Item.EndsWith('}') then
+          begin
+            JSONValue := TJSONObject.ParseJSONValue(Item);
+            try
+              if JSONValue is TJSONObject then
+              begin
+                Dict := TDictionary<String, TValue>.Create;
+                for var Pair in TJSONObject(JSONValue) do
+                begin
+                  if Pair.JsonValue is TJSONNumber then
+                    Dict.Add(Pair.JsonString.Value, TValue.From(Pair.JsonValue.AsType<Double>))
+                  else if Pair.JsonValue is TJSONTrue then
+                    Dict.Add(Pair.JsonString.Value, TValue.From(True))
+                  else if Pair.JsonValue is TJSONFalse then
+                    Dict.Add(Pair.JsonString.Value, TValue.From(False))
+                  else
+                    Dict.Add(Pair.JsonString.Value, TValue.From(Pair.JsonValue.Value));
+                end;
+                Arr[I] := TValue.From<TDictionary<String, TValue>>(Dict);
+              end
+              else
+                Arr[I] := TValue.Empty;
+            finally
+              JSONValue.Free;
+            end;
+          end
+          else if (Item.StartsWith('"') and Item.EndsWith('"')) or
              (Item.StartsWith('''') and Item.EndsWith('''')) then
-            Item := Copy(Item, 2, Length(Item) - 2)
+            Arr[I] := TValue.From<String>(Copy(Item, 2, Length(Item) - 2))
           else if Item.ToLower = 'true' then
             Arr[I] := TValue.From<Boolean>(True)
           else if Item.ToLower = 'false' then
@@ -1057,7 +1118,6 @@ begin
       end
       else if Value.IsType<TJsonArray> then
       begin
-        //Items[0] := Value.AsType<TJsonArray>;
         JSONArray := Value.AsType<TJsonArray>;
         SetLength(Items, JSONArray.Count);
         for I := 0 to JSONArray.Count-1 do
@@ -1077,6 +1137,7 @@ begin
 
     for Item in Items do
     begin
+      var subDict: TDictionary<String, TValue> := nil;
       MergedContext := TDictionary<String, TValue>.Create;
       try
         for Pair in Context do
@@ -1086,21 +1147,40 @@ begin
           if Pair.Key = VarName then
             if Pair.Value.IsType<TJSONObject> then
             begin
-              for var JSONValue in Pair.Value.AsType<TJSONObject> do
+              var jsonObj := Pair.Value.AsType<TJSONObject>;
+              subDict := TDictionary<String, TValue>.Create;
+              for var jsonPair: TJSONPair in jsonObj do
               begin
-                var text := JSONValue.JsonString.Value+ ' = ' + JSONValue.JsonValue.Value;
-                MergedContext.AddOrSetValue(VarName+'.'+JSONValue.JsonString.Value, JSONValue.JsonValue.Value);
+                var val: TValue;
+                if jsonPair.JsonValue is TJSONNumber then
+                begin
+                  var numStr := jsonPair.JsonValue.Value;
+                  if (Pos('.', numStr) > 0) or (Pos('e', LowerCase(numStr)) > 0) then
+                    val := TValue.From<Double>((jsonPair.JsonValue as TJSONNumber).AsDouble)
+                  else
+                    val := TValue.From<Int64>((jsonPair.JsonValue as TJSONNumber).AsInt64);
+                end
+                else if jsonPair.JsonValue is TJSONBool then
+                  val := TValue.From<Boolean>((jsonPair.JsonValue as TJSONBool).AsBoolean)
+                else if jsonPair.JsonValue is TJSONString then
+                  val := TValue.From<String>(jsonPair.JsonValue.Value)
+                else if jsonPair.JsonValue is TJSONNull then
+                  val := TValue.Empty
+                else
+                  val := TValue.From<String>(jsonPair.JsonValue.ToString);
+                subDict.AddOrSetValue(jsonPair.JsonString.Value, val);
               end;
+              MergedContext.AddOrSetValue(VarName, TValue.From<TDictionary<String,TValue>>(subDict));
             end
-              else
-            begin
+            else
               MergedContext.AddOrSetValue(VarName, Pair.Value)
-            end
           else
             MergedContext.AddOrSetValue(Pair.Key, Pair.Value);
         end;
         Output := Output + Self.RenderInternal(BlockContent, MergedContext);
       finally
+        if subDict <> nil then
+          subDict.Free;
         MergedContext.Free;
       end;
     end;
@@ -1769,35 +1849,56 @@ end;
 
 procedure TTina4Twig.SetVariable(AName: string; AValue: TValue);
 var
-  ctx: TDictionary<string, string>;
-  pair: TPair<string, string>;
-  jsonObj: TJSONObject;
   recRtti: TRttiContext;
   recType: TRttiType;
   recProp: TRttiProperty;
-  valStr: string;
+  recDict: TDictionary<String, TValue>;
+  jsonObj: TJSONObject;
+  jsonPair: TJSONPair;
+  val: TValue;
 begin
   if AValue.Kind = tkRecord then
   begin
-    ctx := TDictionary<string, string>.Create;
+    recDict := TDictionary<String, TValue>.Create;
     try
       recType := recRtti.GetType(AValue.TypeInfo);
       for recProp in recType.GetProperties do
-      begin
-        valStr := recProp.GetValue(AValue.GetReferenceToRawData).ToString;
-        ctx.AddOrSetValue(recProp.Name, valStr);
-      end;
-      for pair in ctx do
-        FContext.AddOrSetValue(AName + '.' + pair.Key, pair.Value);
-    finally
-      ctx.Free;
+        recDict.AddOrSetValue(recProp.Name, recProp.GetValue(AValue.GetReferenceToRawData));
+      FContext.AddOrSetValue(AName, TValue.From(recDict));
+    except
+      recDict.Free;
+      raise;
     end;
   end
   else if AValue.IsObject and (AValue.AsObject is TJSONObject) then
   begin
-    jsonObj := TJSONObject(AValue.AsObject);
-    for var i := 0 to jsonObj.Count - 1 do
-      FContext.AddOrSetValue(AName + '.' + jsonObj.Pairs[i].JsonString.Value, jsonObj.Pairs[i].JsonValue.Value);
+    jsonObj := AValue.AsObject as TJSONObject;
+    recDict := TDictionary<String, TValue>.Create;
+    try
+      for jsonPair in jsonObj do
+      begin
+        if jsonPair.JsonValue is TJSONNumber then
+        begin
+          if (Pos('.', jsonPair.JsonValue.Value) > 0) or (Pos('e', LowerCase(jsonPair.JsonValue.Value)) > 0) then
+            val := TValue.From<Double>((jsonPair.JsonValue as TJSONNumber).AsDouble)
+          else
+            val := TValue.From<Int64>((jsonPair.JsonValue as TJSONNumber).AsInt64);
+        end
+        else if jsonPair.JsonValue is TJSONBool then
+          val := TValue.From<Boolean>((jsonPair.JsonValue as TJSONBool).AsBoolean)
+        else if jsonPair.JsonValue is TJSONString then
+          val := TValue.From<String>(jsonPair.JsonValue.Value)
+        else if jsonPair.JsonValue is TJSONNull then
+          val := TValue.Empty
+        else
+          val := TValue.From<String>(jsonPair.JsonValue.ToString);
+        recDict.AddOrSetValue(jsonPair.JsonString.Value, val);
+      end;
+      FContext.AddOrSetValue(AName, TValue.From(recDict));
+    except
+      recDict.Free;
+      raise;
+    end;
   end
   else
   begin

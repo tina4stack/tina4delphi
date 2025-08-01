@@ -6,18 +6,20 @@ uses
   System.SysUtils, System.Classes, System.Generics.Collections, System.RegularExpressions,
   System.Rtti, JSON, System.NetEncoding, System.Math, Variants;
 
-
 type
   TStringDict = TDictionary<String, TValue>;
   TFilterFunc = reference to function(const Input: String; const Args: TArray<String>): String;
   TFunctionFunc = reference to function(const Args: TArray<String>; const Context: TDictionary<String, TValue>): String;
-
+  TMacroFunc = reference to function(const Args: TArray<String>; const Context: TDictionary<String, TValue>): String;
 
   TTina4Twig = class(TObject)
   private
     FContext: TDictionary<String, TValue>;
     FFilters: TDictionary<String, TFilterFunc>;
     FFunctions: TDictionary<String, TFunctionFunc>;
+    FMacros: TDictionary<String, TMacroFunc>;
+    FMacroParams: TDictionary<String, TArray<String>>;
+    FMacroDefaults: TDictionary<String, TDictionary<String, String>>;
     FTemplatePath: String;
     function LoadTemplate(const TemplateName: String): String;
     function ReplaceContextVariables(const Template: String; Context: TDictionary<String, TValue>): String;
@@ -27,6 +29,7 @@ type
     function EvaluateExtends(const Template: String; Context: TDictionary<String, TValue>): String;
     function EvaluateSetBlocks(const Template: String; Context: TDictionary<String, TValue>): String;
     function EvaluateWithBlocks(const Template: String; Context: TDictionary<String, TValue>): String;
+    function EvaluateMacroBlocks(const Template: String; Context: TDictionary<String, TValue>): String;
     function RemoveComments(const Template: String): String;
     function ParseVariableDict(const DictStr: String; OuterContext: TDictionary<String,TValue>): TDictionary<String,TValue>;
     function RenderInternal(const TemplateOrContent: String; Context: TStringDict): String;
@@ -43,11 +46,17 @@ type
     procedure RegisterDefaultFilters;
   end;
 
-
 implementation
 
 { TTwig }
 
+/// <summary>
+/// Encodes a string as a JSON string literal.
+/// </summary>
+/// <param name="S">The string to encode.</param>
+/// <returns>
+/// The JSON-encoded string.
+/// </returns>
 function JsonEncodeString(const S: string): string;
 var
   JsonStr: TJSONString;
@@ -60,7 +69,13 @@ begin
   end;
 end;
 
-
+/// <summary>
+/// Initializes a new instance of the TTina4Twig class.
+/// </summary>
+/// <param name="TemplatePath">Optional path to the templates directory. Defaults to the application directory if empty.</param>
+/// <remarks>
+/// Sets up context dictionaries, registers default filters and functions like 'dump' and 'range'.
+/// </remarks>
 constructor TTina4Twig.Create(const TemplatePath: String);
 begin
   inherited Create;
@@ -76,42 +91,44 @@ begin
   end;
   FTemplatePath := IncludeTrailingPathDelimiter(FTemplatePath);
 
-
   FFilters := TDictionary<String, TFilterFunc>.Create;
-
   RegisterDefaultFilters;
 
   FFunctions := TDictionary<String, TFunctionFunc>.Create;
+  FMacros := TDictionary<String, TMacroFunc>.Create;
+  FMacroParams := TDictionary<String, TArray<String>>.Create;
+  FMacroDefaults := TDictionary<String, TDictionary<String, String>>.Create;
 
   FFunctions.Add('dump',
-  function(const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
-  var
-    I: Integer;
-    DumpResult: TStringList;
-    Value: TValue;
-  begin
-    DumpResult := TStringList.Create;
-    try
-      if Length(Args) = 0 then
-        Exit('(no arguments)');
+    function(const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
+    var
+      I: Integer;
+      DumpResult: TStringList;
+      Value: TValue;
+    begin
+      DumpResult := TStringList.Create;
+      try
+        if Length(Args) = 0 then
+          Exit('(no arguments)');
 
-      for I := 0 to High(Args) do
-      begin
-        if not Context.TryGetValue(Args[I], Value) then
+        for I := 0 to High(Args) do
         begin
-          DumpResult.Add(Args[I] + ' = (not found)');
-          Continue;
+          if Context.TryGetValue(Args[I], Value) then
+          begin
+            DumpResult.Add(Args[I] + ' =');
+            DumpValue(Value, DumpResult, '  ');
+          end
+          else
+          begin
+            DumpResult.Add(Args[I] + ' = (not found)');
+          end;
         end;
 
-        DumpResult.Add(Args[I] + ' =');
-        DumpValue(Value, DumpResult, '  ');
+        Result := '<pre>' + DumpResult.Text + '</pre>';
+      finally
+        DumpResult.Free;
       end;
-
-      Result := '<pre>' + DumpResult.Text + '</pre>';
-    finally
-      DumpResult.Free;
-    end;
-  end);
+    end);
 
   FFunctions.Add('range',
   function(const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
@@ -142,26 +159,47 @@ begin
   end);
 end;
 
+/// <summary>
+/// Destroys the TTina4Twig instance.
+/// </summary>
+/// <remarks>
+/// Frees owned dictionaries and clears context, handling nested dictionaries.
+/// </remarks>
 destructor TTina4Twig.Destroy;
 var
   pair: TPair<String, TValue>;
+  macroDefaultsPair: TPair<String, TDictionary<String, String>>;
 begin
   for pair in FContext do
     if pair.Value.IsObject and (pair.Value.AsObject is TDictionary<String, TValue>) then
       pair.Value.AsObject.Free;
-
+  for macroDefaultsPair in FMacroDefaults do
+    macroDefaultsPair.Value.Free;
   FFilters.Free;
   FFunctions.Free;
+  FMacros.Free;
+  FMacroParams.Free;
+  FMacroDefaults.Free;
   FContext.Free;
-
   inherited;
 end;
 
+/// <summary>
+/// Dumps a TValue to a string list with indentation for debugging.
+/// </summary>
+/// <param name="Value">The value to dump.</param>
+/// <param name="List">The TStringList to append the dump to.</param>
+/// <param name="Indent">The indentation prefix for each line.</param>
+/// <remarks>
+/// Handles various types including integers, floats, strings, booleans, arrays, dictionaries, JSON arrays, and objects.
+/// </remarks>
 procedure TTina4Twig.DumpValue(const Value: TValue; List: TStringList; const Indent: String);
 var
   Arr: TArray<TValue>;
   Dict: TDictionary<String, TValue>;
+  JSONArray: TJSONArray;
   Pair: TPair<String, TValue>;
+  JSONVal: TJSONValue;
   J: Integer;
 begin
   if Value.IsEmpty then
@@ -180,13 +218,9 @@ begin
     tkEnumeration:
       if Value.TypeInfo = TypeInfo(Boolean) then
         if Value.AsBoolean then
-        begin
-          List.Add(Indent + 'bool(true)');
-        end
-          else
-        begin
-          List.Add(Indent + 'bool(false)');
-        end
+          List.Add(Indent + 'bool(true)')
+        else
+          List.Add(Indent + 'bool(false)')
       else
         List.Add(Indent + Value.ToString);
     tkDynArray, tkArray:
@@ -212,26 +246,102 @@ begin
         end;
         List.Add(Indent + '}');
       end
+      else if Value.AsObject is TJSONArray then
+      begin
+        JSONArray := Value.AsObject as TJSONArray;
+        List.Add(Indent + 'array(' + IntToStr(JSONArray.Count) + ') {');
+        for J := 0 to JSONArray.Count - 1 do
+        begin
+          JSONVal := JSONArray.Items[J];
+          List.Add(Indent + '  [' + IntToStr(J) + ']=>');
+          if JSONVal is TJSONNumber then
+            DumpValue(TValue.From<Double>(TJSONNumber(JSONVal).AsDouble), List, Indent + '    ')
+          else if JSONVal is TJSONString then
+            DumpValue(TValue.From<String>(TJSONString(JSONVal).Value), List, Indent + '    ')
+          else if JSONVal is TJSONBool then
+            DumpValue(TValue.From<Boolean>(TJSONBool(JSONVal).AsBoolean), List, Indent + '    ')
+          else if JSONVal is TJSONNull then
+            DumpValue(TValue.Empty, List, Indent + '    ')
+          else if JSONVal is TJSONObject then
+          begin
+            var ADict := TDictionary<String, TValue>.Create;
+            try
+              for var APair in TJSONObject(JSONVal) do
+              begin
+                if APair.JsonValue is TJSONNumber then
+                  ADict.Add(APair.JsonString.Value, TValue.From<Double>(TJSONNumber(APair.JsonValue).AsDouble))
+                else if APair.JsonValue is TJSONBool then
+                  ADict.Add(APair.JsonString.Value, TValue.From<Boolean>(TJSONBool(APair.JsonValue).AsBoolean))
+                else if APair.JsonValue is TJSONString then
+                  ADict.Add(APair.JsonString.Value, TValue.From<String>(TJSONString(APair.JsonValue).Value))
+                else if APair.JsonValue is TJSONNull then
+                  ADict.Add(APair.JsonString.Value, TValue.Empty)
+                else
+                  ADict.Add(APair.JsonString.Value, TValue.From<String>(APair.JsonValue.ToString));
+              end;
+              DumpValue(TValue.From<TDictionary<String, TValue>>(ADict), List, Indent + '    ');
+            finally
+              ADict.Free;
+            end;
+          end
+          else
+            DumpValue(TValue.From<String>(JSONVal.ToString), List, Indent + '    ');
+        end;
+        List.Add(Indent + '}');
+      end
       else
         List.Add(Indent + 'object(' + Value.AsObject.ClassName + ')#' + IntToStr(Integer(Pointer(Value.AsObject))) + ' {}');
+    tkRecord:
+      begin
+        if Value.TypeInfo = TypeInfo(TDictionary<String, TValue>) then
+        begin
+          Dict := Value.AsType<TDictionary<String, TValue>>;
+          List.Add(Indent + 'array(' + IntToStr(Dict.Count) + ') {');
+          for Pair in Dict do
+          begin
+            List.Add(Indent + '  ["' + Pair.Key + '"]=>');
+            DumpValue(Pair.Value, List, Indent + '    ');
+          end;
+          List.Add(Indent + '}');
+        end
+        else
+          List.Add(Indent + 'record(' + Value.TypeInfo.Name + ')');
+      end;
     else
       List.Add(Indent + Value.ToString);
   end;
 end;
 
-
+/// <summary>
+/// Removes comments from the template string.
+/// </summary>
+/// <param name="Template">The template string containing comments.</param>
+/// <returns>
+/// The template without comments.
+/// </returns>
+/// <remarks>
+/// Removes {# ... #} comments, including multiline.
+/// </remarks>
 function TTina4Twig.RemoveComments(const Template: String): String;
 var
   Regex: TRegEx;
 begin
   // This regex matches {# ... #} including multiline comments (non-greedy)
   Regex := TRegEx.Create('{#.*?#}', [roSingleLine, roMultiLine]);
-
-  // Replace all matches with empty string
   Result := Regex.Replace(Template, '');
 end;
 
-
+/// <summary>
+/// Checks if two TValue instances are equal.
+/// </summary>
+/// <param name="A">First value.</param>
+/// <param name="B">Second value.</param>
+/// <returns>
+/// True if values are equal, False otherwise.
+/// </returns>
+/// <remarks>
+/// Handles empty values, ordinal types, strings, and objects.
+/// </remarks>
 function TTina4Twig.ValuesAreEqual(const A, B: TValue): Boolean;
 begin
   if A.IsEmpty and B.IsEmpty then
@@ -253,6 +363,17 @@ begin
   end;
 end;
 
+/// <summary>
+/// Checks if the left value is contained in the right value.
+/// </summary>
+/// <param name="Left">The value to check for containment.</param>
+/// <param name="Right">The container value (string, array, or dictionary).</param>
+/// <returns>
+/// True if contained, False otherwise.
+/// </returns>
+/// <remarks>
+/// Supports string substring, array membership, and dictionary key existence.
+/// </remarks>
 function TTina4Twig.Contains(const Left, Right: TValue): Boolean;
 var
   Arr: TArray<TValue>;
@@ -280,7 +401,16 @@ begin
   end;
 end;
 
-
+/// <summary>
+/// Converts a TValue to a Boolean.
+/// </summary>
+/// <param name="Value">The value to convert.</param>
+/// <returns>
+/// The Boolean representation.
+/// </returns>
+/// <remarks>
+/// False for empty, zero, empty string/array/dict; True otherwise.
+/// </remarks>
 function TTina4Twig.ToBool(const Value: TValue): Boolean;
 begin
   if Value.IsEmpty then
@@ -309,7 +439,17 @@ begin
   end;
 end;
 
-
+/// <summary>
+/// Evaluates and replaces if blocks in the template.
+/// </summary>
+/// <param name="Template">The template string.</param>
+/// <param name="Context">The context dictionary.</param>
+/// <returns>
+/// The template with if blocks evaluated.
+/// </returns>
+/// <remarks>
+/// Supports conditions like ==, !=, <, >, in, starts with, etc., and optional else.
+/// </remarks>
 function TTina4Twig.EvaluateIfBlocks(const Template: String; Context: TDictionary<String, TValue>): String;
 var
   Regex: TRegEx;
@@ -381,7 +521,7 @@ begin
 
     IfContent := Match.Groups[6].Value;
     ElseContent := '';
-    if Match.Groups.Count > 7  then
+    if Match.Groups.Count > 7 then
     begin
       if Match.Groups[7].Success then
         ElseContent := Match.Groups[8].Value;
@@ -430,108 +570,304 @@ begin
   end;
 end;
 
+/// <summary>
+/// Evaluates and registers macro blocks in the template.
+/// </summary>
+/// <param name="Template">The template string.</param>
+/// <param name="Context">The context dictionary.</param>
+/// <returns>
+/// The template without macro definitions.
+/// </returns>
+/// <remarks>
+/// Registers macros as functions that can be called later, supporting parameters and defaults.
+/// Uses global FMacroParams and FMacroDefaults to store parameter lists and default values.
+/// </remarks>
+function TTina4Twig.EvaluateMacroBlocks(const Template: String; Context: TDictionary<String, TValue>): String;
+var
+  Regex: TRegEx;
+  Match: TMatch;
+  MacroName, ParamsStr, MacroBody, ParamName, DefaultValue: String;
+  ParamList: TArray<String>;
+  Defaults: TDictionary<String, String>;
+  ValidParams: TList<String>;
+  I: Integer;
+  CapturedMacroBody: String;
+begin
+  Result := Template;
+  Regex := TRegEx.Create('{%\s*macro\s+(\w+)\s*\(([^)]*)\)\s*%}(.*?){%\s*endmacro\s*%}', [roSingleLine, roIgnoreCase]);
 
+  Match := Regex.Match(Result);
+  while Match.Success do
+  begin
+    MacroName := Match.Groups[1].Value;
+    ParamsStr := Match.Groups[2].Value;
+    MacroBody := Match.Groups[3].Value;
+
+    // Parse parameters and their defaults
+    Defaults := TDictionary<String, String>.Create;
+    ValidParams := TList<String>.Create;
+    try
+      ParamList := ParamsStr.Split([','], TStringSplitOptions.ExcludeEmpty);
+      for I := 0 to High(ParamList) do
+      begin
+        ParamList[I] := Trim(ParamList[I]);
+        if ParamList[I] = '' then
+          Continue; // Skip empty parameters
+        if Pos('=', ParamList[I]) > 0 then
+        begin
+          var Parts := ParamList[I].Split(['='], 2);
+          ParamName := Trim(Parts[0]);
+          if ParamName = '' then
+            Continue; // Skip invalid parameter names
+          DefaultValue := Trim(Parts[1]).Replace('"', '').Replace('''', '');
+          ValidParams.Add(ParamName);
+          Defaults.AddOrSetValue(ParamName, DefaultValue);
+        end
+        else
+        begin
+          ParamName := Trim(ParamList[I]);
+          if ParamName <> '' then
+            ValidParams.Add(ParamName);
+        end;
+      end;
+
+      // Convert ValidParams to array for macro execution
+      ParamList := ValidParams.ToArray;
+
+      // Capture MacroBody to avoid closure capturing the loop variable
+      CapturedMacroBody := MacroBody;
+
+      // Register macro
+      FMacros.AddOrSetValue(MacroName,
+        function(const Args: TArray<String>; const MacroContext: TDictionary<String, TValue>): String
+        var
+          LocalContext: TDictionary<String, TValue>;
+          I: Integer;
+          Rendered: String;
+          ArgValue: String;
+          params: TArray<String>;
+          macroDefaults: TDictionary<String, String>;
+          Val: TValue;
+        begin
+          LocalContext := TDictionary<String, TValue>.Create;
+          try
+            // Copy existing context
+            for var Pair in MacroContext do
+              LocalContext.AddOrSetValue(Pair.Key, Pair.Value);
+
+            // Retrieve parameters and defaults from global storage
+            if not FMacroParams.TryGetValue(MacroName, params) then
+              params := ParamList; // Fallback to local ParamList if not found
+            if not FMacroDefaults.TryGetValue(MacroName, macroDefaults) then
+              macroDefaults := Defaults; // Fallback to local Defaults if not found
+
+            // Assign arguments to parameters, use defaults if needed
+            for I := 0 to High(params) do
+            begin
+              if (I < 0) or (I > High(params)) or (params[I] = '') then
+                Continue; // Skip invalid or empty parameters
+              if (I >= 0) and (I < Length(Args)) and (Args[I] <> '') then
+              begin
+                ArgValue := Trim(Args[I]);
+                // Resolve argument if it's a variable in the context
+                if MacroContext.TryGetValue(ArgValue, Val) then
+                  LocalContext.AddOrSetValue(params[I], Val)
+                else
+                  LocalContext.AddOrSetValue(params[I], TValue.From<String>(ArgValue));
+              end
+              else if macroDefaults.ContainsKey(params[I]) then
+                LocalContext.AddOrSetValue(params[I], TValue.From<String>(macroDefaults[params[I]]))
+              else
+                LocalContext.AddOrSetValue(params[I], TValue.Empty);
+            end;
+
+            // Render macro body
+            Rendered := RenderInternal(CapturedMacroBody, LocalContext);
+            Result := Rendered;
+          finally
+            LocalContext.Free;
+          end;
+        end);
+
+      // Store parameters and defaults in global dictionaries
+      FMacroParams.AddOrSetValue(MacroName, ParamList);
+      FMacroDefaults.AddOrSetValue(MacroName, Defaults);
+
+      // Remove macro definition from template
+      Result := StringReplace(Result, Match.Value, '', [rfReplaceAll]);
+    finally
+      ValidParams.Free;
+      // Do not free Defaults here; it is stored in FMacroDefaults
+    end;
+    Match := Match.NextMatch;
+  end;
+end;
+
+/// <summary>
+/// Replaces variable placeholders in the template with context values, applying filters and functions.
+/// </summary>
+/// <param name="Template">The template string.</param>
+/// <param name="Context">The context dictionary.</param>
+/// <returns>
+/// The template with variables replaced.
+/// </returns>
+/// <remarks>
+/// Handles {{ var | filter(arg) }}, function calls, and macro calls.
+/// Prioritizes macro lookup to ensure correct macro execution.
+/// </remarks>
 function TTina4Twig.ReplaceContextVariables(const Template: String; Context: TDictionary<String, TValue>): String;
 var
   Regex: TRegEx;
   Match: TMatch;
-  FullMatch, Expr: String;
-  FuncName, ArgsStr: String;
+  FullMatch, Expr, VarName, FilterChain, FuncName, ArgsStr: String;
   Args: TArray<String>;
   TempVal: TValue;
   Func: TFunctionFunc;
+  Macro: TMacroFunc;
   Filter: TFilterFunc;
   FilteredValue: String;
+  I: Integer;
+  DebugLog: TStringList;
 begin
   Result := Template;
-  Regex := TRegEx.Create('{{\s*([^}]+)\s*}}', [roSingleLine, roIgnoreCase]);
+  DebugLog := TStringList.Create;
+  try
+    Regex := TRegEx.Create('{{\s*([^}]+)\s*}}', [roSingleLine, roIgnoreCase]);
 
-  while True do
-  begin
-    Match := Regex.Match(Result);
-    if not Match.Success then
-      Break;
-
-    FullMatch := Match.Value;
-    Expr := Trim(Match.Groups[1].Value);
-
-    // Check if it's a function call like func(arg1, arg2)
-    if (Pos('(', Expr) > 0) and Expr.EndsWith(')') then
+    while True do
     begin
-      FuncName := Trim(Copy(Expr, 1, Pos('(', Expr) - 1));
-      ArgsStr := Copy(Expr, Pos('(', Expr) + 1, Length(Expr) - Pos('(', Expr) - 1);
-      Args := ArgsStr.Split([','], TStringSplitOptions.ExcludeEmpty);
-      for var I := 0 to High(Args) do
-        Args[I] := Trim(Args[I].Replace('"', '').Replace('''', '')); // Simple trim quotes
+      Match := Regex.Match(Result);
+      if not Match.Success then
+        Break;
 
-      if FFunctions.TryGetValue(FuncName, Func) then
-      begin
-        FilteredValue := Func(Args, Context);
-      end
-      else
-        FilteredValue := '(function ' + FuncName + ' not found)';
-    end
-    else
-    begin
-      // Existing variable with filters logic
+      FullMatch := Match.Value;
+      Expr := Trim(Match.Groups[1].Value);
+
+      // Split expression into variable/function/macro and filters
+      VarName := Expr;
+      FilterChain := '';
       if Expr.Contains('|') then
       begin
         var Parts := Expr.Split(['|'], TStringSplitOptions.ExcludeEmpty);
-        var VarName := Trim(Parts[0]);
-        var FilterChain := '';
-        for var i := 1 to High(Parts) do
-          FilterChain := FilterChain + '|' + Trim(Parts[i]);
+        VarName := Trim(Parts[0]);
+        for I := 1 to High(Parts) do
+          FilterChain := FilterChain + '|' + Trim(Parts[I]);
+      end;
 
-        // Resolve the initial variable
-        TempVal := ResolveVariablePath(VarName, Context);
-
-        if not TempVal.IsEmpty then
+      // Check if it's a macro or function call like name(arg1, arg2)
+      if (Pos('(', VarName) > 0) and VarName.EndsWith(')') then
+      begin
+        FuncName := Trim(Copy(VarName, 1, Pos('(', VarName) - 1));
+        ArgsStr := Copy(VarName, Pos('(', VarName) + 1, Length(VarName) - Pos('(', VarName) - 1);
+        Args := ArgsStr.Split([','], TStringSplitOptions.ExcludeEmpty);
+        for I := 0 to High(Args) do
         begin
-          FilteredValue := TempVal.ToString;
+          Args[I] := Trim(Args[I]);
+          // Handle quoted strings and context variables
+          if (Args[I].StartsWith('"') and Args[I].EndsWith('"')) or
+             (Args[I].StartsWith('''') and Args[I].EndsWith('''')) then
+            Args[I] := Args[I].Substring(1, Args[I].Length - 2)
+          else
+            Args[I] := Args[I]; // Keep literal value for functions like dump
+        end;
 
-          // Apply filters
-          var Filters := FilterChain.TrimLeft(['|']).Split(['|'], TStringSplitOptions.ExcludeEmpty);
-          for var FilterExp in Filters do
+        // Debug: Log macro/function call
+        DebugLog.Add('Attempting to call: ' + FuncName + ' with args: ' + String.Join(', ', Args));
+        DebugLog.Add('Available macros: ' + String.Join(', ', FMacros.Keys.ToArray));
+        DebugLog.Add('Available functions: ' + String.Join(', ', FFunctions.Keys.ToArray));
+
+        // Prioritize macro lookup
+        if FMacros.ContainsKey(FuncName) then
+        begin
+          if FMacros.TryGetValue(FuncName, Macro) then
           begin
-            var FilterExpr := Trim(FilterExp);
-            if FilterExpr.Contains('(') and FilterExpr.EndsWith(')') then
-            begin
-              FuncName := Copy(FilterExpr, 1, Pos('(', FilterExpr) - 1);
-              ArgsStr := Copy(FilterExpr, Pos('(', FilterExpr) + 1, Length(FilterExpr) - Pos('(', FilterExpr) - 1);
-              Args := ArgsStr.Split([','], TStringSplitOptions.ExcludeEmpty);
-              for var I := 0 to High(Args) do
-                Args[I] := Trim(Args[I]);
-            end
-            else
-            begin
-              FuncName := FilterExpr;
-              SetLength(Args, 0);
-            end;
-
-            if FFilters.TryGetValue(FuncName, Filter) then
-              FilteredValue := Filter(FilteredValue, Args)
-            else
-              FilteredValue := '(filter ' + FuncName + ' not found)';
+            FilteredValue := Macro(Args, Context);
+            DebugLog.Add('Called macro: ' + FuncName);
+          end
+          else
+          begin
+            FilteredValue := '(macro ' + FuncName + ' lookup failed)';
+            DebugLog.Add('Failed to lookup macro: ' + FuncName);
+          end;
+        end
+        else if FFunctions.ContainsKey(FuncName) then
+        begin
+          if FFunctions.TryGetValue(FuncName, Func) then
+          begin
+            FilteredValue := Func(Args, Context);
+            DebugLog.Add('Called function: ' + FuncName);
+          end
+          else
+          begin
+            FilteredValue := '(function ' + FuncName + ' lookup failed)';
+            DebugLog.Add('Failed to lookup function: ' + FuncName);
           end;
         end
         else
-          FilteredValue := '(not found)';
+        begin
+          FilteredValue := '(function or macro ' + FuncName + ' not found)';
+          DebugLog.Add('Macro/function not found: ' + FuncName);
+        end;
       end
       else
       begin
-        // No filter, resolve variable directly
-        TempVal := ResolveVariablePath(Expr, Context);
+        // Resolve variable
+        TempVal := ResolveVariablePath(VarName, Context);
         if not TempVal.IsEmpty then
           FilteredValue := TempVal.ToString
         else
-          FilteredValue := '(not found)';
+          FilteredValue := ''; // Return empty string for undefined variables
       end;
+
+      // Apply filters if any
+      if FilterChain <> '' then
+      begin
+        var Filters := FilterChain.TrimLeft(['|']).Split(['|'], TStringSplitOptions.ExcludeEmpty);
+        for var FilterExp in Filters do
+        begin
+          var FilterExpr := Trim(FilterExp);
+          if FilterExpr.Contains('(') and FilterExpr.EndsWith(')') then
+          begin
+            FuncName := Copy(FilterExpr, 1, Pos('(', FilterExpr) - 1);
+            ArgsStr := Copy(FilterExpr, Pos('(', FilterExpr) + 1, Length(FilterExpr) - Pos('(', FilterExpr) - 1);
+            Args := ArgsStr.Split([','], TStringSplitOptions.ExcludeEmpty);
+            for I := 0 to High(Args) do
+              Args[I] := Trim(Args[I]);
+          end
+          else
+          begin
+            FuncName := FilterExpr;
+            SetLength(Args, 0);
+          end;
+
+          if FFilters.TryGetValue(FuncName, Filter) then
+            FilteredValue := Filter(FilteredValue, Args)
+          else
+            FilteredValue := '(filter ' + FuncName + ' not found)';
+        end;
+      end;
+
+      Result := StringReplace(Result, FullMatch, FilteredValue, [rfReplaceAll]);
     end;
 
-    Result := StringReplace(Result, FullMatch, FilteredValue, [rfReplaceAll]);
+    // Save debug log to file for inspection
+    DebugLog.SaveToFile('debug_log.txt');
+  finally
+    DebugLog.Free;
   end;
 end;
 
+/// <summary>
+/// Resolves a dotted variable path from the context.
+/// </summary>
+/// <param name="VariablePath">The path like 'var.sub.key'.</param>
+/// <param name="Context">The context dictionary.</param>
+/// <returns>
+/// The resolved TValue, or Empty if not found.
+/// </returns>
+/// <remarks>
+/// Supports dictionary keys, array indices, object/record properties via RTTI.
+/// </remarks>
 function TTina4Twig.ResolveVariablePath(const VariablePath: string; Context: TDictionary<String, TValue>): TValue;
 var
   Parts: TArray<string>;
@@ -610,8 +946,16 @@ begin
   Result := Current;
 end;
 
-
-
+/// <summary>
+/// Loads a template file from the template path.
+/// </summary>
+/// <param name="TemplateName">The name of the template file.</param>
+/// <returns>
+/// The content of the template.
+/// </returns>
+/// <remarks>
+/// Removes comments after loading. Raises exception if file not found.
+/// </remarks>
 function TTina4Twig.LoadTemplate(const TemplateName: String): String;
 var
   TemplateFile: TStringList;
@@ -635,7 +979,18 @@ begin
   end;
 end;
 
-function TTina4Twig.ParseVariableDict(const DictStr: String; OuterContext: TDictionary<String, TValue>): TDictionary<String, TValue>;
+/// <summary>
+/// Parses a string representation of a dictionary.
+/// </summary>
+/// <param name="DictStr">The string like '{key: value, ...}'.</param>
+/// <param name="OuterContext">The outer context for resolving values.</param>
+/// <returns>
+/// A dictionary of key-value pairs.
+/// </returns>
+/// <remarks>
+/// Attempts JSON parsing first, falls back to simple key:value splitting. Supports numbers, booleans, strings, variables from context.
+/// </remarks>
+function TTina4Twig.ParseVariableDict(const DictStr: String; OuterContext: TDictionary<String,TValue>): TDictionary<String,TValue>;
 var
   Content: String;
   JSONValue: TJSONValue;
@@ -740,6 +1095,17 @@ begin
   end;
 end;
 
+/// <summary>
+/// Evaluates include statements in the template.
+/// </summary>
+/// <param name="Template">The template string.</param>
+/// <param name="Context">The context dictionary.</param>
+/// <returns>
+/// The template with includes replaced.
+/// </returns>
+/// <remarks>
+/// Supports {% include "file" with {vars} %}, merging contexts.
+/// </remarks>
 function TTina4Twig.EvaluateIncludes(const Template: String; Context: TDictionary<String, TValue>): String;
 var
   Regex: TRegEx;
@@ -841,9 +1207,17 @@ begin
   end;
 end;
 
-
-
-
+/// <summary>
+/// Evaluates set statements to add variables to context.
+/// </summary>
+/// <param name="Template">The template string.</param>
+/// <param name="Context">The context dictionary.</param>
+/// <returns>
+/// The template without set statements.
+/// </returns>
+/// <remarks>
+/// Supports setting simple values, arrays, objects via JSON-like syntax.
+/// </remarks>
 function TTina4Twig.EvaluateSetBlocks(const Template: String; Context: TDictionary<String, TValue>): String;
 var
   Regex: TRegEx;
@@ -975,8 +1349,17 @@ begin
   end;
 end;
 
-
-
+/// <summary>
+/// Evaluates with blocks to create scoped contexts.
+/// </summary>
+/// <param name="Template">The template string.</param>
+/// <param name="Context">The context dictionary.</param>
+/// <returns>
+/// The template with with blocks evaluated.
+/// </returns>
+/// <remarks>
+/// Supports {% with vars only %}, isolating or merging contexts.
+/// </remarks>
 function TTina4Twig.EvaluateWithBlocks(const Template: String; Context: TDictionary<String, TValue>): String;
 var
   Regex: TRegEx;
@@ -1046,8 +1429,17 @@ begin
   end;
 end;
 
-
-
+/// <summary>
+/// Evaluates for loops in the template.
+/// </summary>
+/// <param name="Template">The template string.</param>
+/// <param name="Context">The context dictionary.</param>
+/// <returns>
+/// The template with for blocks expanded.
+/// </returns>
+/// <remarks>
+/// Supports {% for var in list %}, arrays, dictionaries, JSON arrays, with optional else.
+/// </remarks>
 function TTina4Twig.EvaluateForBlocks(const Template: String; Context: TDictionary<String, TValue>): String;
 var
   Regex: TRegEx;
@@ -1203,8 +1595,17 @@ begin
   end;
 end;
 
-
-
+/// <summary>
+/// Evaluates extends statements for template inheritance.
+/// </summary>
+/// <param name="Template">The child template string.</param>
+/// <param name="Context">The context dictionary.</param>
+/// <returns>
+/// The rendered base template with child blocks overridden.
+/// </returns>
+/// <remarks>
+/// Replaces blocks in parent with child content, falls back to parent defaults.
+/// </remarks>
 function TTina4Twig.EvaluateExtends(const Template: String; Context: TDictionary<String, TValue>): String;
 var
   ExtendRegex, BlockRegex: TRegEx;
@@ -1287,9 +1688,12 @@ begin
   end;
 end;
 
-
-
-
+/// <summary>
+/// Registers default Twig-like filters.
+/// </summary>
+/// <remarks>
+/// Clears existing filters and adds implementations for abs, capitalize, date, escape, etc. Some are stubs.
+/// </remarks>
 procedure TTina4Twig.RegisterDefaultFilters;
 begin
   FFilters.Clear;
@@ -1395,13 +1799,56 @@ begin
 
   FFilters.Add('escape',
     function(const Input: String; const Args: TArray<String>): String
+    var
+      Strategy: String;
     begin
-      Result := StringReplace(Input, '&', '&amp;', [rfReplaceAll]);
-      Result := StringReplace(Result, '<', '&lt;', [rfReplaceAll]);
-      Result := StringReplace(Result, '>', '&gt;', [rfReplaceAll]);
-      Result := StringReplace(Result, '"', '&quot;', [rfReplaceAll]);
-      Result := StringReplace(Result, '''', '&#39;', [rfReplaceAll]);
+      Strategy := 'html';
+      if Length(Args) > 0 then
+        Strategy := LowerCase(Args[0]);
+
+      if Strategy =  'html' then
+          begin
+            Result := StringReplace(Input, '&', '&amp;', [rfReplaceAll]);
+            Result := StringReplace(Result, '<', '&lt;', [rfReplaceAll]);
+            Result := StringReplace(Result, '>', '&gt;', [rfReplaceAll]);
+            Result := StringReplace(Result, '"', '&quot;', [rfReplaceAll]);
+            Result := StringReplace(Result, '''', '&#39;', [rfReplaceAll]);
+          end
+      else
+      if Strategy =  'js' then
+      begin
+            // Basic JS escaping
+            Result := StringReplace(Input, '\', '\\', [rfReplaceAll]);
+            Result := StringReplace(Result, '"', '\"', [rfReplaceAll]);
+            Result := StringReplace(Result, '''', '\''', [rfReplaceAll]);
+            Result := StringReplace(Result, sLineBreak, '\n', [rfReplaceAll]);
+      end
+        else
+      if Strategy =  'css' then
+      begin
+            // Simple CSS escaping, can be improved
+            Result := TNetEncoding.URL.Encode(Input);
+      end
+        else
+     if Strategy =  'url' then
+     begin
+            Result := TNetEncoding.URL.Encode(Input);
+     end
+       else
+     if Strategy =  'html_attr' then
+     begin
+        // HTML attribute escaping
+        Result := StringReplace(Input, '&', '&amp;', [rfReplaceAll]);
+        Result := StringReplace(Result, '"', '&quot;', [rfReplaceAll]);
+        Result := StringReplace(Result, '''', '&#x27;', [rfReplaceAll]);
+        Result := StringReplace(Result, '<', '&lt;', [rfReplaceAll]);
+        Result := StringReplace(Result, '>', '&gt;', [rfReplaceAll]);
+     end
+        else
+          Result := Input; // Unknown strategy, no escaping
     end);
+
+  FFilters.Add('e', FFilters['escape']);
 
   FFilters.Add('filter',
     function(const Input: String; const Args: TArray<String>): String
@@ -1535,7 +1982,6 @@ begin
     Items := Input.Split([',']);
     Result := string.Join(Delim, Items);
   end);
-
 
   FFilters.Add('json_encode',
   function(const Input: String; const Args: TArray<String>): String
@@ -1834,11 +2280,34 @@ begin
     end);
 end;
 
+/// <summary>
+/// Renders a template or content string with variables.
+/// </summary>
+/// <param name="TemplateOrContent">Template name or direct content.</param>
+/// <param name="Variables">Optional additional variables.</param>
+/// <returns>
+/// The rendered string.
+/// </returns>
+/// <remarks>
+/// Delegates to RenderInternal with global context.
+/// </remarks>
 function TTina4Twig.Render(const TemplateOrContent: String; Variables: TStringDict = nil): String;
 begin
   Result := RenderInternal(TemplateOrContent, FContext);
 end;
 
+/// <summary>
+/// Internal rendering logic for templates.
+/// </summary>
+/// <param name="TemplateOrContent">Template name or content.</param>
+/// <param name="Context">The rendering context.</param>
+/// <returns>
+/// The fully rendered template.
+/// </returns>
+/// <remarks>
+/// Processes in order: comments, macros, sets, extends, fors, includes, withs, ifs, variables.
+/// Loads file if name provided, else treats as content.
+/// </remarks>
 function TTina4Twig.RenderInternal(const TemplateOrContent: String; Context: TStringDict): String;
 var
   TemplateText, FullPath: String;
@@ -1858,13 +2327,14 @@ begin
       TemplateText := TemplateOrContent;
 
     TemplateText := RemoveComments(TemplateText);
-    TemplateText := EvaluateSetBlocks(TemplateText, LocalContext); // Use LocalContext
-    TemplateText := EvaluateExtends(TemplateText, LocalContext);   // Use LocalContext
-    TemplateText := EvaluateForBlocks(TemplateText, LocalContext); // Use LocalContext
-    TemplateText := EvaluateIncludes(TemplateText, LocalContext);  // Use LocalContext
-    TemplateText := EvaluateWithBlocks(TemplateText, LocalContext); // Use LocalContext
-    TemplateText := EvaluateIfBlocks(TemplateText, LocalContext);   // Use LocalContext
-    TemplateText := ReplaceContextVariables(TemplateText, LocalContext); // Use LocalContext
+    TemplateText := EvaluateMacroBlocks(TemplateText, LocalContext); // Process macros first
+    TemplateText := EvaluateSetBlocks(TemplateText, LocalContext);
+    TemplateText := EvaluateExtends(TemplateText, LocalContext);
+    TemplateText := EvaluateForBlocks(TemplateText, LocalContext);
+    TemplateText := EvaluateIncludes(TemplateText, LocalContext);
+    TemplateText := EvaluateWithBlocks(TemplateText, LocalContext);
+    TemplateText := EvaluateIfBlocks(TemplateText, LocalContext);
+    TemplateText := ReplaceContextVariables(TemplateText, LocalContext);
 
     Result := TemplateText;
   finally
@@ -1872,7 +2342,14 @@ begin
   end;
 end;
 
-
+/// <summary>
+/// Sets a variable in the global context.
+/// </summary>
+/// <param name="AName">The variable name.</param>
+/// <param name="AValue">The value, supporting records and JSON objects converted to dictionaries.</param>
+/// <remarks>
+/// Uses RTTI for records, parses JSON objects.
+/// </remarks>
 procedure TTina4Twig.SetVariable(AName: string; AValue: TValue);
 var
   recRtti: TRttiContext;
@@ -1932,6 +2409,4 @@ begin
   end;
 end;
 
-
 end.
-

@@ -10,7 +10,7 @@ type
   TStringDict = TDictionary<String, TValue>;
   TFilterFunc = reference to function(const Input: String; const Args: TArray<String>): String;
   TFunctionFunc = reference to function(const Args: TArray<String>; const Context: TDictionary<String, TValue>): String;
-  TMacroFunc = reference to function(const Args: TArray<String>; const Context: TDictionary<String, TValue>): String;
+  TMacroFunc = reference to function(const MacroName: String; const Args: TArray<String>; const MacroContext: TDictionary<String, TValue>): String;
 
   TTina4Twig = class(TObject)
   private
@@ -20,6 +20,7 @@ type
     FMacros: TDictionary<String, TMacroFunc>;
     FMacroParams: TDictionary<String, TArray<String>>;
     FMacroDefaults: TDictionary<String, TDictionary<String, String>>;
+    FMacroBodies: TDictionary<String, String>;
     FTemplatePath: String;
     function LoadTemplate(const TemplateName: String): String;
     function ReplaceContextVariables(const Template: String; Context: TDictionary<String, TValue>): String;
@@ -99,6 +100,7 @@ begin
   FMacros := TDictionary<String, TMacroFunc>.Create;
   FMacroParams := TDictionary<String, TArray<String>>.Create;
   FMacroDefaults := TDictionary<String, TDictionary<String, String>>.Create;
+  FMacroBodies := TDictionary<String, String>.Create;
 
   FFunctions.Add('dump',
     function(const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
@@ -181,6 +183,7 @@ begin
   FMacros.Free;
   FMacroParams.Free;
   FMacroDefaults.Free;
+  FMacroBodies.Free;
   FContext.Free;
   inherited;
 end;
@@ -592,7 +595,6 @@ var
   Defaults: TDictionary<String, String>;
   ValidParams: TList<String>;
   I: Integer;
-  CapturedMacroBody: String;
 begin
   Result := Template;
   Regex := TRegEx.Create('{%\s*macro\s+(\w+)\s*\(([^)]*)\)\s*%}(.*?){%\s*endmacro\s*%}', [roSingleLine, roIgnoreCase]);
@@ -604,7 +606,7 @@ begin
     ParamsStr := Match.Groups[2].Value;
     MacroBody := Match.Groups[3].Value;
 
-    // Parse parameters and their defaults
+    // Parse parameters and defaults
     Defaults := TDictionary<String, String>.Create;
     ValidParams := TList<String>.Create;
     try
@@ -613,13 +615,13 @@ begin
       begin
         ParamList[I] := Trim(ParamList[I]);
         if ParamList[I] = '' then
-          Continue; // Skip empty parameters
+          Continue;
         if Pos('=', ParamList[I]) > 0 then
         begin
           var Parts := ParamList[I].Split(['='], 2);
           ParamName := Trim(Parts[0]);
           if ParamName = '' then
-            Continue; // Skip invalid parameter names
+            Continue;
           DefaultValue := Trim(Parts[1]).Replace('"', '').Replace('''', '');
           ValidParams.Add(ParamName);
           Defaults.AddOrSetValue(ParamName, DefaultValue);
@@ -632,73 +634,70 @@ begin
         end;
       end;
 
-      // Convert ValidParams to array for macro execution
-      ParamList := ValidParams.ToArray;
+      // Store macro body and parameters
+      FMacroBodies.AddOrSetValue(MacroName, MacroBody);
+      FMacroParams.AddOrSetValue(MacroName, ValidParams.ToArray);
+      FMacroDefaults.AddOrSetValue(MacroName, Defaults);
 
-      // Capture MacroBody to avoid closure capturing the loop variable
-      CapturedMacroBody := MacroBody;
-
-      // Register macro
+      // Register macro with captured body and parameters
       FMacros.AddOrSetValue(MacroName,
-        function(const Args: TArray<String>; const MacroContext: TDictionary<String, TValue>): String
+        function(const AName: String; const Args: TArray<String>; const MacroContext: TDictionary<String, TValue>): String
         var
           LocalContext: TDictionary<String, TValue>;
           I: Integer;
           Rendered: String;
           ArgValue: String;
-          params: TArray<String>;
-          macroDefaults: TDictionary<String, String>;
+          CapturedParams: TArray<String>;
+          CapturedDefaults: TDictionary<String, String>;
+          CapturedBody: String;
           Val: TValue;
         begin
+          // Retrieve captured macro data
+          if not FMacroParams.TryGetValue(AName, CapturedParams) then
+            Exit('(macro ' + AName + ' parameters not found)');
+          if not FMacroDefaults.TryGetValue(AName, CapturedDefaults) then
+            Exit('(macro ' + AName + ' defaults not found)');
+          if not FMacroBodies.TryGetValue(AName, CapturedBody) then
+            Exit('(macro ' + AName + ' body not found)');
+
           LocalContext := TDictionary<String, TValue>.Create;
           try
             // Copy existing context
             for var Pair in MacroContext do
               LocalContext.AddOrSetValue(Pair.Key, Pair.Value);
 
-            // Retrieve parameters and defaults from global storage
-            if not FMacroParams.TryGetValue(MacroName, params) then
-              params := ParamList; // Fallback to local ParamList if not found
-            if not FMacroDefaults.TryGetValue(MacroName, macroDefaults) then
-              macroDefaults := Defaults; // Fallback to local Defaults if not found
-
-            // Assign arguments to parameters, use defaults if needed
-            for I := 0 to High(params) do
+            // Assign arguments to parameters
+            for I := 0 to High(CapturedParams) do
             begin
-              if (I < 0) or (I > High(params)) or (params[I] = '') then
-                Continue; // Skip invalid or empty parameters
-              if (I >= 0) and (I < Length(Args)) and (Args[I] <> '') then
+              if CapturedParams[I] = '' then
+                Continue;
+              if (I < Length(Args)) and (Args[I] <> '') then
               begin
                 ArgValue := Trim(Args[I]);
-                // Resolve argument if it's a variable in the context
                 if MacroContext.TryGetValue(ArgValue, Val) then
-                  LocalContext.AddOrSetValue(params[I], Val)
+                  LocalContext.AddOrSetValue(CapturedParams[I], Val)
                 else
-                  LocalContext.AddOrSetValue(params[I], TValue.From<String>(ArgValue));
+                  LocalContext.AddOrSetValue(CapturedParams[I], TValue.From<String>(ArgValue));
               end
-              else if macroDefaults.ContainsKey(params[I]) then
-                LocalContext.AddOrSetValue(params[I], TValue.From<String>(macroDefaults[params[I]]))
+              else if CapturedDefaults.TryGetValue(CapturedParams[I], ArgValue) then
+                LocalContext.AddOrSetValue(CapturedParams[I], TValue.From<String>(ArgValue))
               else
-                LocalContext.AddOrSetValue(params[I], TValue.Empty);
+                LocalContext.AddOrSetValue(CapturedParams[I], TValue.Empty);
             end;
 
             // Render macro body
-            Rendered := RenderInternal(CapturedMacroBody, LocalContext);
+            Rendered := RenderInternal(CapturedBody, LocalContext);
             Result := Rendered;
           finally
             LocalContext.Free;
           end;
         end);
 
-      // Store parameters and defaults in global dictionaries
-      FMacroParams.AddOrSetValue(MacroName, ParamList);
-      FMacroDefaults.AddOrSetValue(MacroName, Defaults);
-
       // Remove macro definition from template
       Result := StringReplace(Result, Match.Value, '', [rfReplaceAll]);
     finally
       ValidParams.Free;
-      // Do not free Defaults here; it is stored in FMacroDefaults
+      // Defaults is stored in FMacroDefaults, not freed here
     end;
     Match := Match.NextMatch;
   end;
@@ -780,10 +779,12 @@ begin
         // Prioritize macro lookup
         if FMacros.ContainsKey(FuncName) then
         begin
+          WriteLn('looking to render -'+FuncName+'-');
           if FMacros.TryGetValue(FuncName, Macro) then
           begin
-            FilteredValue := Macro(Args, Context);
-            DebugLog.Add('Called macro: ' + FuncName);
+            WriteLn('looking to render -'+FuncName+'-');
+            FilteredValue := Macro(FuncName, Args, Context);
+            WriteLn('Called macro: ' + FuncName);
           end
           else
           begin

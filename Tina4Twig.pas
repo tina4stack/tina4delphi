@@ -885,15 +885,20 @@ var
   RttiType: TRttiType;
   Prop: TRttiProperty;
 begin
-  // Initialize result as empty
   Result := TValue.Empty;
 
-  // Regex to match identifiers or array indices
-  Regex := TRegEx.Create('(\w+|\[\d+\])', [roIgnoreCase]);
+  // Regex to match identifiers, array indices, or quoted strings
+  Regex := TRegEx.Create('(\w+|\[\d+\]|''[^'']*''|"[^"]*")', [roIgnoreCase]);
   Matches := Regex.Matches(VariablePath);
   SetLength(Parts, Matches.Count);
   for i := 0 to Matches.Count - 1 do
+  begin
     Parts[i] := Matches[i].Value;
+    // Remove quotes from quoted strings
+    if (Parts[i].StartsWith('"') and Parts[i].EndsWith('"')) or
+       (Parts[i].StartsWith('''') and Parts[i].EndsWith('''')) then
+      Parts[i] := Parts[i].Substring(1, Parts[i].Length - 2);
+  end;
 
   if Length(Parts) = 0 then
     Exit(TValue.Empty);
@@ -914,7 +919,7 @@ begin
       if TryStrToInt(Copy(Key, 2, Length(Key) - 2), Index) then
       begin
         // Handle TArray<TValue>
-        if Current.IsArray then
+        if Current.IsType<TArray<TValue>> then
         begin
           Arr := Current.AsType<TArray<TValue>>;
           if (Index >= 0) and (Index < Length(Arr)) then
@@ -979,44 +984,49 @@ begin
         Exit(TValue.Empty);
     end
     // Handle dictionary or property access
-    else if Current.IsObject and (Current.AsObject is TDictionary<String, TValue>) then
-    begin
-      Dict := TDictionary<String, TValue>(Current.AsObject);
-      if not Dict.TryGetValue(Key, Current) then
-        Exit(TValue.Empty);
-    end
-    // Handle object property access via RTTI
-    else if Current.IsObject then
-    begin
-      RttiCtx := TRttiContext.Create;
-      try
-        RttiType := RttiCtx.GetType(Current.TypeInfo);
-        Prop := RttiType.GetProperty(Key);
-        if Assigned(Prop) then
-          Current := Prop.GetValue(Current.AsObject)
-        else
-          Exit(TValue.Empty);
-      finally
-        RttiCtx.Free;
-      end;
-    end
-    // Handle record property access via RTTI
-    else if Current.Kind = tkRecord then
-    begin
-      RttiCtx := TRttiContext.Create;
-      try
-        RttiType := RttiCtx.GetType(Current.TypeInfo);
-        Prop := RttiType.GetProperty(Key);
-        if Assigned(Prop) then
-          Current := Prop.GetValue(Current.GetReferenceToRawData)
-        else
-          Exit(TValue.Empty);
-      finally
-        RttiCtx.Free;
-      end;
-    end
     else
-      Exit(TValue.Empty);
+    begin
+      if Current.IsObject and (Current.AsObject is TDictionary<String, TValue>) then
+      begin
+        Dict := TDictionary<String, TValue>(Current.AsObject);
+        if Dict.TryGetValue(Key, Current) then
+          // Successfully retrieved value
+        else
+          Exit(TValue.Empty);
+      end
+      // Handle object property access via RTTI
+      else if Current.IsObject then
+      begin
+        RttiCtx := TRttiContext.Create;
+        try
+          RttiType := RttiCtx.GetType(Current.TypeInfo);
+          Prop := RttiType.GetProperty(Key);
+          if Assigned(Prop) then
+            Current := Prop.GetValue(Current.AsObject)
+          else
+            Exit(TValue.Empty);
+        finally
+          RttiCtx.Free;
+        end;
+      end
+      // Handle record property access via RTTI
+      else if Current.Kind = tkRecord then
+      begin
+        RttiCtx := TRttiContext.Create;
+        try
+          RttiType := RttiCtx.GetType(Current.TypeInfo);
+          Prop := RttiType.GetProperty(Key);
+          if Assigned(Prop) then
+            Current := Prop.GetValue(Current.GetReferenceToRawData)
+          else
+            Exit(TValue.Empty);
+        finally
+          RttiCtx.Free;
+        end;
+      end
+      else
+        Exit(TValue.Empty);
+    end;
   end;
 
   Result := Current;
@@ -1559,7 +1569,7 @@ function TTina4Twig.EvaluateForBlocks(const Template: String; Context: TDictiona
 var
   Regex: TRegEx;
   Match: TMatch;
-  FullMatch, VarName, ListExpr, BlockContent, ElseContent, Output, ArrayContent: String;
+  FullMatch, VarName, ListExpr, BlockContent, ElseContent, Output: String;
   Items: TArray<TDictionary<String, TValue>>;
   Item: TDictionary<String, TValue>;
   MergedContext: TDictionary<String, TValue>;
@@ -1571,9 +1581,8 @@ var
   JSONArray: TJSONArray;
 begin
   Result := Template;
-  // Updated regex to capture optional {% else %} block
   Regex := TRegEx.Create(
-    '{%\s*for\s+(\w+)\s+in\s+((?:\[[^\]]*\])|\w+)\s*%}(.*?)({%\s*else\s*%}(.*?))?{%\s*endfor\s*%}',
+    '{%\s*for\s+(\w+)\s+in\s+((?:\[[^\]]*\])|\w+(?:\.\w+|\[\d+\])?)\s*%}(.*)({%\s*else\s*%}(.*))?{%\s*endfor\s*%}',
     [roSingleLine, roIgnoreCase]);
 
   while True do
@@ -1585,16 +1594,16 @@ begin
     FullMatch := Match.Value;
     VarName := Match.Groups[1].Value.Trim;
     ListExpr := Match.Groups[2].Value.Trim;
-    BlockContent := Match.Groups[3].Value.Trim;
+    BlockContent := Match.Groups[3].Value;
     ElseContent := '';
     if Match.Groups.Count > 5 then
-      ElseContent := Match.Groups[5].Value.Trim;
+      ElseContent := Match.Groups[5].Value;
     Output := '';
     Items := nil;
 
     if ListExpr.StartsWith('[') and ListExpr.EndsWith(']') then
     begin
-      ArrayContent := Copy(ListExpr, 2, Length(ListExpr) - 2).Trim;
+      var ArrayContent := Copy(ListExpr, 2, Length(ListExpr) - 2).Trim;
       if ArrayContent <> '' then
       begin
         ArrayItems := ArrayContent.Split([','], TStringSplitOptions.ExcludeEmpty);
@@ -1608,11 +1617,22 @@ begin
           Item.Add(VarName, TValue.From(Element));
           Items[I] := Item;
         end;
+      end
+      else
+      begin
+        SetLength(Items, 0); // Explicitly set empty array for inline empty array
       end;
     end
-    else if Context.TryGetValue(ListExpr, Value) then
+    else
     begin
-      if Value.IsArray then
+      Value := ResolveVariablePath(ListExpr, Context);
+      if Value.IsEmpty then
+      begin
+        Output := RenderInternal(ElseContent, Context); // Render else block for undefined variable
+        Result := StringReplace(Result, FullMatch, Output, [rfReplaceAll]);
+        Continue; // Skip further processing
+      end
+      else if Value.IsArray then
       begin
         ValueArray := Value.AsType<TArray<TValue>>;
         SetLength(Items, Length(ValueArray));
@@ -1625,8 +1645,16 @@ begin
       end
       else if Value.IsType<TDictionary<String, TValue>> then
       begin
-        SetLength(Items, 1);
-        Items[0] := Value.AsType<TDictionary<String, TValue>>;
+        var Dict := Value.AsType<TDictionary<String, TValue>>;
+        SetLength(Items, Dict.Count);
+        I := 0;
+        for Pair in Dict do
+        begin
+          Item := TDictionary<String, TValue>.Create;
+          Item.Add(VarName, Pair.Value);
+          Items[I] := Item;
+          Inc(I);
+        end;
       end
       else if Value.IsType<TJSONArray> then
       begin
@@ -1663,7 +1691,6 @@ begin
 
     if (Items = nil) or (Length(Items) = 0) then
     begin
-      // If no items, render the else block if it exists
       if ElseContent <> '' then
         Output := RenderInternal(ElseContent, Context);
     end
@@ -1707,11 +1734,9 @@ begin
                 MergedContext.AddOrSetValue(VarName, TValue.From<TDictionary<String,TValue>>(subDict));
               end
               else
-                MergedContext.AddOrSetValue(VarName, Pair.Value)
-            else
-              MergedContext.AddOrSetValue(Pair.Key, Pair.Value);
+                MergedContext.AddOrSetValue(Pair.Key, Pair.Value);
           end;
-          Output := Output + Self.RenderInternal(BlockContent, MergedContext);
+          Output := Output + RenderInternal(BlockContent, MergedContext);
         finally
           if subDict <> nil then
             subDict.Free;
@@ -1719,7 +1744,7 @@ begin
         end;
       end;
 
-      if ListExpr.StartsWith('[') or (Context.ContainsKey(ListExpr) and Value.IsArray) then
+      if ListExpr.StartsWith('[') or Value.IsArray or Value.IsType<TJSONArray> then
       begin
         for Item in Items do
           Item.Free;

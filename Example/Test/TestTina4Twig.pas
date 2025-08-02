@@ -28,13 +28,51 @@ type
   published
     procedure TestSetVariable;
     procedure TestRender;
+    procedure TestForLoops;
+    procedure TestWith;
+    procedure TestIf;
   end;
 
 implementation
 
 procedure TestTTina4Twig.SetUp;
+var
+  PeopleArray: TArray<TValue>;
 begin
   FTina4Twig := TTina4Twig.Create;
+  FTina4Twig.SetVariable('name', 'Andre');
+  FTina4Twig.SetVariable('age', 46);
+
+
+  // Set up test context
+  var PersonDict := TDictionary<String, TValue>.Create;
+  PersonDict.Add('name', TValue.From<String>('Andre'));
+  PersonDict.Add('age', TValue.From<Integer>(46));
+
+  SetLength(PeopleArray, 2);
+  PeopleArray[0] := TValue.From<TDictionary<String, TValue>>(PersonDict);
+  PersonDict := TDictionary<String, TValue>.Create;
+  PersonDict.Add('name', TValue.From<String>('Bob'));
+  PersonDict.Add('age', TValue.From<Integer>(25));
+  PeopleArray[1] := TValue.From<TDictionary<String, TValue>>(PersonDict);
+
+  FTina4Twig.SetVariable('people', TValue.From<TArray<TValue>>(PeopleArray));
+
+  // Set up JSON array
+  var JSONArray := TJSONArray.Create;
+  JSONArray.AddElement(TJSONString.Create('Alice'));
+  JSONArray.AddElement(TJSONString.Create('Bob'));
+  FTina4Twig.SetVariable('names', TValue.From<TJSONArray>(JSONArray));
+
+
+  var PJSONArray := TJSONArray.Create;
+  PJSONArray.Add(TJSONObject.ParseJSONValue('{"name": "Alice", "age": 22}') as TJSONObject);
+  PJSONArray.Add(TJSONObject.ParseJSONValue('{"name": "Bob", "age": 50}') as TJSONObject);
+
+  FTina4Twig.SetVariable('people_json', PJSONArray);
+
+  // Set up empty array
+  FTina4Twig.SetVariable('persons', TValue.From<TArray<TValue>>([]));
 end;
 
 procedure TestTTina4Twig.TearDown;
@@ -45,61 +83,241 @@ end;
 
 procedure TestTTina4Twig.TestSetVariable;
 var
-  AValue: TValue;
-  AName: string;
+  ReturnValue: string;
+  TemplateOrContent: string;
 begin
-  // TODO: Setup method call parameters
-  FTina4Twig.SetVariable(AName, AValue);
-  // TODO: Validate method results
+  TemplateOrContent := '{{dump(people)}}{{dump(people_json)}}{{dump(names)}}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  WriteLn(ReturnValue);
+
+  TemplateOrContent := '{{people[0].name}}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  WriteLn(ReturnValue);
+
+  TemplateOrContent := '{{people[0].name}}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  WriteLn(ReturnValue);
+
+  TemplateOrContent := '{{name}}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  WriteLn(ReturnValue);
+end;
+
+procedure TestTTina4Twig.TestWith;
+var
+  ReturnValue: string;
+  TemplateOrContent: string;
+begin
+    // Test Case 2: With block with new variables, accessing outer context
+  TemplateOrContent := '{% with { new_name: "Bob" } %}{{ people[0].name }} {{ new_name }}{% endwith %}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = 'Andre Bob', TemplateOrContent + ' - Should be Andre Bob, got ' + ReturnValue);
+
+  // Test Case 4: With block using a context variable
+  TemplateOrContent := '{% with people[0] %}{{ name }} {{ age }}{% endwith %}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = 'Andre 46', TemplateOrContent + ' - Should be Andre 46, got ' + ReturnValue);
+
+  // Test Case 5: Empty with block
+  TemplateOrContent := '{% with %}{% endwith %}{{ people[0].name }}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = 'Andre', TemplateOrContent + ' - Should be Andre, got ' + ReturnValue);
+
+
+  // Test Case 3: With block with only, isolating context
+  TemplateOrContent := '{% with { new_name: "Bob" } only %}{{ new_name }} {{ people[0].name }}{% endwith %}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = 'Bob ', TemplateOrContent + ' - Should be Bob (empty), got ' + ReturnValue);
+
+   // Test Case 6: Nested with blocks
+  TemplateOrContent := '{% with { outer_name: "Outer" } %}{{ people[0].name }} {{ outer_name }} {% with { inner_name: "Inner" } %}{{ inner_name }} {{ outer_name }} {{ people[0].name }}{% endwith %}{% endwith %}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = 'Andre Outer Inner Outer Andre', TemplateOrContent + ' - Should be Andre Outer Inner Outer Andre, got ' + ReturnValue);
+
+end;
+
+procedure TestTTina4Twig.TestForLoops;
+var
+  ReturnValue: string;
+  TemplateOrContent: string;
+
+begin
+  // Test 1: Empty loop with else clause (provided template)
+  TemplateOrContent := '{%for a in persons%}{{a}}{%else%}No persons{%endfor%}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = 'No persons', TemplateOrContent + ' - Should be No persons, got ' + ReturnValue);
+
+  // Test 2: Loop over array of objects
+  TemplateOrContent := '{%for person in people%}{{person.name}} {%endfor%}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = 'Andre Bob ', TemplateOrContent + ' - Should be Andre Bob , got ' + ReturnValue);
+
+  // Test 3: Loop over JSON array
+  TemplateOrContent := '{%for name in names%}{{name}} {%endfor%}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = 'Alice Bob ', TemplateOrContent + ' - Should be Alice Bob , got ' + ReturnValue);
+
+  // Test 4: Loop over inline array
+  TemplateOrContent := '{%for item in [1, 2, 3]%}{{item}} {%endfor%}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = '1 2 3 ', TemplateOrContent + ' - Should be 1 2 3 , got ' + ReturnValue);
+
+  // Test 5: Loop over dictionary
+  TemplateOrContent := '{%for value in people[0]%}{{value}} {%endfor%}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue.Contains('Andre') and ReturnValue.Contains('46'), TemplateOrContent + ' - Should contain Andre and 46, got ' + ReturnValue);
+
+  // Test 6: Nested loop
+  TemplateOrContent := '{%for person in people%}{%for name in names%}{{person.name}}-{{name}} {%endfor%}{%endfor%}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = 'Andre-Alice Andre-Bob Bob-Alice Bob-Bob ', TemplateOrContent + ' - Should be Andre-Alice Andre-Bob Bob-Alice Bob-Bob , got ' + ReturnValue);
+
+  TemplateOrContent := '{%for a in [1,2,3]%}{{a}}{%endfor%}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = '123', TemplateOrContent+' Should be 123');
+
+
+  TemplateOrContent := '{%for a in persons%}{{a}}{%else%}No persons{%endfor%}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = 'No persons', TemplateOrContent+'- Should be No persons, got '+ReturnValue);
+end;
+
+procedure TestTTina4Twig.TestIf;
+var
+  ReturnValue: string;
+  TemplateOrContent: string;
+begin
+  FTina4Twig.SetVariable('is_active', TValue.From<Boolean>(True));
+  FTina4Twig.SetVariable('is_inactive', TValue.From<Boolean>(False));
+  FTina4Twig.SetVariable('number', TValue.From<Integer>(42));
+  FTina4Twig.SetVariable('text', TValue.From<String>('Hello World'));
+  var Dict := TDictionary<String, TValue>.Create;
+  Dict.Add('name', TValue.From<String>('Alice'));
+  Dict.Add('age', TValue.From<Integer>(25));
+  FTina4Twig.SetVariable('user', TValue.From<TDictionary<String, TValue>>(Dict));
+  var Arr: TArray<TValue> := [TValue.From<String>('apple'), TValue.From<String>('banana'), TValue.From<String>('orange')];
+  FTina4Twig.SetVariable('fruits', TValue.From<TArray<TValue>>(Arr));
+
+  TemplateOrContent := '{{dump(fruits)}}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  WriteLn(ReturnValue);
+
+  // Test 1: Simple if block with true condition
+  TemplateOrContent := '{% if is_active %}Active{% endif %}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = 'Active', TemplateOrContent + ' - Should be Active, got ' + ReturnValue);
+
+  // Test 2: Simple if block with false condition
+  TemplateOrContent := '{% if is_inactive %}Inactive{% endif %}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = '', TemplateOrContent + ' - Should be empty, got ' + ReturnValue);
+
+  // Test 3: If block with else
+  TemplateOrContent := '{% if is_inactive %}Inactive{% else %}Active{% endif %}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = 'Active', TemplateOrContent + ' - Should be Active, got ' + ReturnValue);
+
+  // Test 6: If block with comparison operators
+  TemplateOrContent := '{% if number > 40 %}Greater{% elseif number < 40 %}Less{% elseif number == 40 %}Equal{% else %}Exact{% endif %}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = 'Greater', TemplateOrContent + ' - Should be Greater, got ' + ReturnValue);
+
+  // Test 7: If block with 'in' operator
+  TemplateOrContent := '{% if "banana" in fruits %}Found{% else %}Not Found{% endif %}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = 'Found', TemplateOrContent + ' - Should be Found, got ' + ReturnValue);
+
+  // Test 8: If block with 'starts with' operator
+  TemplateOrContent := '{% if text starts with "Hello" %}Starts Hello{% else %}Does Not Start{% endif %}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = 'Starts Hello', TemplateOrContent + ' - Should be Starts Hello, got ' + ReturnValue);
+
+  // Test 9: If block with 'matches' operator
+  TemplateOrContent := '{% if text matches "^Hello.*" %}Matches{% else %}No Match{% endif %}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = 'Matches', TemplateOrContent + ' - Should be Matches, got ' + ReturnValue);
+
+  // Test 4: If block with elseif
+  TemplateOrContent := '{% if number == 0 %}Zero{% elseif number == 42 %}Forty-Two{% else %}Other{% endif %}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = 'Forty-Two', TemplateOrContent + ' - Should be Forty-Two, got ' + ReturnValue);
+
+  // Test 5: Nested if blocks
+  TemplateOrContent := '{% if is_active %}{% if number > 40 %}High{% else %}Low{% endif %}{% else %}Inactive{% endif %}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = 'High', TemplateOrContent + ' - Should be High, got ' + ReturnValue);
 end;
 
 procedure TestTTina4Twig.TestRender;
 var
   ReturnValue: string;
   TemplateOrContent: string;
+
 begin
   // TODO: Setup method call parameters
   TemplateOrContent := '{{name}}';
-  FTina4Twig.SetVariable('name', 'Andre');
-
-  var People := TJSONArray.Create;
-
-  var Person := TJSONObject.Create;
-  Person.AddPair('name', 'Andre');
-  Person.AddPair('age', 46);
-  People.Add(Person);
-
-  Person := TJSONObject.Create;
-  Person.AddPair('name', 'George');
-  Person.AddPair('age', 26);
-  People.Add(Person);
-
-  Person := TJSONObject.Create;
-  Person.AddPair('name', 'Lloyd');
-  Person.AddPair('age', 56);
-  People.Add(Person);
-
-  FTina4Twig.SetVariable('people', People);
-
   ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = 'Andre', '{{name}} should be Andre');
 
-  Check(ReturnValue = 'Andre', '{{name}} should be Andre1');
-
-  TemplateOrContent := '{%if name == "Andre"%}Yes{%else%}No{%endif%}';
+  // Test Case 1: Original test - direct access to people[0].name
+  TemplateOrContent := '{{people[0].name}}';
   ReturnValue := FTina4Twig.Render(TemplateOrContent);
-  Check(ReturnValue = 'Yes', TemplateOrContent+' Should be Yes');
+  Check(ReturnValue = 'Andre', TemplateOrContent + ' - Should be Andre, got ' + ReturnValue);
 
-  TemplateOrContent := '{%if name != "Andre"%}Yes{%else%}No{%endif%}';
+  TemplateOrContent := '{%set name = "Hello"%}{{name}}';
   ReturnValue := FTina4Twig.Render(TemplateOrContent);
-  Check(ReturnValue = 'No', TemplateOrContent+' Should be No');
+  Check(ReturnValue = 'Hello', TemplateOrContent+' Should be Hello '+ReturnValue);
 
-  TemplateOrContent := '{%for a in [1,2,3]%}{{a}}{%endfor%}';
+  TemplateOrContent := '{% extends "base.twig" %}';
   ReturnValue := FTina4Twig.Render(TemplateOrContent);
-  Check(ReturnValue = '123', TemplateOrContent+' Should be 123');
+  Check(ReturnValue = 'Original TitleOriginal Content'#$D#$A, TemplateOrContent+' Should be Original TitleOriginal Content '+ReturnValue);
 
-  TemplateOrContent := '{%for a in persons%}{{a}}{%else%}No persons{%endfor%}';
+  TemplateOrContent := '{% extends "base.twig" %}{%block title%}My Title{%endblock%}';
   ReturnValue := FTina4Twig.Render(TemplateOrContent);
-  Check(ReturnValue = 'No persons', TemplateOrContent+'- Should be No persons');
+  Check(ReturnValue = 'My TitleOriginal Content'#$D#$A, TemplateOrContent+' Should be My TitleOriginal Content '+ReturnValue);
+
+
+  TemplateOrContent := '{% extends "base.twig" %}{%block content%}My Content{%endblock%}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = 'Original TitleMy Content'#$D#$A, TemplateOrContent+' Should be Original TitleMy Content '+ReturnValue);
+
+  TemplateOrContent := '{% extends "base.twig" %}{%block title%}My Title{%endblock%}{%block content%}My Content{%endblock%}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = 'My TitleMy Content'#$D#$A, TemplateOrContent+' Should be My TitleMy Content '+ReturnValue);
+
+
+  TemplateOrContent := '{%set trees = ["Beech", "Oak", "Popular"]%}{{dump(trees)}}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = '<pre>trees ='#$D#$A'  array(3) {'#$D#$A'    [0]=>'#$D#$A'      string(5) "Beech"'#$D#$A'    [1]=>'#$D#$A'      string(3) "Oak"'#$D#$A'    [2]=>'#$D#$A'      string(7) "Popular"'#$D#$A'  }'#$D#$A'</pre>', TemplateOrContent+' Should be array '+ReturnValue);
+
+
+  TemplateOrContent := '{%set trees = ["Beech", "Oak", "Poplar"]%}{{trees[1]}}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = 'Oak', TemplateOrContent+' Should be Oak '+ReturnValue);
+
+  TemplateOrContent := '{%set trees = [{"name": "Beech"}, {"name": "Oak"}, {"name": "Poplar"}]%}{{trees[2].name}}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = 'Poplar', TemplateOrContent+' Should be Poplar '+ReturnValue);
+
+
+  TemplateOrContent := '{%set trees = [{"name": "Beech"}, {"name": "Oak"}, {"name": "Poplar"}]%}{{trees | length}}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = '3', TemplateOrContent+' Should be 3 '+ReturnValue);
+
+  TemplateOrContent := '{{Moo}}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = '', TemplateOrContent+' Should be Blank '+ReturnValue);
+
+
+  TemplateOrContent := '{% if name == "Andre" %}Yes{% else %}No{% endif %}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = 'Yes', TemplateOrContent+' Should be Yes, got '+ ReturnValue);
+
+  TemplateOrContent := '{% if name != "Andre" %}Yes{% else %}No{% endif %}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = 'No', TemplateOrContent+' Should be No, got '+ ReturnValue);
+
+
 
   TemplateOrContent := '{% macro input(name, value, type = "text", size = 20) %}<input type="{{ type }}" name="{{ name }}" value="{{ value|e }}" size="{{ size }}"/>{% endmacro %}{{input("Test")}}';
   ReturnValue := FTina4Twig.Render(TemplateOrContent);
@@ -111,10 +329,6 @@ begin
   Check(ReturnValue = 'A<input type="text" name="Test" value="" size="20"/>', TemplateOrContent+'- Should be A<input type="text" name="Test" value="" size="20"/> '+ReturnValue);
 
 
-
-  TemplateOrContent := '{{person[0].name}}';
-  ReturnValue := FTina4Twig.Render(TemplateOrContent);
-  Check(ReturnValue = 'Andre', TemplateOrContent+'- Should be Andre '+ReturnValue);
 
   // TODO: Validate method results
 end;

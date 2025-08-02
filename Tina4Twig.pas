@@ -8,7 +8,7 @@ uses
 
 type
   TStringDict = TDictionary<String, TValue>;
-  TFilterFunc = reference to function(const Input: String; const Args: TArray<String>): String;
+  TFilterFunc = reference to function(const Input: TValue; const Args: TArray<String>): String;
   TFunctionFunc = reference to function(const Args: TArray<String>; const Context: TDictionary<String, TValue>): String;
   TMacroFunc = reference to function(const MacroName: String; const Args: TArray<String>; const MacroContext: TDictionary<String, TValue>): String;
 
@@ -743,7 +743,6 @@ begin
       FullMatch := Match.Value;
       Expr := Trim(Match.Groups[1].Value);
 
-      // Split expression into variable/function/macro and filters
       VarName := Expr;
       FilterChain := '';
       if Expr.Contains('|') then
@@ -754,7 +753,6 @@ begin
           FilterChain := FilterChain + '|' + Trim(Parts[I]);
       end;
 
-      // Check if it's a macro or function call like name(arg1, arg2)
       if (Pos('(', VarName) > 0) and VarName.EndsWith(')') then
       begin
         FuncName := Trim(Copy(VarName, 1, Pos('(', VarName) - 1));
@@ -763,28 +761,23 @@ begin
         for I := 0 to High(Args) do
         begin
           Args[I] := Trim(Args[I]);
-          // Handle quoted strings and context variables
           if (Args[I].StartsWith('"') and Args[I].EndsWith('"')) or
              (Args[I].StartsWith('''') and Args[I].EndsWith('''')) then
             Args[I] := Args[I].Substring(1, Args[I].Length - 2)
           else
-            Args[I] := Args[I]; // Keep literal value for functions like dump
+            Args[I] := Args[I];
         end;
 
-        // Debug: Log macro/function call
         DebugLog.Add('Attempting to call: ' + FuncName + ' with args: ' + String.Join(', ', Args));
         DebugLog.Add('Available macros: ' + String.Join(', ', FMacros.Keys.ToArray));
         DebugLog.Add('Available functions: ' + String.Join(', ', FFunctions.Keys.ToArray));
 
-        // Prioritize macro lookup
         if FMacros.ContainsKey(FuncName) then
         begin
-          WriteLn('looking to render -'+FuncName+'-');
           if FMacros.TryGetValue(FuncName, Macro) then
           begin
-            WriteLn('looking to render -'+FuncName+'-');
             FilteredValue := Macro(FuncName, Args, Context);
-            WriteLn('Called macro: ' + FuncName);
+            DebugLog.Add('Called macro: ' + FuncName);
           end
           else
           begin
@@ -813,46 +806,52 @@ begin
       end
       else
       begin
-        // Resolve variable
         TempVal := ResolveVariablePath(VarName, Context);
-        if not TempVal.IsEmpty then
+        if FilterChain <> '' then
+        begin
+          FilteredValue := TempVal.ToString; // Initialize for filter chain
+          var Filters := FilterChain.TrimLeft(['|']).Split(['|'], TStringSplitOptions.ExcludeEmpty);
+          var CurrentVal := TempVal; // Start with raw TValue
+          for var FilterExp in Filters do
+          begin
+            var FilterExpr := Trim(FilterExp);
+            if FilterExpr.Contains('(') and FilterExpr.EndsWith(')') then
+            begin
+              FuncName := Copy(FilterExpr, 1, Pos('(', FilterExpr) - 1);
+              ArgsStr := Copy(FilterExpr, Pos('(', FilterExpr) + 1, Length(FilterExpr) - Pos('(', FilterExpr) - 1);
+              Args := ArgsStr.Split([','], TStringSplitOptions.ExcludeEmpty);
+              for I := 0 to High(Args) do
+                Args[I] := Trim(Args[I]);
+            end
+            else
+            begin
+              FuncName := FilterExpr;
+              SetLength(Args, 0);
+            end;
+
+            if FFilters.TryGetValue(FuncName, Filter) then
+            begin
+              FilteredValue := Filter(CurrentVal, Args);
+              DebugLog.Add('Applied filter: ' + FuncName + ', result: ' + FilteredValue);
+              CurrentVal := TValue.From<String>(FilteredValue);
+            end
+            else
+            begin
+              FilteredValue := '(filter ' + FuncName + ' not found)';
+              DebugLog.Add('Failed to lookup filter: ' + FuncName);
+              CurrentVal := TValue.From<String>(FilteredValue);
+            end;
+          end;
+        end
+        else if not TempVal.IsEmpty then
           FilteredValue := TempVal.ToString
         else
           FilteredValue := ''; // Return empty string for undefined variables
       end;
 
-      // Apply filters if any
-      if FilterChain <> '' then
-      begin
-        var Filters := FilterChain.TrimLeft(['|']).Split(['|'], TStringSplitOptions.ExcludeEmpty);
-        for var FilterExp in Filters do
-        begin
-          var FilterExpr := Trim(FilterExp);
-          if FilterExpr.Contains('(') and FilterExpr.EndsWith(')') then
-          begin
-            FuncName := Copy(FilterExpr, 1, Pos('(', FilterExpr) - 1);
-            ArgsStr := Copy(FilterExpr, Pos('(', FilterExpr) + 1, Length(FilterExpr) - Pos('(', FilterExpr) - 1);
-            Args := ArgsStr.Split([','], TStringSplitOptions.ExcludeEmpty);
-            for I := 0 to High(Args) do
-              Args[I] := Trim(Args[I]);
-          end
-          else
-          begin
-            FuncName := FilterExpr;
-            SetLength(Args, 0);
-          end;
-
-          if FFilters.TryGetValue(FuncName, Filter) then
-            FilteredValue := Filter(FilteredValue, Args)
-          else
-            FilteredValue := '(filter ' + FuncName + ' not found)';
-        end;
-      end;
-
       Result := StringReplace(Result, FullMatch, FilteredValue, [rfReplaceAll]);
     end;
 
-    // Save debug log to file for inspection
     DebugLog.SaveToFile('debug_log.txt');
   finally
     DebugLog.Free;
@@ -872,47 +871,121 @@ end;
 /// </remarks>
 function TTina4Twig.ResolveVariablePath(const VariablePath: string; Context: TDictionary<String, TValue>): TValue;
 var
+  Regex: TRegEx;
+  Matches: TMatchCollection;
   Parts: TArray<string>;
   Current: TValue;
   i: Integer;
   Key: string;
   Dict: TDictionary<String, TValue>;
   Arr: TArray<TValue>;
+  JSONArray: TJSONArray;
   Index: Integer;
   RttiCtx: TRttiContext;
   RttiType: TRttiType;
   Prop: TRttiProperty;
 begin
-  Parts := VariablePath.Split(['.']);
+  // Initialize result as empty
+  Result := TValue.Empty;
+
+  // Regex to match identifiers or array indices
+  Regex := TRegEx.Create('(\w+|\[\d+\])', [roIgnoreCase]);
+  Matches := Regex.Matches(VariablePath);
+  SetLength(Parts, Matches.Count);
+  for i := 0 to Matches.Count - 1 do
+    Parts[i] := Matches[i].Value;
+
   if Length(Parts) = 0 then
     Exit(TValue.Empty);
 
+  // Initial lookup
   if not Context.TryGetValue(Parts[0], Current) then
     Exit(TValue.Empty);
 
+  // Process each part of the path
   for i := 1 to High(Parts) do
   begin
     Key := Parts[i];
 
-    if Current.IsObject and (Current.AsObject is TDictionary<String, TValue>) then
+    // Handle array index (e.g., [0])
+    if (Key.StartsWith('[') and Key.EndsWith(']')) then
     begin
-      Dict := TDictionary<String, TValue>(Current.AsObject);
-      if not Dict.TryGetValue(Key, Current) then
-        Exit(TValue.Empty);
-    end
-    else if Current.IsArray then
-    begin
-      if TryStrToInt(Key, Index) then
+      // Extract index from [0]
+      if TryStrToInt(Copy(Key, 2, Length(Key) - 2), Index) then
       begin
-        Arr := Current.AsType<TArray<TValue>>;
-        if (Index >= 0) and (Index < Length(Arr)) then
-          Current := Arr[Index]
+        // Handle TArray<TValue>
+        if Current.IsArray then
+        begin
+          Arr := Current.AsType<TArray<TValue>>;
+          if (Index >= 0) and (Index < Length(Arr)) then
+            Current := Arr[Index]
+          else
+            Exit(TValue.Empty);
+        end
+        // Handle TJSONArray
+        else if Current.IsObject and (Current.AsObject is TJSONArray) then
+        begin
+          JSONArray := TJSONArray(Current.AsObject);
+          if (Index >= 0) and (Index < JSONArray.Count) then
+          begin
+            var JSONVal := JSONArray.Items[Index];
+            if JSONVal is TJSONNumber then
+              Current := TValue.From<Double>(TJSONNumber(JSONVal).AsDouble)
+            else if JSONVal is TJSONString then
+              Current := TValue.From<String>(TJSONString(JSONVal).Value)
+            else if JSONVal is TJSONBool then
+              Current := TValue.From<Boolean>(TJSONBool(JSONVal).AsBoolean)
+            else if JSONVal is TJSONNull then
+              Current := TValue.Empty
+            else if JSONVal is TJSONObject then
+            begin
+              Dict := TDictionary<String, TValue>.Create;
+              try
+                for var Pair in TJSONObject(JSONVal) do
+                begin
+                  if Pair.JsonValue is TJSONNumber then
+                  begin
+                    var numStr := Pair.JsonValue.Value;
+                    if (Pos('.', numStr) > 0) or (Pos('e', LowerCase(numStr)) > 0) then
+                      Dict.Add(Pair.JsonString.Value, TValue.From<Double>(TJSONNumber(Pair.JsonValue).AsDouble))
+                    else
+                      Dict.Add(Pair.JsonString.Value, TValue.From<Int64>(TJSONNumber(Pair.JsonValue).AsInt64));
+                  end
+                  else if Pair.JsonValue is TJSONBool then
+                    Dict.Add(Pair.JsonString.Value, TValue.From<Boolean>(TJSONBool(Pair.JsonValue).AsBoolean))
+                  else if Pair.JsonValue is TJSONString then
+                    Dict.Add(Pair.JsonString.Value, TValue.From<String>(TJSONString(Pair.JsonValue).Value))
+                  else if Pair.JsonValue is TJSONNull then
+                    Dict.Add(Pair.JsonString.Value, TValue.Empty)
+                  else
+                    Dict.Add(Pair.JsonString.Value, TValue.From<String>(Pair.JsonValue.ToString));
+                end;
+                Current := TValue.From<TDictionary<String, TValue>>(Dict);
+              except
+                Dict.Free;
+                raise;
+              end;
+            end
+            else
+              Current := TValue.From<String>(JSONVal.ToString);
+          end
+          else
+            Exit(TValue.Empty);
+        end
         else
           Exit(TValue.Empty);
       end
       else
         Exit(TValue.Empty);
     end
+    // Handle dictionary or property access
+    else if Current.IsObject and (Current.AsObject is TDictionary<String, TValue>) then
+    begin
+      Dict := TDictionary<String, TValue>(Current.AsObject);
+      if not Dict.TryGetValue(Key, Current) then
+        Exit(TValue.Empty);
+    end
+    // Handle object property access via RTTI
     else if Current.IsObject then
     begin
       RttiCtx := TRttiContext.Create;
@@ -927,6 +1000,7 @@ begin
         RttiCtx.Free;
       end;
     end
+    // Handle record property access via RTTI
     else if Current.Kind = tkRecord then
     begin
       RttiCtx := TRttiContext.Create;
@@ -1002,6 +1076,7 @@ var
   Value: TValue;
   Int64Val: Int64;
   FloatVal: Double;
+  BoolVal: Boolean;
 begin
   Result := TDictionary<String, TValue>.Create;
   Content := Trim(DictStr);
@@ -1038,15 +1113,16 @@ begin
           Value := TValue.From<Boolean>(True)
         else if Pair.JsonValue is TJSONFalse then
           Value := TValue.From<Boolean>(False)
+        else if Pair.JsonValue is TJSONString then
+          Value := TValue.From<String>(TJSONString(Pair.JsonValue).Value)
+        else if Pair.JsonValue is TJSONNull then
+          Value := TValue.Empty
         else
         begin
-          // Remove quotes from string values
-          if (ValueStr.StartsWith('"') and ValueStr.EndsWith('"')) or
-             (ValueStr.StartsWith('''') and ValueStr.EndsWith('''')) then
-            ValueStr := ValueStr.Substring(1, ValueStr.Length - 2);
           // Try to resolve from OuterContext if it's a variable name
+          ValueStr := TJSONString(Pair.JsonValue).Value;
           if (OuterContext <> nil) and OuterContext.TryGetValue(ValueStr, Value) then
-            // Value already set from context
+            // Value resolved from context
           else
             Value := TValue.From<String>(ValueStr);
         end;
@@ -1374,7 +1450,8 @@ var
   Pair: TPair<String, TValue>;
 begin
   Result := Template;
-  Regex := TRegEx.Create('{%\s*with\s*([^%]*?)(\s+only)?\s*%}(.*?){%\s*endwith\s*%}', [roIgnoreCase, roSingleLine]);
+  // Regex to capture 'with' block, ensuring 'only' is not part of WithVarRaw
+  Regex := TRegEx.Create('{%\s*with\s+((?:(?!\s*only\s*%).)*?)(\s*only)?\s*%}(.*?){%\s*endwith\s*%}', [roIgnoreCase, roSingleLine]);
 
   while True do
   begin
@@ -1389,14 +1466,13 @@ begin
 
     MergedContext := TDictionary<String, TValue>.Create;
     try
-      // Copy outer context only if not using "only"
+      // Copy parent context only if 'only' is not specified
       if not UseOnly then
       begin
         for Pair in Context do
           MergedContext.AddOrSetValue(Pair.Key, Pair.Value);
       end;
 
-      // Process initial variables from WithVarRaw if provided
       if WithVarRaw <> '' then
       begin
         if WithVarRaw.StartsWith('{') and WithVarRaw.EndsWith('}') then
@@ -1409,21 +1485,58 @@ begin
             ParsedDict.Free;
           end;
         end
-        else if Context.TryGetValue(WithVarRaw, VarValue) then
+        else
         begin
-          if VarValue.IsType<TDictionary<String, TValue>> then
+          VarValue := ResolveVariablePath(WithVarRaw, Context);
+          if not VarValue.IsEmpty then
           begin
-            ParsedDict := VarValue.AsType<TDictionary<String, TValue>>;
-            for Pair in ParsedDict do
-              MergedContext.AddOrSetValue(Pair.Key, Pair.Value);
-          end
-          else
-            MergedContext.AddOrSetValue(WithVarRaw, VarValue);
+            if VarValue.IsType<TDictionary<String, TValue>> then
+            begin
+              ParsedDict := VarValue.AsType<TDictionary<String, TValue>>;
+              for Pair in ParsedDict do
+                MergedContext.AddOrSetValue(Pair.Key, Pair.Value);
+            end
+            else if VarValue.IsObject and (VarValue.AsObject is TJSONObject) then
+            begin
+              ParsedDict := TDictionary<String, TValue>.Create;
+              try
+                for var JPair in TJSONObject(VarValue.AsObject) do
+                begin
+                  var PVal: TValue;
+                  if JPair.JsonValue is TJSONNumber then
+                  begin
+                    var numStr := JPair.JsonValue.Value;
+                    if (Pos('.', numStr) > 0) or (Pos('e', LowerCase(numStr)) > 0) then
+                      PVal := TValue.From<Double>(TJSONNumber(JPair.JsonValue).AsDouble)
+                    else
+                      PVal := TValue.From<Int64>(TJSONNumber(JPair.JsonValue).AsInt64);
+                  end
+                  else if JPair.JsonValue is TJSONBool then
+                    PVal := TValue.From<Boolean>(TJSONBool(JPair.JsonValue).AsBoolean)
+                  else if JPair.JsonValue is TJSONString then
+                    PVal := TValue.From<String>(TJSONString(JPair.JsonValue).Value)
+                  else if JPair.JsonValue is TJSONNull then
+                    PVal := TValue.Empty
+                  else
+                    PVal := TValue.From<String>(JPair.JsonValue.ToString);
+                  ParsedDict.AddOrSetValue(JPair.JsonString.Value, PVal);
+                end;
+                for Pair in ParsedDict do
+                  MergedContext.AddOrSetValue(Pair.Key, Pair.Value);
+              finally
+                ParsedDict.Free;
+              end;
+            end
+            else
+              MergedContext.AddOrSetValue(WithVarRaw, VarValue);
+          end;
         end;
       end;
 
-      // Render the inner block with the isolated MergedContext
-      Evaluated := RenderInternal(InnerBlock, MergedContext);
+      // Recursively evaluate nested 'with' blocks before rendering other constructs
+      Evaluated := EvaluateWithBlocks(InnerBlock, MergedContext);
+      // Render the inner block with the merged context
+      Evaluated := RenderInternal(Evaluated, MergedContext);
       Result := StringReplace(Result, FullMatch, Evaluated, [rfReplaceAll]);
     finally
       MergedContext.Free;
@@ -1701,74 +1814,197 @@ begin
   FFilters.Clear;
 
   FFilters.Add('abs',
-    function(const Input: String; const Args: TArray<String>): String
+    function(const Input: TValue; const Args: TArray<String>): String
     var
       Val: Double;
     begin
-      if TryStrToFloat(Input, Val) then
+      if Input.IsOrdinal and Input.IsType<Int64> then
+        Result := IntToStr(Abs(Input.AsInt64))
+      else if Input.IsType<Real> then
+        Result := FloatToStr(Abs(Input.AsExtended))
+      else if Input.Kind in [tkString, tkUString] then
         Result := FloatToStr(Abs(Val))
       else
-        Result := Input;
+        Result := Input.ToString;
     end);
 
   FFilters.Add('batch',
-    function(const Input: String; const Args: TArray<String>): String
+    function(const Input: TValue; const Args: TArray<String>): String
+    var
+      Size: Integer;
+      Arr: TArray<TValue>;
+      JSONArray: TJSONArray;
+      I, J: Integer;
+      Batch: TStringBuilder;
     begin
-      // Stub: batching arrays not implemented; return Input for now
-      Result := Input;
+      if Length(Args) = 0 then
+        Exit(Input.ToString);
+      Size := StrToIntDef(Args[0], 1);
+      if Size < 1 then
+        Size := 1;
+
+      Batch := TStringBuilder.Create;
+      try
+        if Input.IsArray then
+        begin
+          Arr := Input.AsType<TArray<TValue>>;
+          Batch.Append('[');
+          for I := 0 to (Length(Arr) - 1) div Size do
+          begin
+            if I > 0 then
+              Batch.Append(',');
+            Batch.Append('[');
+            for J := 0 to Size - 1 do
+            begin
+              if I * Size + J < Length(Arr) then
+              begin
+                if J > 0 then
+                  Batch.Append(',');
+                Batch.Append(Arr[I * Size + J].ToString);
+              end;
+            end;
+            Batch.Append(']');
+          end;
+          Batch.Append(']');
+          Result := Batch.ToString;
+        end
+        else if Input.IsObject and (Input.AsObject is TJSONArray) then
+        begin
+          JSONArray := TJSONArray(Input.AsObject);
+          Batch.Append('[');
+          for I := 0 to (JSONArray.Count - 1) div Size do
+          begin
+            if I > 0 then
+              Batch.Append(',');
+            Batch.Append('[');
+            for J := 0 to Size - 1 do
+            begin
+              if I * Size + J < JSONArray.Count then
+              begin
+                if J > 0 then
+                  Batch.Append(',');
+                Batch.Append(JSONArray.Items[I * Size + J].ToString);
+              end;
+            end;
+            Batch.Append(']');
+          end;
+          Batch.Append(']');
+          Result := Batch.ToString;
+        end
+        else
+          Result := Input.ToString;
+      finally
+        Batch.Free;
+      end;
     end);
 
   FFilters.Add('capitalize',
-    function(const Input: String; const Args: TArray<String>): String
+    function(const Input: TValue; const Args: TArray<String>): String
     begin
-      if Input = '' then
-        Result := ''
+      if (Input.Kind in [tkString, tkUString]) and (Input.AsString <> '') then
+        Result := UpperCase(Input.AsString[1]) + LowerCase(Copy(Input.AsString, 2, MaxInt))
       else
-        Result := UpperCase(Input[1]) + LowerCase(Copy(Input, 2, MaxInt));
+        Result := Input.ToString;
     end);
 
   FFilters.Add('column',
-    function(const Input: String; const Args: TArray<String>): String
+    function(const Input: TValue; const Args: TArray<String>): String
+    var
+      Key: String;
+      Arr: TArray<TValue>;
+      JSONArray: TJSONArray;
+      Dict: TDictionary<String, TValue>;
+      I: Integer;
+      Output: TStringBuilder;
     begin
-      // Stub: column extraction not implemented
-      Result := Input;
+      if Length(Args) = 0 then
+        Exit(Input.ToString);
+      Key := Args[0];
+
+      Output := TStringBuilder.Create;
+      try
+        Output.Append('[');
+        if Input.IsArray then
+        begin
+          Arr := Input.AsType<TArray<TValue>>;
+          for I := 0 to High(Arr) do
+          begin
+            if Arr[I].IsObject and (Arr[I].AsObject is TDictionary<String, TValue>) then
+            begin
+              Dict := TDictionary<String, TValue>(Arr[I].AsObject);
+              if Dict.ContainsKey(Key) then
+              begin
+                if I > 0 then
+                  Output.Append(',');
+                Output.Append(Dict[Key].ToString);
+              end;
+            end;
+          end;
+        end
+        else if Input.IsObject and (Input.AsObject is TJSONArray) then
+        begin
+          JSONArray := TJSONArray(Input.AsObject);
+          for I := 0 to JSONArray.Count - 1 do
+          begin
+            if JSONArray.Items[I] is TJSONObject then
+            begin
+              var Obj := TJSONObject(JSONArray.Items[I]);
+              var Pair := Obj.Get(Key);
+              if Assigned(Pair) then
+              begin
+                if I > 0 then
+                  Output.Append(',');
+                Output.Append(Pair.JsonValue.ToString);
+              end;
+            end;
+          end;
+        end;
+        Output.Append(']');
+        Result := Output.ToString;
+      finally
+        Output.Free;
+      end;
     end);
 
   FFilters.Add('convert_encoding',
-    function(const Input: String; const Args: TArray<String>): String
+    function(const Input: TValue; const Args: TArray<String>): String
     begin
       // Stub: encoding conversion not implemented
-      Result := Input;
+      Result := Input.ToString;
     end);
 
   FFilters.Add('country_name',
-    function(const Input: String; const Args: TArray<String>): String
+    function(const Input: TValue; const Args: TArray<String>): String
     begin
-      // Stub: return input or lookup country name if you implement a map
-      Result := Input;
+      // Stub: country name lookup not implemented
+      Result := Input.ToString;
     end);
 
   FFilters.Add('currency_name',
-    function(const Input: String; const Args: TArray<String>): String
+    function(const Input: TValue; const Args: TArray<String>): String
     begin
-      Result := Input;
+      // Stub: currency name lookup not implemented
+      Result := Input.ToString;
     end);
 
   FFilters.Add('currency_symbol',
-    function(const Input: String; const Args: TArray<String>): String
+    function(const Input: TValue; const Args: TArray<String>): String
     begin
-      Result := Input;
+      // Stub: currency symbol lookup not implemented
+      Result := Input.ToString;
     end);
 
   FFilters.Add('data_uri',
-    function(const Input: String; const Args: TArray<String>): String
+    function(const Input: TValue; const Args: TArray<String>): String
     begin
-      // Stub: encode input as data URI
-      Result := 'data:;base64,' + TNetEncoding.Base64.Encode(Input);
+      if Input.Kind in [tkString, tkUString] then
+        Result := 'data:;base64,' + TNetEncoding.Base64.Encode(Input.AsString)
+      else
+        Result := Input.ToString;
     end);
 
   FFilters.Add('date',
-    function(const Input: String; const Args: TArray<String>): String
+    function(const Input: TValue; const Args: TArray<String>): String
     var
       dt: TDateTime;
       fmt: String;
@@ -1777,94 +2013,93 @@ begin
         fmt := Args[0]
       else
         fmt := 'yyyy-mm-dd';
-      if TryStrToDateTime(Input, dt) then
+      if (Input.Kind in [tkString, tkUString]) and TryStrToDateTime(Input.AsString, dt) then
         Result := FormatDateTime(fmt, dt)
       else
-        Result := Input;
+        Result := Input.ToString;
     end);
 
   FFilters.Add('date_modify',
-    function(const Input: String; const Args: TArray<String>): String
+    function(const Input: TValue; const Args: TArray<String>): String
     begin
       // Stub: date arithmetic not implemented
-      Result := Input;
+      Result := Input.ToString;
     end);
 
   FFilters.Add('default',
-    function(const Input: String; const Args: TArray<String>): String
+    function(const Input: TValue; const Args: TArray<String>): String
     begin
-      if (Input = '') and (Length(Args) > 0) then
-        Result := Args[0]
+      if (Input.IsEmpty or (Input.Kind in [tkString, tkUString]) and (Input.AsString = '')) then
+      begin
+        if Length(Args) > 0 then
+          Result := Args[0]
+        else
+          Result := '';
+      end
       else
-        Result := Input;
+        Result := Input.ToString;
     end);
 
-  FFilters.Add('escape',
-    function(const Input: String; const Args: TArray<String>): String
+    FFilters.Add('escape',
+    function(const Input: TValue; const Args: TArray<String>): String
     var
       Strategy: String;
+      InputStr: String;
     begin
+      if Input.IsEmpty then
+        Exit(''); // Return empty string for TValue.Empty
+
+      InputStr := Input.ToString;
       Strategy := 'html';
       if Length(Args) > 0 then
         Strategy := LowerCase(Args[0]);
 
-      if Strategy =  'html' then
-          begin
-            Result := StringReplace(Input, '&', '&amp;', [rfReplaceAll]);
-            Result := StringReplace(Result, '<', '&lt;', [rfReplaceAll]);
-            Result := StringReplace(Result, '>', '&gt;', [rfReplaceAll]);
-            Result := StringReplace(Result, '"', '&quot;', [rfReplaceAll]);
-            Result := StringReplace(Result, '''', '&#39;', [rfReplaceAll]);
-          end
-      else
-      if Strategy =  'js' then
+      if Strategy = 'html' then
       begin
-            // Basic JS escaping
-            Result := StringReplace(Input, '\', '\\', [rfReplaceAll]);
-            Result := StringReplace(Result, '"', '\"', [rfReplaceAll]);
-            Result := StringReplace(Result, '''', '\''', [rfReplaceAll]);
-            Result := StringReplace(Result, sLineBreak, '\n', [rfReplaceAll]);
+        Result := StringReplace(InputStr, '&', '&amp;', [rfReplaceAll]);
+        Result := StringReplace(Result, '<', '&lt;', [rfReplaceAll]);
+        Result := StringReplace(Result, '>', '&gt;', [rfReplaceAll]);
+        Result := StringReplace(Result, '"', '&quot;', [rfReplaceAll]);
+        Result := StringReplace(Result, '''', '&#39;', [rfReplaceAll]);
       end
-        else
-      if Strategy =  'css' then
+      else if Strategy = 'js' then
       begin
-            // Simple CSS escaping, can be improved
-            Result := TNetEncoding.URL.Encode(Input);
+        Result := StringReplace(InputStr, '\', '\\', [rfReplaceAll]);
+        Result := StringReplace(Result, '"', '\"', [rfReplaceAll]);
+        Result := StringReplace(Result, '''', '\''', [rfReplaceAll]);
+        Result := StringReplace(Result, sLineBreak, '\n', [rfReplaceAll]);
       end
-        else
-     if Strategy =  'url' then
-     begin
-            Result := TNetEncoding.URL.Encode(Input);
-     end
-       else
-     if Strategy =  'html_attr' then
-     begin
-        // HTML attribute escaping
-        Result := StringReplace(Input, '&', '&amp;', [rfReplaceAll]);
+      else if Strategy = 'css' then
+        Result := TNetEncoding.URL.Encode(InputStr)
+      else if Strategy = 'url' then
+        Result := TNetEncoding.URL.Encode(InputStr)
+      else if Strategy = 'html_attr' then
+      begin
+        Result := StringReplace(InputStr, '&', '&amp;', [rfReplaceAll]);
         Result := StringReplace(Result, '"', '&quot;', [rfReplaceAll]);
         Result := StringReplace(Result, '''', '&#x27;', [rfReplaceAll]);
         Result := StringReplace(Result, '<', '&lt;', [rfReplaceAll]);
         Result := StringReplace(Result, '>', '&gt;', [rfReplaceAll]);
-     end
-        else
-          Result := Input; // Unknown strategy, no escaping
+      end
+      else
+        Result := InputStr;
     end);
 
   FFilters.Add('e', FFilters['escape']);
 
   FFilters.Add('filter',
-    function(const Input: String; const Args: TArray<String>): String
+    function(const Input: TValue; const Args: TArray<String>): String
     begin
-      // Stub: generic filter - no op
-      Result := Input;
+      // Stub: generic filter not implemented
+      Result := Input.ToString;
     end);
 
   FFilters.Add('find',
-    function(const Input: String; const Args: TArray<String>): String
+    function(const Input: TValue; const Args: TArray<String>): String
     begin
-      if (Length(Args) > 0) then
+      if (Length(Args) > 0) and (Input.Kind in [tkString, tkUString]) then
       begin
-        var idx := Pos(Args[0], Input);
+        var idx := Pos(Args[0], Input.AsString);
         if idx > 0 then
           Result := IntToStr(idx)
         else
@@ -1875,25 +2110,29 @@ begin
     end);
 
   FFilters.Add('first',
-    function(const Input: String; const Args: TArray<String>): String
+    function(const Input: TValue; const Args: TArray<String>): String
     begin
-      if Input <> '' then
-        Result := Input[1]
+      if (Input.Kind in [tkString, tkUString]) and (Input.AsString <> '') then
+        Result := Input.AsString[1]
+      else if Input.IsArray and (Input.GetArrayLength > 0) then
+        Result := Input.AsType<TArray<TValue>>[0].ToString
+      else if Input.IsObject and (Input.AsObject is TJSONArray) and (TJSONArray(Input.AsObject).Count > 0) then
+        Result := TJSONArray(Input.AsObject).Items[0].ToString
       else
         Result := '';
     end);
 
   FFilters.Add('format',
-    function(const Input: String; const Args: TArray<String>): String
+    function(const Input: TValue; const Args: TArray<String>): String
     begin
       if Length(Args) > 0 then
-        Result := Format(Args[0], [Input])
+        Result := Format(Args[0], [Input.ToString])
       else
-        Result := Input;
+        Result := Input.ToString;
     end);
 
   FFilters.Add('format_currency',
-    function(const Input: String; const Args: TArray<String>): String
+    function(const Input: TValue; const Args: TArray<String>): String
     var
       Val: Double;
       Currency: String;
@@ -1901,34 +2140,34 @@ begin
       Currency := '';
       if Length(Args) > 0 then
         Currency := Args[0];
-      if TryStrToFloat(Input, Val) then
+      if (Input.IsOrdinal and (Input.AsInt64 <> 0)) or (Input.IsOrdinal and (Input.AsExtended <> 0)) then
+        Result := CurrToStrF(Input.AsExtended, ffCurrency, 2) + ' ' + Currency
+      else if (Input.Kind in [tkString, tkUString]) and TryStrToFloat(Input.AsString, Val) then
         Result := CurrToStrF(Val, ffCurrency, 2) + ' ' + Currency
       else
-        Result := Input;
+        Result := Input.ToString;
     end);
 
   FFilters.Add('format_date',
-    function(const Input: String; const Args: TArray<String>): String
+    function(const Input: TValue; const Args: TArray<String>): String
     begin
-      // Alias for date filter
       Result := FFilters['date'](Input, Args);
     end);
 
   FFilters.Add('format_datetime',
-  function(const Input: String; const Args: TArray<String>): String
-  var
-    FormatStr: string;
-  begin
-    if Length(Args) = 0 then
-      FormatStr := 'yyyy-MM-dd HH:mm:ss'  // Correct Delphi datetime format
-    else
-      FormatStr := Args[0];
-
-    Result := FFilters['date'](Input, [FormatStr]);
-  end);
+    function(const Input: TValue; const Args: TArray<String>): String
+    var
+      FormatStr: String;
+    begin
+      if Length(Args) = 0 then
+        FormatStr := 'yyyy-MM-dd HH:mm:ss'
+      else
+        FormatStr := Args[0];
+      Result := FFilters['date'](Input, [FormatStr]);
+    end);
 
   FFilters.Add('format_number',
-    function(const Input: String; const Args: TArray<String>): String
+    function(const Input: TValue; const Args: TArray<String>): String
     var
       Val: Double;
       Decimals: Integer;
@@ -1936,141 +2175,280 @@ begin
       Decimals := 2;
       if Length(Args) > 0 then
         Decimals := StrToIntDef(Args[0], 2);
-      if TryStrToFloat(Input, Val) then
-        Result := FormatFloat('0.' + StringOfChar('0', Decimals), Val)
+      if Input.IsOrdinal then
+        Val := Input.AsInt64
+      else if Input.IsType<Real> then
+        Val := Input.AsExtended
+      else if (Input.Kind in [tkString, tkUString]) and TryStrToFloat(Input.AsString, Val) then
+        // Val already set
       else
-        Result := Input;
+        Exit(Input.ToString);
+      Result := FormatFloat('0.' + StringOfChar('0', Decimals), Val);
     end);
 
   FFilters.Add('format_time',
-    function(const Input: String; const Args: TArray<String>): String
+    function(const Input: TValue; const Args: TArray<String>): String
     begin
-      // Alias for date filter, just format time portion
       Result := FFilters['date'](Input, ['hh:nn:ss']);
     end);
 
   FFilters.Add('html_to_markdown',
-    function(const Input: String; const Args: TArray<String>): String
+    function(const Input: TValue; const Args: TArray<String>): String
     begin
-      // Stub: no html-to-markdown lib, return input
-      Result := Input;
+      // Stub: html-to-markdown not implemented
+      Result := Input.ToString;
     end);
 
   FFilters.Add('inky_to_html',
-    function(const Input: String; const Args: TArray<String>): String
+    function(const Input: TValue; const Args: TArray<String>): String
     begin
-      // Stub: inky (email templates) to html not implemented
-      Result := Input;
+      // Stub: inky-to-html not implemented
+      Result := Input.ToString;
     end);
 
   FFilters.Add('inline_css',
-    function(const Input: String; const Args: TArray<String>): String
+    function(const Input: TValue; const Args: TArray<String>): String
     begin
-      // Stub: inline css not implemented
-      Result := Input;
+      // Stub: inline CSS not implemented
+      Result := Input.ToString;
     end);
 
   FFilters.Add('join',
-  function(const Input: String; const Args: TArray<String>): String
-  var
-    Delim: String;
-    Items: TArray<String>;
-  begin
-    Delim := ',';
-    if Length(Args) > 0 then
-      Delim := Args[0];
+    function(const Input: TValue; const Args: TArray<String>): String
+    var
+      Delim: String;
+      Arr: TArray<TValue>;
+      JSONArray: TJSONArray;
+      I: Integer;
+      Output: TStringBuilder;
+    begin
+      Delim := ',';
+      if Length(Args) > 0 then
+        Delim := Args[0];
 
-    // Suppose Input is a comma-separated string; convert to array:
-    Items := Input.Split([',']);
-    Result := string.Join(Delim, Items);
-  end);
+      Output := TStringBuilder.Create;
+      try
+        if Input.IsArray then
+        begin
+          Arr := Input.AsType<TArray<TValue>>;
+          for I := 0 to High(Arr) do
+          begin
+            if I > 0 then
+              Output.Append(Delim);
+            Output.Append(Arr[I].ToString);
+          end;
+        end
+        else if Input.IsObject and (Input.AsObject is TJSONArray) then
+        begin
+          JSONArray := TJSONArray(Input.AsObject);
+          for I := 0 to JSONArray.Count - 1 do
+          begin
+            if I > 0 then
+              Output.Append(Delim);
+            Output.Append(JSONArray.Items[I].ToString);
+          end;
+        end
+        else if Input.Kind in [tkString, tkUString] then
+        begin
+          var Items := Input.AsString.Split([',']);
+          Result := String.Join(Delim, Items);
+          Exit;
+        end
+        else
+          Output.Append(Input.ToString);
+        Result := Output.ToString;
+      finally
+        Output.Free;
+      end;
+    end);
 
   FFilters.Add('json_encode',
-  function(const Input: String; const Args: TArray<String>): String
-  var
-    JsonValue: TJSONValue;
-  begin
-    // Try parse as JSON - if success, output as is, else encode as string literal
-    JsonValue := TJSONObject.ParseJSONValue(Input);
-    try
-      if Assigned(JsonValue) then
-        Result := JsonValue.ToString
+    function(const Input: TValue; const Args: TArray<String>): String
+    var
+      JsonValue: TJSONValue;
+    begin
+      if Input.IsObject and (Input.AsObject is TJSONValue) then
+        Result := TJSONValue(Input.AsObject).ToString
+      else if Input.Kind in [tkString, tkUString] then
+      begin
+        JsonValue := TJSONObject.ParseJSONValue(Input.AsString);
+        try
+          if Assigned(JsonValue) then
+            Result := JsonValue.ToString
+          else
+            Result := JsonEncodeString(Input.AsString);
+        finally
+          JsonValue.Free;
+        end;
+      end
       else
-        Result := JsonEncodeString(Input);
-    finally
-      JsonValue.Free;
-    end;
-  end);
+        Result := Input.ToString;
+    end);
 
   FFilters.Add('keys',
-    function(const Input: String; const Args: TArray<String>): String
+    function(const Input: TValue; const Args: TArray<String>): String
+    var
+      Dict: TDictionary<String, TValue>;
+      JSONArray: TJSONArray;
+      I: Integer;
+      Output: TStringBuilder;
     begin
-      // Stub: keys extraction for objects not implemented
-      Result := Input;
+      Output := TStringBuilder.Create;
+      try
+        Output.Append('[');
+        if Input.IsObject and (Input.AsObject is TDictionary<String, TValue>) then
+        begin
+          Dict := TDictionary<String, TValue>(Input.AsObject);
+          var Keys := Dict.Keys.ToArray;
+          for I := 0 to High(Keys) do
+          begin
+            if I > 0 then
+              Output.Append(',');
+            Output.Append('"' + Keys[I] + '"');
+          end;
+        end
+        else if Input.IsObject and (Input.AsObject is TJSONObject) then
+        begin
+          var Obj := TJSONObject(Input.AsObject);
+          for I := 0 to Obj.Count - 1 do
+          begin
+            if I > 0 then
+              Output.Append(',');
+            Output.Append('"' + Obj.Pairs[I].JsonString.Value + '"');
+          end;
+        end;
+        Output.Append(']');
+        Result := Output.ToString;
+      finally
+        Output.Free;
+      end;
     end);
 
   FFilters.Add('language_name',
-    function(const Input: String; const Args: TArray<String>): String
+    function(const Input: TValue; const Args: TArray<String>): String
     begin
-      Result := Input;
+      // Stub: language name lookup not implemented
+      Result := Input.ToString;
     end);
 
   FFilters.Add('last',
-    function(const Input: String; const Args: TArray<String>): String
+    function(const Input: TValue; const Args: TArray<String>): String
     begin
-      if Input <> '' then
-        Result := Input[Length(Input)]
+      if (Input.Kind in [tkString, tkUString]) and (Input.AsString <> '') then
+        Result := Input.AsString[Length(Input.AsString)]
+      else if Input.IsArray and (Input.GetArrayLength > 0) then
+        Result := Input.AsType<TArray<TValue>>[High(Input.AsType<TArray<TValue>>)].ToString
+      else if Input.IsObject and (Input.AsObject is TJSONArray) and (TJSONArray(Input.AsObject).Count > 0) then
+        Result := TJSONArray(Input.AsObject).Items[TJSONArray(Input.AsObject).Count - 1].ToString
       else
         Result := '';
     end);
 
   FFilters.Add('length',
-    function(const Input: String; const Args: TArray<String>): String
+    function(const Input: TValue; const Args: TArray<String>): String
     begin
-      Result := IntToStr(Length(Input));
+      if Input.IsArray then
+        Result := IntToStr(Input.GetArrayLength)
+      else if Input.IsObject and (Input.AsObject is TDictionary<String, TValue>) then
+        Result := IntToStr(TDictionary<String, TValue>(Input.AsObject).Count)
+      else if Input.IsObject and (Input.AsObject is TJSONArray) then
+        Result := IntToStr(TJSONArray(Input.AsObject).Count)
+      else if Input.IsObject and (Input.AsObject is TJSONObject) then
+        Result := IntToStr(TJSONObject(Input.AsObject).Count)
+      else if Input.Kind in [tkString, tkUString] then
+        Result := IntToStr(Length(Input.AsString))
+      else
+        Result := '0';
     end);
 
   FFilters.Add('locale_name',
-    function(const Input: String; const Args: TArray<String>): String
+    function(const Input: TValue; const Args: TArray<String>): String
     begin
-      Result := Input;
+      // Stub: locale name lookup not implemented
+      Result := Input.ToString;
     end);
 
   FFilters.Add('lower',
-    function(const Input: String; const Args: TArray<String>): String
+    function(const Input: TValue; const Args: TArray<String>): String
     begin
-      Result := LowerCase(Input);
+      if Input.Kind in [tkString, tkUString] then
+        Result := LowerCase(Input.AsString)
+      else
+        Result := Input.ToString;
     end);
 
   FFilters.Add('map',
-    function(const Input: String; const Args: TArray<String>): String
+    function(const Input: TValue; const Args: TArray<String>): String
     begin
-      // Stub: map/filter arrays not supported
-      Result := Input;
+      // Stub: map not implemented
+      Result := Input.ToString;
     end);
 
   FFilters.Add('markdown_to_html',
-    function(const Input: String; const Args: TArray<String>): String
+    function(const Input: TValue; const Args: TArray<String>): String
     begin
-      // Stub: markdown to html - use a 3rd party lib if needed
-      Result := Input;
+      // Stub: markdown-to-html not implemented
+      Result := Input.ToString;
     end);
 
   FFilters.Add('merge',
-    function(const Input: String; const Args: TArray<String>): String
+    function(const Input: TValue; const Args: TArray<String>): String
+    var
+      Dict: TDictionary<String, TValue>;
+      JSONValue: TJSONValue;
+      I: Integer;
+      Output: TStringBuilder;
     begin
-      // Stub: merging collections not supported
-      Result := Input;
+      Output := TStringBuilder.Create;
+      try
+        Output.Append('{');
+        if Input.IsObject and (Input.AsObject is TDictionary<String, TValue>) then
+        begin
+          Dict := TDictionary<String, TValue>(Input.AsObject);
+          for I := 0 to High(Args) do
+          begin
+            JSONValue := TJSONObject.ParseJSONValue(Args[I]);
+            try
+              if JSONValue is TJSONObject then
+              begin
+                for var Pair in TJSONObject(JSONValue) do
+                begin
+                  if Dict.ContainsKey(Pair.JsonString.Value) then
+                    Dict[Pair.JsonString.Value] := TValue.From<String>(Pair.JsonValue.ToString)
+                  else
+                    Dict.Add(Pair.JsonString.Value, TValue.From<String>(Pair.JsonValue.ToString));
+                end;
+              end;
+            finally
+              JSONValue.Free;
+            end;
+          end;
+          var Keys := Dict.Keys.ToArray;
+          for I := 0 to High(Keys) do
+          begin
+            if I > 0 then
+              Output.Append(',');
+            Output.Append('"' + Keys[I] + '":' + Dict[Keys[I]].ToString);
+          end;
+        end;
+        Output.Append('}');
+        Result := Output.ToString;
+      finally
+        Output.Free;
+      end;
     end);
 
   FFilters.Add('nl2br',
-    function(const Input: String; const Args: TArray<String>): String
+    function(const Input: TValue; const Args: TArray<String>): String
     begin
-      Result := StringReplace(Input, sLineBreak, '<br>', [rfReplaceAll]);
+      if Input.Kind in [tkString, tkUString] then
+        Result := StringReplace(Input.AsString, sLineBreak, '<br>', [rfReplaceAll])
+      else
+        Result := Input.ToString;
     end);
 
   FFilters.Add('number_format',
-    function(const Input: String; const Args: TArray<String>): String
+    function(const Input: TValue; const Args: TArray<String>): String
     var
       Val: Double;
       Decimals: Integer;
@@ -2078,53 +2456,89 @@ begin
       Decimals := 2;
       if Length(Args) > 0 then
         Decimals := StrToIntDef(Args[0], 2);
-      if TryStrToFloat(Input, Val) then
-        Result := FormatFloat('0.' + StringOfChar('0', Decimals), Val)
+      if Input.IsOrdinal then
+        Val := Input.AsInt64
+      else if Input.isType<Real> then
+        Val := Input.AsExtended
+      else if (Input.Kind in [tkString, tkUString]) and TryStrToFloat(Input.AsString, Val) then
+        // Val already set
       else
-        Result := Input;
+        Exit(Input.ToString);
+      Result := FormatFloat('0.' + StringOfChar('0', Decimals), Val);
     end);
 
   FFilters.Add('plural',
-    function(const Input: String; const Args: TArray<String>): String
+    function(const Input: TValue; const Args: TArray<String>): String
     begin
       // Stub: pluralization not implemented
-      Result := Input;
+      Result := Input.ToString;
     end);
 
   FFilters.Add('raw',
-    function(const Input: String; const Args: TArray<String>): String
+    function(const Input: TValue; const Args: TArray<String>): String
     begin
-      Result := Input; // no escaping
+      Result := Input.ToString; // No escaping
     end);
 
   FFilters.Add('reduce',
-    function(const Input: String; const Args: TArray<String>): String
+    function(const Input: TValue; const Args: TArray<String>): String
     begin
-      // Stub: reduce not supported
-      Result := Input;
+      // Stub: reduce not implemented
+      Result := Input.ToString;
     end);
 
   FFilters.Add('replace',
-    function(const Input: String; const Args: TArray<String>): String
+    function(const Input: TValue; const Args: TArray<String>): String
     begin
       if Length(Args) < 2 then
-        Result := Input
+        Result := Input.ToString
+      else if Input.Kind in [tkString, tkUString] then
+        Result := StringReplace(Input.AsString, Args[0], Args[1], [rfReplaceAll])
       else
-        Result := StringReplace(Input, Args[0], Args[1], [rfReplaceAll]);
+        Result := Input.ToString;
     end);
 
   FFilters.Add('reverse',
-    function(const Input: String; const Args: TArray<String>): String
+    function(const Input: TValue; const Args: TArray<String>): String
     var
-      i: Integer;
+      I: Integer;
     begin
-      Result := '';
-      for i := Length(Input) downto 1 do
-        Result := Result + Input[i];
+      if Input.Kind in [tkString, tkUString] then
+      begin
+        Result := '';
+        for I := Length(Input.AsString) downto 1 do
+          Result := Result + Input.AsString[I];
+      end
+      else if Input.IsArray then
+      begin
+        var Arr := Input.AsType<TArray<TValue>>;
+        Result := '[';
+        for I := High(Arr) downto 0 do
+        begin
+          if I < High(Arr) then
+            Result := Result + ',';
+          Result := Result + Arr[I].ToString;
+        end;
+        Result := Result + ']';
+      end
+      else if Input.IsObject and (Input.AsObject is TJSONArray) then
+      begin
+        var JSONArray := TJSONArray(Input.AsObject);
+        Result := '[';
+        for I := JSONArray.Count - 1 downto 0 do
+        begin
+          if I < JSONArray.Count - 1 then
+            Result := Result + ',';
+          Result := Result + JSONArray.Items[I].ToString;
+        end;
+        Result := Result + ']';
+      end
+      else
+        Result := Input.ToString;
     end);
 
   FFilters.Add('round',
-    function(const Input: String; const Args: TArray<String>): String
+    function(const Input: TValue; const Args: TArray<String>): String
     var
       Val: Double;
       Decimals: Integer;
@@ -2133,152 +2547,248 @@ begin
       Decimals := 0;
       if Length(Args) > 0 then
         Decimals := StrToIntDef(Args[0], 0);
-      if TryStrToFloat(Input, Val) then
-      begin
-        FormatStr := '0.' + StringOfChar('0', Decimals);
-        Result := FormatFloat(FormatStr, RoundTo(Val, -Decimals));
-      end
+      if Input.IsOrdinal then
+        Val := Input.AsInt64
+      else if Input.IsType<Real> then
+        Val := Input.AsExtended
+      else if (Input.Kind in [tkString, tkUString]) and TryStrToFloat(Input.AsString, Val) then
+        // Val already set
       else
-        Result := Input;
+        Exit(Input.ToString);
+      FormatStr := '0.' + StringOfChar('0', Decimals);
+      Result := FormatFloat(FormatStr, RoundTo(Val, -Decimals));
     end);
 
   FFilters.Add('shuffle',
-    function(const Input: String; const Args: TArray<String>): String
+    function(const Input: TValue; const Args: TArray<String>): String
     begin
-      // Stub: shuffle strings/arrays not supported
-      Result := Input;
+      // Stub: shuffle not implemented
+      Result := Input.ToString;
     end);
 
   FFilters.Add('singular',
-    function(const Input: String; const Args: TArray<String>): String
+    function(const Input: TValue; const Args: TArray<String>): String
     begin
-      // Stub: singularize not implemented
-      Result := Input;
+      // Stub: singularization not implemented
+      Result := Input.ToString;
     end);
 
   FFilters.Add('slice',
-    function(const Input: String; const Args: TArray<String>): String
+    function(const Input: TValue; const Args: TArray<String>): String
     var
       StartIdx, Count, LenInput: Integer;
+      Arr: TArray<TValue>;
+      JSONArray: TJSONArray;
+      I: Integer;
+      Output: TStringBuilder;
     begin
       StartIdx := 0;
       Count := MaxInt;
-      LenInput := Length(Input);
 
-      if Length(Args) > 0 then
-        StartIdx := StrToIntDef(Args[0], 0);
-      if Length(Args) > 1 then
-        Count := StrToIntDef(Args[1], LenInput);
-
-      if StartIdx < 0 then
-        StartIdx := LenInput + StartIdx;
-      if StartIdx < 1 then
-        StartIdx := 1;
-
-      Result := Copy(Input, StartIdx, Count);
+      if Input.Kind in [tkString, tkUString] then
+      begin
+        LenInput := Length(Input.AsString);
+        if Length(Args) > 0 then
+          StartIdx := StrToIntDef(Args[0], 0);
+        if Length(Args) > 1 then
+          Count := StrToIntDef(Args[1], LenInput);
+        if StartIdx < 0 then
+          StartIdx := LenInput + StartIdx;
+        if StartIdx < 1 then
+          StartIdx := 1;
+        Result := Copy(Input.AsString, StartIdx, Count);
+      end
+      else if Input.IsArray then
+      begin
+        Arr := Input.AsType<TArray<TValue>>;
+        LenInput := Length(Arr);
+        if Length(Args) > 0 then
+          StartIdx := StrToIntDef(Args[0], 0);
+        if Length(Args) > 1 then
+          Count := StrToIntDef(Args[1], LenInput);
+        if StartIdx < 0 then
+          StartIdx := LenInput + StartIdx;
+        if StartIdx < 0 then
+          StartIdx := 0;
+        Output := TStringBuilder.Create;
+        try
+          Output.Append('[');
+          for I := StartIdx to Min(StartIdx + Count - 1, LenInput - 1) do
+          begin
+            if I > StartIdx then
+              Output.Append(',');
+            Output.Append(Arr[I].ToString);
+          end;
+          Output.Append(']');
+          Result := Output.ToString;
+        finally
+          Output.Free;
+        end;
+      end
+      else if Input.IsObject and (Input.AsObject is TJSONArray) then
+      begin
+        JSONArray := TJSONArray(Input.AsObject);
+        LenInput := JSONArray.Count;
+        if Length(Args) > 0 then
+          StartIdx := StrToIntDef(Args[0], 0);
+        if Length(Args) > 1 then
+          Count := StrToIntDef(Args[1], LenInput);
+        if StartIdx < 0 then
+          StartIdx := LenInput + StartIdx;
+        if StartIdx < 0 then
+          StartIdx := 0;
+        Output := TStringBuilder.Create;
+        try
+          Output.Append('[');
+          for I := StartIdx to Min(StartIdx + Count - 1, LenInput - 1) do
+          begin
+            if I > StartIdx then
+              Output.Append(',');
+            Output.Append(JSONArray.Items[I].ToString);
+          end;
+          Output.Append(']');
+          Result := Output.ToString;
+        finally
+          Output.Free;
+        end;
+      end
+      else
+        Result := Input.ToString;
     end);
 
   FFilters.Add('slug',
-    function(const Input: String; const Args: TArray<String>): String
+    function(const Input: TValue; const Args: TArray<String>): String
     var
-      i: Integer;
-      s: String;
+      I: Integer;
+      S: String;
     begin
-      s := LowerCase(Input);
-      for i := Length(s) downto 1 do
-        if not (s[i] in ['a'..'z', '0'..'9']) then
-          Delete(s, i, 1);
-      Result := s;
+      if Input.Kind in [tkString, tkUString] then
+      begin
+        S := LowerCase(Input.AsString);
+        for I := Length(S) downto 1 do
+          if not (S[I] in ['a'..'z', '0'..'9']) then
+            Delete(S, I, 1);
+        Result := S;
+      end
+      else
+        Result := Input.ToString;
     end);
 
   FFilters.Add('sort',
-    function(const Input: String; const Args: TArray<String>): String
+    function(const Input: TValue; const Args: TArray<String>): String
     begin
-      // Stub: sorting strings/arrays not supported
-      Result := Input;
+      // Stub: sorting not implemented
+      Result := Input.ToString;
     end);
 
   FFilters.Add('spaceless',
-    function(const Input: String; const Args: TArray<String>): String
+    function(const Input: TValue; const Args: TArray<String>): String
     begin
-      Result := StringReplace(Input, ' ', '', [rfReplaceAll]);
+      if Input.Kind in [tkString, tkUString] then
+        Result := StringReplace(Input.AsString, ' ', '', [rfReplaceAll])
+      else
+        Result := Input.ToString;
     end);
 
   FFilters.Add('split',
-    function(const Input: String; const Args: TArray<String>): String
+    function(const Input: TValue; const Args: TArray<String>): String
     var
       Delim: String;
       Parts: TArray<String>;
-      i: Integer;
+      I: Integer;
       ResultList: TStringList;
     begin
-      if Length(Args) > 0 then
-        Delim := Args[0]
+      if Input.Kind in [tkString, tkUString] then
+      begin
+        if Length(Args) > 0 then
+          Delim := Args[0]
+        else
+          Delim := ',';
+        Parts := Input.AsString.Split([Delim]);
+        ResultList := TStringList.Create;
+        try
+          for I := 0 to High(Parts) do
+            ResultList.Add(Parts[I]);
+          Result := ResultList.Text;
+        finally
+          ResultList.Free;
+        end;
+      end
       else
-        Delim := ',';
-      Parts := Input.Split([Delim]);
-
-      ResultList := TStringList.Create;
-      try
-        for i := 0 to High(Parts) do
-          ResultList.Add(Parts[i]);
-        Result := ResultList.Text; // or join back? Your usage may vary
-      finally
-        ResultList.Free;
-      end;
+        Result := Input.ToString;
     end);
 
   FFilters.Add('striptags',
-    function(const Input: String; const Args: TArray<String>): String
+    function(const Input: TValue; const Args: TArray<String>): String
     var
       Regex: TRegEx;
     begin
-      Regex := TRegEx.Create('<.*?>', [roIgnoreCase]);
-      Result := Regex.Replace(Input, '');
+      if Input.Kind in [tkString, tkUString] then
+      begin
+        Regex := TRegEx.Create('<.*?>', [roIgnoreCase]);
+        Result := Regex.Replace(Input.AsString, '');
+      end
+      else
+        Result := Input.ToString;
     end);
 
   FFilters.Add('timezone_name',
-    function(const Input: String; const Args: TArray<String>): String
+    function(const Input: TValue; const Args: TArray<String>): String
     begin
-      Result := Input;
+      // Stub: timezone name lookup not implemented
+      Result := Input.ToString;
     end);
 
   FFilters.Add('title',
-    function(const Input: String; const Args: TArray<String>): String
+    function(const Input: TValue; const Args: TArray<String>): String
     var
-      i: Integer;
+      I: Integer;
       Words: TArray<String>;
     begin
-      Words := Input.Split([' ']);
-      for i := 0 to High(Words) do
-        if Words[i].Length > 0 then
-          Words[i] := UpperCase(Words[i][1]) + LowerCase(Copy(Words[i], 2, MaxInt));
-      Result := String.Join(' ', Words);
+      if Input.Kind in [tkString, tkUString] then
+      begin
+        Words := Input.AsString.Split([' ']);
+        for I := 0 to High(Words) do
+          if Words[I].Length > 0 then
+            Words[I] := UpperCase(Words[I][1]) + LowerCase(Copy(Words[I], 2, MaxInt));
+        Result := String.Join(' ', Words);
+      end
+      else
+        Result := Input.ToString;
     end);
 
   FFilters.Add('trim',
-    function(const Input: String; const Args: TArray<String>): String
+    function(const Input: TValue; const Args: TArray<String>): String
     begin
-      Result := Trim(Input);
+      if Input.Kind in [tkString, tkUString] then
+        Result := Trim(Input.AsString)
+      else
+        Result := Input.ToString;
     end);
 
   FFilters.Add('u',
-    function(const Input: String; const Args: TArray<String>): String
+    function(const Input: TValue; const Args: TArray<String>): String
     begin
-      // Twig u filter is Unicode string conversion, here just return input
-      Result := Input;
+      // Twig u filter is Unicode string conversion
+      Result := Input.ToString;
     end);
 
   FFilters.Add('upper',
-    function(const Input: String; const Args: TArray<String>): String
+    function(const Input: TValue; const Args: TArray<String>): String
     begin
-      Result := UpperCase(Input);
+      if Input.Kind in [tkString, tkUString] then
+        Result := UpperCase(Input.AsString)
+      else
+        Result := Input.ToString;
     end);
 
   FFilters.Add('url_encode',
-    function(const Input: String; const Args: TArray<String>): String
+    function(const Input: TValue; const Args: TArray<String>): String
     begin
-      Result := TNetEncoding.URL.Encode(Input);
+      if Input.Kind in [tkString, tkUString] then
+        Result := TNetEncoding.URL.Encode(Input.AsString)
+      else
+        Result := Input.ToString;
     end);
 end;
 

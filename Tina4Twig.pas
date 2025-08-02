@@ -4,7 +4,7 @@ interface
 
 uses
   System.SysUtils, System.Classes, System.Generics.Collections, System.RegularExpressions,
-  System.Rtti, JSON, System.NetEncoding, System.Math, Variants;
+  System.Rtti, JSON, System.NetEncoding, System.Math, Variants, System.TypInfo;
 
 type
   TStringDict = TDictionary<String, TValue>;
@@ -78,7 +78,6 @@ var
   LowerVal: String;
   IntVal: Int64;
   FloatVal: Double;
-  BoolVal: Boolean;
 begin
   LowerVal := S.ToLower;
   if LowerVal = 'true' then
@@ -101,7 +100,6 @@ end;
 function TTina4Twig.GetExpressionValue(const Expr: String; Context: TDictionary<String, TValue>): TValue;
 var
   CleanExpr, Lower: String;
-  BoolVal: Boolean;
   IntVal: Int64;
   FloatVal: Double;
 begin
@@ -2600,7 +2598,6 @@ begin
     function(const Input: TValue; const Args: TArray<String>): String
     var
       Dict: TDictionary<String, TValue>;
-      JSONArray: TJSONArray;
       I: Integer;
       Output: TStringBuilder;
     begin

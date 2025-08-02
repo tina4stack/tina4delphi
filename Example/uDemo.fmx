@@ -1,0 +1,68 @@
+object Form2: TForm2
+  Left = 0
+  Top = 0
+  Caption = 'Form2'
+  ClientHeight = 480
+  ClientWidth = 916
+  FormFactor.Width = 320
+  FormFactor.Height = 480
+  FormFactor.Devices = [Desktop]
+  OnCreate = FormCreate
+  DesignerMasterStyle = 0
+  object btnRender: TButton
+    Anchors = [akRight, akBottom]
+    Position.X = 828.000000000000000000
+    Position.Y = 450.000000000000000000
+    TabOrder = 0
+    Text = 'Render'
+    TextSettings.Trimming = None
+    OnClick = btnRenderClick
+  end
+  object HtPanel1: THtPanel
+    Anchors = [akLeft, akTop, akBottom]
+    Position.X = 8.000000000000000000
+    Position.Y = 48.000000000000000000
+    Size.Width = 337.000000000000000000
+    Size.Height = 394.000000000000000000
+    Size.PlatformDefault = False
+    TabOrder = 1
+    OnClick = HtPanel1Click
+    AutoHeight = False
+    Active = True
+    TouchScroll = True
+    ContentScale = 1.000000000000000000
+    AdaptiveZoom = False
+    EnableSelection = False
+    SelectHandleStyle = shPlatform
+    WebLoading = False
+    ScaleMin = 0.100000001490116100
+    ScaleMax = 100.000000000000000000
+    Viewport.Width = 337.000000000000000000
+    Viewport.Height = 394.000000000000000000
+  end
+  object memTwig: TMemo
+    Touch.InteractiveGestures = [Pan, LongTap, DoubleTap]
+    DataDetectorTypes = []
+    Anchors = [akLeft, akTop, akRight, akBottom]
+    Position.X = 353.000000000000000000
+    Position.Y = 48.000000000000000000
+    Size.Width = 555.000000000000000000
+    Size.Height = 394.000000000000000000
+    Size.PlatformDefault = False
+    TabOrder = 2
+    Viewport.Width = 551.000000000000000000
+    Viewport.Height = 390.000000000000000000
+  end
+  object btnSave: TButton
+    Position.X = 8.000000000000000000
+    Position.Y = 450.000000000000000000
+    TabOrder = 3
+    Text = 'Save'
+    TextSettings.Trimming = None
+    OnClick = btnSaveClick
+  end
+  object SaveDialog1: TSaveDialog
+    Left = 176
+    Top = 232
+  end
+end

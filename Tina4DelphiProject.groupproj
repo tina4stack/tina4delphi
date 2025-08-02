@@ -15,6 +15,9 @@
         <Projects Include="Example\Test\Tina4DelphiExampleTests.dproj">
             <Dependencies/>
         </Projects>
+        <Projects Include="Example\Demo.dproj">
+            <Dependencies/>
+        </Projects>
     </ItemGroup>
     <ProjectExtensions>
         <Borland.Personality>Default.Personality.12</Borland.Personality>
@@ -59,14 +62,23 @@
     <Target Name="Tina4DelphiExampleTests:Make">
         <MSBuild Projects="Example\Test\Tina4DelphiExampleTests.dproj" Targets="Make"/>
     </Target>
+    <Target Name="Demo">
+        <MSBuild Projects="Example\Demo.dproj"/>
+    </Target>
+    <Target Name="Demo:Clean">
+        <MSBuild Projects="Example\Demo.dproj" Targets="Clean"/>
+    </Target>
+    <Target Name="Demo:Make">
+        <MSBuild Projects="Example\Demo.dproj" Targets="Make"/>
+    </Target>
     <Target Name="Build">
-        <CallTarget Targets="Tina4DelphiDesign;Tina4Delphi;Tina4DelphiExample;Tina4DelphiExampleTests"/>
+        <CallTarget Targets="Tina4DelphiDesign;Tina4Delphi;Tina4DelphiExample;Tina4DelphiExampleTests;Demo"/>
     </Target>
     <Target Name="Clean">
-        <CallTarget Targets="Tina4DelphiDesign:Clean;Tina4Delphi:Clean;Tina4DelphiExample:Clean;Tina4DelphiExampleTests:Clean"/>
+        <CallTarget Targets="Tina4DelphiDesign:Clean;Tina4Delphi:Clean;Tina4DelphiExample:Clean;Tina4DelphiExampleTests:Clean;Demo:Clean"/>
     </Target>
     <Target Name="Make">
-        <CallTarget Targets="Tina4DelphiDesign:Make;Tina4Delphi:Make;Tina4DelphiExample:Make;Tina4DelphiExampleTests:Make"/>
+        <CallTarget Targets="Tina4DelphiDesign:Make;Tina4Delphi:Make;Tina4DelphiExample:Make;Tina4DelphiExampleTests:Make;Demo:Make"/>
     </Target>
     <Import Project="$(BDS)\Bin\CodeGear.Group.Targets" Condition="Exists('$(BDS)\Bin\CodeGear.Group.Targets')"/>
 </Project>

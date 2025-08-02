@@ -31,6 +31,8 @@ type
     procedure TestForLoops;
     procedure TestWith;
     procedure TestIf;
+    procedure TestTags;
+    procedure TestComplex;
   end;
 
 implementation
@@ -103,6 +105,38 @@ begin
   WriteLn(ReturnValue);
 end;
 
+procedure TestTTina4Twig.TestTags;
+var
+  ReturnValue: string;
+  TemplateOrContent: string;
+begin
+  TemplateOrContent := '{% with %}{% endwith %}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = '', TemplateOrContent + ' - Should be Empty, got ' + ReturnValue);
+
+  TemplateOrContent := '{%with%}{%endwith%}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = '', TemplateOrContent + ' - Should be Empty, got ' + ReturnValue);
+
+  TemplateOrContent := '{% if 1 == 1 %}{% else %}}{% endif %}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = '', TemplateOrContent + ' - Should be Empty, got ' + ReturnValue);
+
+  TemplateOrContent := '{%if 1 == 1%}{%else%}{%endif%}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = '', TemplateOrContent + ' - Should be Empty, got ' + ReturnValue);
+
+
+  TemplateOrContent := '{%for a in [1,2,3]%}{%else%}{%endfor%}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = '', TemplateOrContent + ' - Should be Empty, got ' + ReturnValue);
+
+  TemplateOrContent := '{% for a in [1,2,3] %}{% else %}{% endfor %}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = '', TemplateOrContent + ' - Should be Empty, got ' + ReturnValue);
+
+end;
+
 procedure TestTTina4Twig.TestWith;
 var
   ReturnValue: string;
@@ -133,6 +167,21 @@ begin
   TemplateOrContent := '{% with { outer_name: "Outer" } %}{{ people[0].name }} {{ outer_name }} {% with { inner_name: "Inner" } %}{{ inner_name }} {{ outer_name }} {{ people[0].name }}{% endwith %}{% endwith %}';
   ReturnValue := FTina4Twig.Render(TemplateOrContent);
   Check(ReturnValue = 'Andre Outer Inner Outer Andre', TemplateOrContent + ' - Should be Andre Outer Inner Outer Andre, got ' + ReturnValue);
+
+end;
+
+procedure TestTTina4Twig.TestComplex;
+var
+  ReturnValue: string;
+  TemplateOrContent: string;
+begin
+  TemplateOrContent := '{% set trees = [{"name": "Beech"}, {"name": "Oak"}, {"name": "Poplar"}]%}{%for a in trees%}{% if a.name == "Oak" %}OK{% else %}NO{% endif %}{% else %}No trees{%endfor%}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = 'NOOKNO', TemplateOrContent + ' - Should be NOOKNO, got ' + ReturnValue);
+
+  TemplateOrContent := '{% set trees = [{"name": "Beech"}, {"name": "Oak"}, {"name": "Poplar"}]%}{%for a in trees%}{% if a.name == "Oak" %}OK{% else %}NO{% endif %}{%endfor%}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = 'NOOKNO', TemplateOrContent + ' - Should be NOOKNO, got ' + ReturnValue);
 
 end;
 
@@ -203,12 +252,12 @@ begin
   WriteLn(ReturnValue);
 
   // Test 1: Simple if block with true condition
-  TemplateOrContent := '{% if is_active %}Active{% endif %}';
+  TemplateOrContent := '{%if is_active %}Active{%endif%}';
   ReturnValue := FTina4Twig.Render(TemplateOrContent);
   Check(ReturnValue = 'Active', TemplateOrContent + ' - Should be Active, got ' + ReturnValue);
 
   // Test 2: Simple if block with false condition
-  TemplateOrContent := '{% if is_inactive %}Inactive{% endif %}';
+  TemplateOrContent := '{%if is_inactive %}Inactive{%endif%}';
   ReturnValue := FTina4Twig.Render(TemplateOrContent);
   Check(ReturnValue = '', TemplateOrContent + ' - Should be empty, got ' + ReturnValue);
 
@@ -286,16 +335,16 @@ begin
   Check(ReturnValue = 'My TitleMy Content'#$D#$A, TemplateOrContent+' Should be My TitleMy Content '+ReturnValue);
 
 
-  TemplateOrContent := '{%set trees = ["Beech", "Oak", "Popular"]%}{{dump(trees)}}';
+  TemplateOrContent := '{% set trees = ["Beech", "Oak", "Popular"] %}{{dump(trees)}}';
   ReturnValue := FTina4Twig.Render(TemplateOrContent);
   Check(ReturnValue = '<pre>trees ='#$D#$A'  array(3) {'#$D#$A'    [0]=>'#$D#$A'      string(5) "Beech"'#$D#$A'    [1]=>'#$D#$A'      string(3) "Oak"'#$D#$A'    [2]=>'#$D#$A'      string(7) "Popular"'#$D#$A'  }'#$D#$A'</pre>', TemplateOrContent+' Should be array '+ReturnValue);
 
 
-  TemplateOrContent := '{%set trees = ["Beech", "Oak", "Poplar"]%}{{trees[1]}}';
+  TemplateOrContent := '{% set trees = ["Beech", "Oak", "Poplar"] %}{{trees[1]}}';
   ReturnValue := FTina4Twig.Render(TemplateOrContent);
   Check(ReturnValue = 'Oak', TemplateOrContent+' Should be Oak '+ReturnValue);
 
-  TemplateOrContent := '{%set trees = [{"name": "Beech"}, {"name": "Oak"}, {"name": "Poplar"}]%}{{trees[2].name}}';
+  TemplateOrContent := '{% set trees = [{"name": "Beech"}, {"name": "Oak"}, {"name": "Poplar"}] %}{{trees[2].name}}';
   ReturnValue := FTina4Twig.Render(TemplateOrContent);
   Check(ReturnValue = 'Poplar', TemplateOrContent+' Should be Poplar '+ReturnValue);
 

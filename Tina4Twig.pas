@@ -223,10 +223,26 @@ destructor TTina4Twig.Destroy;
 var
   pair: TPair<String, TValue>;
   macroDefaultsPair: TPair<String, TDictionary<String, String>>;
+  v: TValue;
 begin
   for pair in FContext do
-    if pair.Value.IsObject and (pair.Value.AsObject is TDictionary<String, TValue>) then
-      pair.Value.AsObject.Free;
+  begin
+    if pair.Value.IsObject then
+    begin
+      if pair.Value.AsObject is TDictionary<String, TValue> then
+        pair.Value.AsObject.Free
+      else if pair.Value.AsObject is TJSONValue then
+        pair.Value.AsObject.Free;
+    end
+    else if pair.Value.IsArray then
+    begin
+      for v in pair.Value.AsType<TArray<TValue>> do
+      begin
+        if v.IsObject and (v.AsObject is TDictionary<String, TValue>) then
+          v.AsObject.Free;
+      end;
+    end;
+  end;
   for macroDefaultsPair in FMacroDefaults do
     macroDefaultsPair.Value.Free;
   FFilters.Free;
@@ -1273,63 +1289,177 @@ var
   Value: TValue;
   Int64Val: Int64;
   FloatVal: Double;
-  BoolVal: Boolean;
+  SubDict: TDictionary<String, TValue>;
+  SubArray: TArray<TValue>;
+  I: Integer;
 begin
   Result := TDictionary<String, TValue>.Create;
   Content := Trim(DictStr);
 
   // Remove surrounding braces if present
   if Content.StartsWith('{') and Content.EndsWith('}') then
+    Content := Content.Substring(1, Content.Length - 2).Trim
+  else if Content.StartsWith('[') and Content.EndsWith(']') then
     Content := Content.Substring(1, Content.Length - 2).Trim;
 
   if Content = '' then
     Exit;
 
-  // Try to parse as JSON object
-  JSONValue := TJSONObject.ParseJSONValue('{' + Content + '}');
+  // Try to parse as JSON array or object
+  JSONValue := TJSONObject.ParseJSONValue('[' + Content + ']');
   try
-    if (JSONValue <> nil) and (JSONValue is TJSONObject) then
+    if (JSONValue <> nil) and (JSONValue is TJSONArray) then
     begin
-      JSONObject := TJSONObject(JSONValue);
-      for Pair in JSONObject do
+      var JSONArray := TJSONArray(JSONValue);
+      SetLength(SubArray, JSONArray.Count);
+      for I := 0 to JSONArray.Count - 1 do
       begin
-        Key := Pair.JsonString.Value;
-        ValueStr := Pair.JsonValue.ToString;
-
-        // Handle different JSON value types
-        if Pair.JsonValue is TJSONNumber then
+        var Item := JSONArray.Items[I];
+        if Item is TJSONObject then
         begin
-          if TryStrToInt64(ValueStr, Int64Val) then
-            Value := TValue.From<Int64>(Int64Val)
-          else if TryStrToFloat(ValueStr, FloatVal) then
-            Value := TValue.From<Double>(FloatVal)
-          else
-            Value := TValue.From<String>(ValueStr);
+          SubDict := TDictionary<String, TValue>.Create;
+          try
+            for Pair in TJSONObject(Item) do
+            begin
+              Key := Pair.JsonString.Value;
+              if Pair.JsonValue is TJSONNumber then
+              begin
+                ValueStr := Pair.JsonValue.Value;
+                if (Pos('.', ValueStr) > 0) or (Pos('e', LowerCase(ValueStr)) > 0) then
+                begin
+                  if TryStrToFloat(ValueStr, FloatVal) then
+                    Value := TValue.From<Double>(FloatVal)
+                  else
+                    Value := TValue.From<String>(ValueStr);
+                end
+                else if TryStrToInt64(ValueStr, Int64Val) then
+                  Value := TValue.From<Int64>(Int64Val)
+                else
+                  Value := TValue.From<String>(ValueStr);
+              end
+              else if Pair.JsonValue is TJSONTrue then
+                Value := TValue.From<Boolean>(True)
+              else if Pair.JsonValue is TJSONFalse then
+                Value := TValue.From<Boolean>(False)
+              else if Pair.JsonValue is TJSONString then
+                Value := TValue.From<String>(TJSONString(Pair.JsonValue).Value)
+              else if Pair.JsonValue is TJSONNull then
+                Value := TValue.Empty
+              else if Pair.JsonValue is TJSONObject then
+              begin
+                var NestedDict := TDictionary<String, TValue>.Create;
+                try
+                  for var NestedPair in TJSONObject(Pair.JsonValue) do
+                  begin
+                    if NestedPair.JsonValue is TJSONNumber then
+                    begin
+                      ValueStr := NestedPair.JsonValue.Value;
+                      if (Pos('.', ValueStr) > 0) or (Pos('e', LowerCase(ValueStr)) > 0) then
+                      begin
+                        if TryStrToFloat(ValueStr, FloatVal) then
+                          NestedDict.AddOrSetValue(NestedPair.JsonString.Value, TValue.From<Double>(FloatVal))
+                        else
+                          NestedDict.AddOrSetValue(NestedPair.JsonString.Value, TValue.From<String>(ValueStr));
+                      end
+                      else if TryStrToInt64(ValueStr, Int64Val) then
+                        NestedDict.AddOrSetValue(NestedPair.JsonString.Value, TValue.From<Int64>(Int64Val))
+                      else
+                        NestedDict.AddOrSetValue(NestedPair.JsonString.Value, TValue.From<String>(ValueStr));
+                    end
+                    else if NestedPair.JsonValue is TJSONTrue then
+                      NestedDict.AddOrSetValue(NestedPair.JsonString.Value, TValue.From<Boolean>(True))
+                    else if NestedPair.JsonValue is TJSONFalse then
+                      NestedDict.AddOrSetValue(NestedPair.JsonString.Value, TValue.From<Boolean>(False))
+                    else if NestedPair.JsonValue is TJSONString then
+                      NestedDict.AddOrSetValue(NestedPair.JsonString.Value, TValue.From<String>(TJSONString(NestedPair.JsonValue).Value))
+                    else if NestedPair.JsonValue is TJSONNull then
+                      NestedDict.AddOrSetValue(NestedPair.JsonString.Value, TValue.Empty)
+                    else
+                      NestedDict.AddOrSetValue(NestedPair.JsonString.Value, TValue.From<String>(NestedPair.JsonValue.ToString));
+                  end;
+                  Value := TValue.From<TDictionary<String, TValue>>(NestedDict);
+                except
+                  NestedDict.Free;
+                  raise;
+                end;
+              end
+              else if Pair.JsonValue is TJSONArray then
+              begin
+                var NestedArray := TJSONArray(Pair.JsonValue);
+                var ArrayValues: TArray<TValue>;
+                SetLength(ArrayValues, NestedArray.Count);
+                for var J := 0 to NestedArray.Count - 1 do
+                begin
+                  var NestedItem := NestedArray.Items[J];
+                  if NestedItem is TJSONNumber then
+                  begin
+                    ValueStr := NestedItem.Value;
+                    if (Pos('.', ValueStr) > 0) or (Pos('e', LowerCase(ValueStr)) > 0) then
+                    begin
+                      if TryStrToFloat(ValueStr, FloatVal) then
+                        ArrayValues[J] := TValue.From<Double>(FloatVal)
+                      else
+                        ArrayValues[J] := TValue.From<String>(ValueStr);
+                    end
+                    else if TryStrToInt64(ValueStr, Int64Val) then
+                      ArrayValues[J] := TValue.From<Int64>(Int64Val)
+                    else
+                      ArrayValues[J] := TValue.From<String>(ValueStr);
+                  end
+                  else if NestedItem is TJSONTrue then
+                    ArrayValues[J] := TValue.From<Boolean>(True)
+                  else if NestedItem is TJSONFalse then
+                    ArrayValues[J] := TValue.From<Boolean>(False)
+                  else if NestedItem is TJSONString then
+                    ArrayValues[J] := TValue.From<String>(TJSONString(NestedItem).Value)
+                  else if NestedItem is TJSONNull then
+                    ArrayValues[J] := TValue.Empty
+                  else
+                    ArrayValues[J] := TValue.From<String>(NestedItem.ToString);
+                end;
+                Value := TValue.From<TArray<TValue>>(ArrayValues);
+              end
+              else
+                Value := TValue.From<String>(Pair.JsonValue.ToString);
+              SubDict.AddOrSetValue(Key, Value);
+            end;
+            SubArray[I] := TValue.From<TDictionary<String, TValue>>(SubDict);
+          except
+            SubDict.Free;
+            raise;
+          end;
         end
-        else if Pair.JsonValue is TJSONTrue then
-          Value := TValue.From<Boolean>(True)
-        else if Pair.JsonValue is TJSONFalse then
-          Value := TValue.From<Boolean>(False)
-        else if Pair.JsonValue is TJSONString then
-          Value := TValue.From<String>(TJSONString(Pair.JsonValue).Value)
-        else if Pair.JsonValue is TJSONNull then
-          Value := TValue.Empty
-        else
+        else if Item is TJSONNumber then
         begin
-          // Try to resolve from OuterContext if it's a variable name
-          ValueStr := TJSONString(Pair.JsonValue).Value;
-          if (OuterContext <> nil) and OuterContext.TryGetValue(ValueStr, Value) then
-            // Value resolved from context
+          ValueStr := Item.Value;
+          if (Pos('.', ValueStr) > 0) or (Pos('e', LowerCase(ValueStr)) > 0) then
+          begin
+            if TryStrToFloat(ValueStr, FloatVal) then
+              SubArray[I] := TValue.From<Double>(FloatVal)
+            else
+              SubArray[I] := TValue.From<String>(ValueStr);
+          end
+          else if TryStrToInt64(ValueStr, Int64Val) then
+            SubArray[I] := TValue.From<Int64>(Int64Val)
           else
-            Value := TValue.From<String>(ValueStr);
-        end;
-
-        Result.AddOrSetValue(Key, Value);
+            SubArray[I] := TValue.From<String>(ValueStr);
+        end
+        else if Item is TJSONTrue then
+          SubArray[I] := TValue.From<Boolean>(True)
+        else if Item is TJSONFalse then
+          SubArray[I] := TValue.From<Boolean>(False)
+        else if Item is TJSONString then
+          SubArray[I] := TValue.From<String>(TJSONString(Item).Value)
+        else if Item is TJSONNull then
+          SubArray[I] := TValue.Empty
+        else
+          SubArray[I] := TValue.From<String>(Item.ToString);
       end;
+      Result.AddOrSetValue('array', TValue.From<TArray<TValue>>(SubArray));
     end
     else
     begin
-      // Fallback for simple key-value pairs (e.g., "key: value, key2: value2")
+      // Fallback for simple key-value pairs
       var Pairs := Content.Split([','], TStringSplitOptions.ExcludeEmpty);
       for var PairStr in Pairs do
       begin
@@ -1497,130 +1627,118 @@ function TTina4Twig.EvaluateSetBlocks(const Template: String; Context: TDictiona
 var
   Regex: TRegEx;
   Match: TMatch;
-  VarName, ValueStr: String;
-  Value: TValue;
+  SetExpr, VarName, ValueStr: String;
   JSONValue: TJSONValue;
-  Dict: TDictionary<String, TValue>;
-  Arr: TArray<TValue>;
+  Value: TValue;
+  JSONArray: TJSONArray;
+  ArrayValues: TArray<TValue>;
   I: Integer;
-  F: Double;
-  IntVal: Int64;
-  BoolVal: Boolean;
+  SubDict: TDictionary<String, TValue>;
+  Pair: TJSONPair;
+  SubVal: TValue;
+  NumStr: String;
 begin
   Result := Template;
-  // Updated regex to handle simple values, arrays, or objects
-  Regex := TRegEx.Create('{%\s*set\s+(\w+)\s*=\s*([^%]*?)\s*%}', [roSingleLine, roIgnoreCase]);
-
-  while True do
+  Regex := TRegEx.Create('{%\s*set\s+(\w+)\s*=\s*(.*?)\s*%}', [roSingleLine, roIgnoreCase]);
+  Match := Regex.Match(Result);
+  while Match.Success do
   begin
-    Match := Regex.Match(Result);
-    if not Match.Success then
-      Break;
-
-    VarName := Match.Groups[1].Value.Trim;
-    ValueStr := Match.Groups[2].Value.Trim;
-
-    if ValueStr.StartsWith('[') and ValueStr.EndsWith(']') then
+    VarName := Match.Groups[1].Value;
+    ValueStr := Trim(Match.Groups[2].Value); // Trim to avoid whitespace issues
+    // Check if the value is a quoted string
+    if ((ValueStr.StartsWith('"') and ValueStr.EndsWith('"')) or
+        (ValueStr.StartsWith('''') and ValueStr.EndsWith(''''))) and
+       (Length(ValueStr) >= 2) then
     begin
-      ValueStr := Copy(ValueStr, 2, Length(ValueStr) - 2).Trim;
-      if ValueStr = '' then
-        Arr := []
-      else
-      begin
-        var Items := ValueStr.Split([','], TStringSplitOptions.ExcludeEmpty);
-        SetLength(Arr, Length(Items));
-        for I := 0 to High(Items) do
+      // Store the string without quotes
+      Value := TValue.From<String>(Copy(ValueStr, 2, Length(ValueStr) - 2));
+      Context.AddOrSetValue(VarName, Value);
+    end
+    else if ValueStr.StartsWith('[') and ValueStr.EndsWith(']') then
+    begin
+      JSONValue := TJSONObject.ParseJSONValue(ValueStr);
+      try
+        if (JSONValue <> nil) and (JSONValue is TJSONArray) then
         begin
-          var Item := Items[I].Trim;
-          if Item.StartsWith('{') and Item.EndsWith('}') then
+          JSONArray := TJSONArray(JSONValue);
+          SetLength(ArrayValues, JSONArray.Count);
+          for I := 0 to JSONArray.Count - 1 do
           begin
-            JSONValue := TJSONObject.ParseJSONValue(Item);
-            try
-              if JSONValue is TJSONObject then
-              begin
-                Dict := TDictionary<String, TValue>.Create;
-                for var Pair in TJSONObject(JSONValue) do
+            if JSONArray.Items[I] is TJSONNumber then
+            begin
+              NumStr := JSONArray.Items[I].Value;
+              if (Pos('.', NumStr) > 0) or (Pos('e', LowerCase(NumStr)) > 0) then
+                ArrayValues[I] := TValue.From<Double>(TJSONNumber(JSONArray.Items[I]).AsDouble)
+              else
+                ArrayValues[I] := TValue.From<Int64>(TJSONNumber(JSONArray.Items[I]).AsInt64);
+            end
+            else if JSONArray.Items[I] is TJSONString then
+              ArrayValues[I] := TValue.From<String>(TJSONString(JSONArray.Items[I]).Value)
+            else if JSONArray.Items[I] is TJSONBool then
+              ArrayValues[I] := TValue.From<Boolean>(TJSONBool(JSONArray.Items[I]).AsBoolean)
+            else if JSONArray.Items[I] is TJSONNull then
+              ArrayValues[I] := TValue.Empty
+            else if JSONArray.Items[I] is TJSONObject then
+            begin
+              SubDict := TDictionary<String, TValue>.Create;
+              try
+                for Pair in TJSONObject(JSONArray.Items[I]) do
                 begin
                   if Pair.JsonValue is TJSONNumber then
-                    Dict.Add(Pair.JsonString.Value, TValue.From(Pair.JsonValue.AsType<Double>))
-                  else if Pair.JsonValue is TJSONTrue then
-                    Dict.Add(Pair.JsonString.Value, TValue.From(True))
-                  else if Pair.JsonValue is TJSONFalse then
-                    Dict.Add(Pair.JsonString.Value, TValue.From(False))
+                  begin
+                    NumStr := Pair.JsonValue.Value;
+                    if (Pos('.', NumStr) > 0) or (Pos('e', LowerCase(NumStr)) > 0) then
+                      SubVal := TValue.From<Double>(TJSONNumber(Pair.JsonValue).AsDouble)
+                    else
+                      SubVal := TValue.From<Int64>(TJSONNumber(Pair.JsonValue).AsInt64);
+                  end
+                  else if Pair.JsonValue is TJSONBool then
+                    SubVal := TValue.From<Boolean>(TJSONBool(Pair.JsonValue).AsBoolean)
+                  else if Pair.JsonValue is TJSONString then
+                    SubVal := TValue.From<String>(TJSONString(Pair.JsonValue).Value)
+                  else if Pair.JsonValue is TJSONNull then
+                    SubVal := TValue.Empty
                   else
-                    Dict.Add(Pair.JsonString.Value, TValue.From(Pair.JsonValue.Value));
+                    SubVal := TValue.From<String>(Pair.JsonValue.ToString);
+                  SubDict.AddOrSetValue(Pair.JsonString.Value, SubVal);
                 end;
-                Arr[I] := TValue.From<TDictionary<String, TValue>>(Dict);
-              end
-              else
-                Arr[I] := TValue.Empty;
-            finally
-              JSONValue.Free;
-            end;
-          end
-          else if (Item.StartsWith('"') and Item.EndsWith('"')) or
-             (Item.StartsWith('''') and Item.EndsWith('''')) then
-            Arr[I] := TValue.From<String>(Copy(Item, 2, Length(Item) - 2))
-          else if Item.ToLower = 'true' then
-            Arr[I] := TValue.From<Boolean>(True)
-          else if Item.ToLower = 'false' then
-            Arr[I] := TValue.From<Boolean>(False)
-          else if TryStrToInt64(Item, IntVal) then
-            Arr[I] := TValue.From<Int64>(IntVal)
-          else if TryStrToFloat(Item, F) then
-            Arr[I] := TValue.From<Double>(F)
-          else
-            Arr[I] := TValue.From<String>(Item);
-        end;
+                ArrayValues[I] := TValue.From<TDictionary<String, TValue>>(SubDict);
+              except
+                SubDict.Free;
+                raise;
+              end;
+            end
+            else
+              ArrayValues[I] := TValue.From<String>(JSONArray.Items[I].ToString);
+          end;
+          Context.AddOrSetValue(VarName, TValue.From<TArray<TValue>>(ArrayValues));
+        end
+        else
+          Context.AddOrSetValue(VarName, TValue.From<String>(ValueStr));
+      finally
+        JSONValue.Free;
       end;
-      Value := TValue.From<TArray<TValue>>(Arr);
     end
     else if ValueStr.StartsWith('{') and ValueStr.EndsWith('}') then
     begin
       JSONValue := TJSONObject.ParseJSONValue(ValueStr);
       try
-        if JSONValue is TJSONObject then
-        begin
-          Dict := TDictionary<String, TValue>.Create;
-          for var Pair in TJSONObject(JSONValue) do
-          begin
-            if Pair.JsonValue is TJSONNumber then
-              Dict.Add(Pair.JsonString.Value, TValue.From(Pair.JsonValue.AsType<Double>))
-            else if Pair.JsonValue is TJSONTrue then
-              Dict.Add(Pair.JsonString.Value, TValue.From(True))
-            else if Pair.JsonValue is TJSONFalse then
-              Dict.Add(Pair.JsonString.Value, TValue.From(False))
-            else
-              Dict.Add(Pair.JsonString.Value, TValue.From(Pair.JsonValue.Value));
-          end;
-          Value := TValue.From<TDictionary<String, TValue>>(Dict);
-        end
+        if JSONValue <> nil then
+          Context.AddOrSetValue(VarName, TValue.From<TJSONValue>(JSONValue))
         else
-          Value := TValue.Empty;
-      finally
+          Context.AddOrSetValue(VarName, TValue.From<String>(ValueStr));
+      except
         JSONValue.Free;
+        raise;
       end;
     end
     else
     begin
-      // Handle simple values (number, string, boolean)
-      if TryStrToInt64(ValueStr, IntVal) then
-        Value := TValue.From<Int64>(IntVal)
-      else if TryStrToFloat(ValueStr, F) then
-        Value := TValue.From<Double>(F)
-      else if ValueStr.ToLower = 'true' then
-        Value := TValue.From<Boolean>(True)
-      else if ValueStr.ToLower = 'false' then
-        Value := TValue.From<Boolean>(False)
-      else if (ValueStr.StartsWith('"') and ValueStr.EndsWith('"')) or
-              (ValueStr.StartsWith('''') and ValueStr.EndsWith('''')) then
-        Value := TValue.From<String>(Copy(ValueStr, 2, Length(ValueStr) - 2))
-      else
-        Value := TValue.From<String>(ValueStr);
+      Value := ParseValue(ValueStr, Context);
+      Context.AddOrSetValue(VarName, Value);
     end;
-
-    Context.AddOrSetValue(VarName, Value);
     Result := StringReplace(Result, Match.Value, '', [rfReplaceAll]);
+    Match := Match.NextMatch;
   end;
 end;
 

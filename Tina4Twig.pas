@@ -1794,6 +1794,8 @@ begin
   while True do
   begin
     ForTagStart := LowerTemplate.IndexOf('{%for', CurrentPos);
+    if ForTagStart < 0 then
+      ForTagStart := LowerTemplate.IndexOf('{% for', CurrentPos);
     if ForTagStart < 0 then Break;
     ResultSB.Append(Template.Substring(CurrentPos, ForTagStart - CurrentPos));
     ForTagEnd := LowerTemplate.IndexOf('%}', ForTagStart + 2);

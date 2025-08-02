@@ -1208,6 +1208,9 @@
                 <Platform value="Win32">True</Platform>
                 <Platform value="Win64">True</Platform>
             </Platforms>
+            <UnitTesting>
+                <TestProjectName>C:\Users\andrevanzuydam\tina4delphi\Example\Test\Tina4DelphiExampleTests.dproj</TestProjectName>
+            </UnitTesting>
         </BorlandProject>
         <ProjectFileVersion>12</ProjectFileVersion>
     </ProjectExtensions>

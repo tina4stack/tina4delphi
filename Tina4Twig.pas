@@ -38,12 +38,13 @@ type
     function ValuesAreEqual(const A, B: TValue): Boolean;
     function ToBool(const Value: TValue): Boolean;
     procedure DumpValue(const Value: TValue; List: TStringList; const Indent: String);
+    procedure RegisterDefaultFilters;
   public
     constructor Create(const TemplatePath: String = '');
     destructor Destroy; override;
     procedure SetVariable(AName: string; AValue: TValue);
     function Render(const TemplateOrContent: String; Variables: TStringDict = nil): String;
-    procedure RegisterDefaultFilters;
+
   end;
 
 implementation

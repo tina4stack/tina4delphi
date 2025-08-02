@@ -1640,18 +1640,21 @@ var
   ResultSB: TStringBuilder;
   LowerTemplate: String;
   CurrentPos, WithTagStart, WithTagEnd, Depth, TagStart, TagEnd, EndWithTagStart, EndWithTagEnd: Integer;
-  WithExpr, TagContent, LowerTagContent, WithVars, BlockContent: String;
-  MergedContext, ParsedDict: TDictionary<String, TValue>;
+  WithExpr, TagContent, LowerTagContent, DictStr, BlockContent, Evaluated: String;
+  ParsedDict, MergedContext: TDictionary<String, TValue>;
   Pair: TPair<String, TValue>;
-  Evaluated: String;
-  IsOnly: Boolean;
+  VarValue: TValue;
+  SubDict: TDictionary<String, TValue>;
+  UseOnly: Boolean;
 begin
   ResultSB := TStringBuilder.Create;
   LowerTemplate := LowerCase(Template);
   CurrentPos := 0;
   while True do
   begin
-    WithTagStart := LowerTemplate.IndexOf('{% with', CurrentPos);
+    WithTagStart := LowerTemplate.IndexOf('{%with', CurrentPos);
+    if WithTagStart < 0 then
+      WithTagStart := LowerTemplate.IndexOf('{% with', CurrentPos);
     if WithTagStart < 0 then Break;
     ResultSB.Append(Template.Substring(CurrentPos, WithTagStart - CurrentPos));
     WithTagEnd := LowerTemplate.IndexOf('%}', WithTagStart + 2);
@@ -1662,11 +1665,13 @@ begin
       CurrentPos := WithTagEnd + 2;
       Continue;
     end;
-    WithExpr := WithExpr.Substring(4).Trim;
-    IsOnly := WithExpr.ToLower.EndsWith(' only');
-    if IsOnly then
-      WithExpr := Trim(WithExpr.Substring(0, WithExpr.Length - 5));
-    WithVars := WithExpr;
+    WithExpr := Trim(WithExpr.Substring(WithExpr.ToLower.IndexOf('with') + 4));
+    // Check for 'only' keyword
+    UseOnly := WithExpr.ToLower.EndsWith(' only');
+    if UseOnly then
+      DictStr := Trim(WithExpr.Substring(0, WithExpr.Length - Length('only')))
+    else
+      DictStr := WithExpr;
     Depth := 1;
     CurrentPos := WithTagEnd + 2;
     EndWithTagStart := -1;
@@ -1686,6 +1691,7 @@ begin
         Dec(Depth);
         if Depth = 0 then
         begin
+          BlockContent := Template.Substring(WithTagEnd + 2, TagStart - WithTagEnd - 2);
           EndWithTagStart := TagStart;
           EndWithTagEnd := TagEnd;
           Break;
@@ -1694,57 +1700,54 @@ begin
       CurrentPos := TagEnd + 2;
     end;
     if EndWithTagStart < 0 then Break;
-    BlockContent := Template.Substring(WithTagEnd + 2, EndWithTagStart - WithTagEnd - 2);
+    ParsedDict := ParseVariableDict(DictStr, Context);
     MergedContext := TDictionary<String, TValue>.Create;
     try
-      if not IsOnly then
+      // Only include parent context if 'only' is not specified
+      if not UseOnly then
         for Pair in Context do
           MergedContext.AddOrSetValue(Pair.Key, Pair.Value);
-      if WithVars <> '' then
+      for Pair in ParsedDict do
       begin
-        ParsedDict := ParseVariableDict(WithVars, Context);
-        try
-          for Pair in ParsedDict do
-          begin
-            var VarValue := Pair.Value;
-            if VarValue.IsType<TJSONObject> then
+        VarValue := Pair.Value;
+        if VarValue.IsType<TJSONObject> then
+        begin
+          SubDict := TDictionary<String, TValue>.Create;
+          try
+            for var JPair in TJSONObject(VarValue.AsObject) do
             begin
-              var SubDict := TDictionary<String, TValue>.Create;
-              try
-                for var JPair in TJSONObject(VarValue.AsObject) do
-                begin
-                  var PVal: TValue;
-                  if JPair.JsonValue is TJSONNumber then
-                  begin
-                    var numStr := JPair.JsonValue.Value;
-                    if (Pos('.', numStr) > 0) or (Pos('e', LowerCase(numStr)) > 0) then
-                      PVal := TValue.From<Double>(TJSONNumber(JPair.JsonValue).AsDouble)
-                    else
-                      PVal := TValue.From<Int64>(TJSONNumber(JPair.JsonValue).AsInt64);
-                  end
-                  else if JPair.JsonValue is TJSONBool then
-                    PVal := TValue.From<Boolean>(TJSONBool(JPair.JsonValue).AsBoolean)
-                  else if JPair.JsonValue is TJSONString then
-                    PVal := TValue.From<String>(TJSONString(JPair.JsonValue).Value)
-                  else if JPair.JsonValue is TJSONNull then
-                    PVal := TValue.Empty
-                  else
-                    PVal := TValue.From<String>(JPair.JsonValue.ToString);
-                  SubDict.AddOrSetValue(JPair.JsonString.Value, PVal);
-                end;
-                MergedContext.AddOrSetValue(Pair.Key, TValue.From<TDictionary<String, TValue>>(SubDict));
-              except
-                SubDict.Free;
-                raise;
-              end;
-            end
-            else
-              MergedContext.AddOrSetValue(Pair.Key, VarValue);
+              var PVal: TValue;
+              if JPair.JsonValue is TJSONNumber then
+              begin
+                var numStr := JPair.JsonValue.Value;
+                if (Pos('.', numStr) > 0) or (Pos('e', LowerCase(numStr)) > 0) then
+                  PVal := TValue.From<Double>(TJSONNumber(JPair.JsonValue).AsDouble)
+                else
+                  PVal := TValue.From<Int64>(TJSONNumber(JPair.JsonValue).AsInt64);
+              end
+              else if JPair.JsonValue is TJSONBool then
+                PVal := TValue.From<Boolean>(TJSONBool(JPair.JsonValue).AsBoolean)
+              else if JPair.JsonValue is TJSONString then
+                PVal := TValue.From<String>(TJSONString(JPair.JsonValue).Value)
+              else if JPair.JsonValue is TJSONNull then
+                PVal := TValue.Empty
+              else
+                PVal := TValue.From<String>(JPair.JsonValue.ToString);
+              SubDict.AddOrSetValue(JPair.JsonString.Value, PVal);
+            end;
+            MergedContext.AddOrSetValue(Pair.Key, TValue.From<TDictionary<String, TValue>>(SubDict));
+          except
+            SubDict.Free;
+            raise;
           end;
-        finally
-          ParsedDict.Free;
-        end;
+        end
+        else
+          MergedContext.AddOrSetValue(Pair.Key, VarValue);
       end;
+    finally
+      ParsedDict.Free;
+    end;
+    try
       Evaluated := EvaluateWithBlocks(BlockContent, MergedContext);
       Evaluated := RenderInternal(Evaluated, MergedContext);
       ResultSB.Append(Evaluated);

@@ -1632,12 +1632,32 @@ begin
       begin
         JSONArray := Value.AsType<TJSONArray>;
         SetLength(Items, JSONArray.Count);
-        for I := 0 to JSONArray.Count-1 do
+        for I := 0 to JSONArray.Count - 1 do
         begin
           Item := TDictionary<String, TValue>.Create;
-          Item.Add(VarName, JSONArray[I]);
+          var JSONVal := JSONArray.Items[I];
+          if JSONVal is TJSONString then
+            Item.Add(VarName, TValue.From<String>(TJSONString(JSONVal).Value))
+          else if JSONVal is TJSONNumber then
+          begin
+            var numStr := JSONVal.Value;
+            if (Pos('.', numStr) > 0) or (Pos('e', LowerCase(numStr)) > 0) then
+              Item.Add(VarName, TValue.From<Double>(TJSONNumber(JSONVal).AsDouble))
+            else
+              Item.Add(VarName, TValue.From<Int64>(TJSONNumber(JSONVal).AsInt64));
+          end
+          else if JSONVal is TJSONBool then
+            Item.Add(VarName, TValue.From<Boolean>(TJSONBool(JSONVal).AsBoolean))
+          else if JSONVal is TJSONNull then
+            Item.Add(VarName, TValue.Empty)
+          else
+            Item.Add(VarName, TValue.From<String>(JSONVal.ToString));
           Items[I] := Item;
         end;
+      end
+      else
+      begin
+        SetLength(Items, 0); // Non-iterable value treated as empty
       end;
     end;
 

@@ -747,7 +747,7 @@ var
   FloatVal: Double;
   ElemStrs: TArray<String>;
   Arr: TList<TValue>;
-  Elem, AElem: String;
+  Elem, AElem, ASElem, ASAElem: String;
   Dict: TDictionary<String, TValue>;
   PosColon: Integer;
   Val: TValue;
@@ -770,14 +770,47 @@ begin
 
   if CleanExpr.StartsWith('[') and CleanExpr.EndsWith(']') then
   begin
-    Inner := Copy(CleanExpr, 2, Length(CleanExpr) - 2);
+    Inner := Copy(CleanExpr, 2, Length(CleanExpr) - 2).Trim;
+    if Inner = '' then
+      Exit(TValue.From<TArray<TValue>>([]));
     ElemStrs := SplitOnTopLevel(Inner, ',');
     Arr := TList<TValue>.Create;
     try
-      for Elem in ElemStrs do
+      for AElem in ElemStrs do
       begin
-        if Trim(Elem) <> '' then
-          Arr.Add(EvaluateExpression(Trim(Elem), Context));
+        Elem := Trim(AElem);
+        if Elem = '' then Continue;
+        if Elem.StartsWith('{') and Elem.EndsWith('}') then
+        begin
+          Dict := TDictionary<String, TValue>.Create;
+          try
+            var DictInner := Copy(Elem, 2, Length(Elem) - 2).Trim;
+            if DictInner <> '' then
+            begin
+              var DictElems := SplitOnTopLevel(DictInner, ',');
+              for ASElem in DictElems do
+              begin
+                ASAElem := Trim(ASElem);
+                if ASAElem = '' then Continue;
+                PosColon := FindTopLevelPos(ASAElem, ':');
+                if PosColon <= 0 then
+                  raise Exception.Create('Invalid dictionary pair: ' + ASAElem);
+                Key := Trim(Copy(ASAElem, 1, PosColon - 1));
+                if ((Key.StartsWith('"') and Key.EndsWith('"')) or (Key.StartsWith('''') and Key.EndsWith(''''))) and (Length(Key) >= 2) then
+                  Key := Copy(Key, 2, Length(Key) - 2);
+                ValueStr := Trim(Copy(ASAElem, PosColon + 1, MaxInt));
+                Val := EvaluateExpression(ValueStr, Context);
+                Dict.Add(Key, Val);
+              end;
+            end;
+            Arr.Add(TValue.From<TDictionary<String, TValue>>(Dict));
+          except
+            Dict.Free;
+            raise;
+          end;
+        end
+        else
+          Arr.Add(EvaluateExpression(Elem, Context));
       end;
       Result := TValue.From<TArray<TValue>>(Arr.ToArray);
     finally
@@ -792,18 +825,18 @@ begin
     ElemStrs := SplitOnTopLevel(Inner, ',');
     Dict := TDictionary<String, TValue>.Create;
     try
-      for AElem in ElemStrs do
+      for Elem in ElemStrs do
       begin
-        Elem := Trim(AElem);
-        if Elem = '' then Continue;
-        PosColon := FindTopLevelPos(Elem, ':');
+        AElem := Trim(Elem);
+        if AElem = '' then Continue;
+        PosColon := FindTopLevelPos(AElem, ':');
         if PosColon <= 0 then
-          raise Exception.Create('Invalid dictionary pair: ' + Elem);
-        Key := Trim(Copy(Elem, 1, PosColon - 1));
+          raise Exception.Create('Invalid dictionary pair: ' + AElem);
+        Key := Trim(Copy(AElem, 1, PosColon - 1));
         if ((Key.StartsWith('"') and Key.EndsWith('"')) or (Key.StartsWith('''') and Key.EndsWith(''''))) and (Length(Key) >= 2) then
           Key := Copy(Key, 2, Length(Key) - 2);
-        ValueStr := Trim(Copy(Elem, PosColon + 1, MaxInt));
-        Val := GetExpressionValue(ValueStr, Context);
+        ValueStr := Trim(Copy(AElem, PosColon + 1, MaxInt));
+        Val := EvaluateExpression(ValueStr, Context);
         Dict.Add(Key, Val);
       end;
       Result := TValue.From<TDictionary<String, TValue>>(Dict);
@@ -2274,99 +2307,53 @@ end;
 /// </remarks>
 function TTina4Twig.EvaluateSetBlocks(const Template: String; Context: TDictionary<String, TValue>): String;
 var
+  ResultSB: TStringBuilder;
+  LowerTemplate: String;
+  CurrentPos, SetTagStart, SetTagEnd: Integer;
+  SetExpr, VarName, ValueExpr: String;
+  Value: TValue;
   Regex: TRegEx;
   Match: TMatch;
-  VarName, RightSide: String;
-  Value: TValue;
-  JSONValue: TJSONValue;
-  JSONArray: TJSONArray;
-  SubArray: TArray<TValue>;
-  I: Integer;
-  ValueStr: String;
-  FloatVal: Double;
-  Int64Val: Int64;
 begin
-  Result := Template;
-  Regex := TRegEx.Create('{%\s*set\s+(\w+)\s*=\s*([^%]+)\s*%}', [roSingleLine, roIgnoreCase]);
-  Match := Regex.Match(Result);
-  while Match.Success do
-  begin
-    VarName := Match.Groups[1].Value;
-    RightSide := Trim(Match.Groups[2].Value);
-
-    if RightSide.StartsWith('[') and RightSide.EndsWith(']') then
+  ResultSB := TStringBuilder.Create;
+  LowerTemplate := LowerCase(Template);
+  CurrentPos := 0;
+  try
+    while True do
     begin
-      // Try parsing as JSON array
-      JSONValue := TJSONObject.ParseJSONValue(RightSide);
-      try
-        if (JSONValue <> nil) and (JSONValue is TJSONArray) then
-        begin
-          JSONArray := TJSONArray(JSONValue);
-          SetLength(SubArray, JSONArray.Count);
-          for I := 0 to JSONArray.Count - 1 do
-          begin
-            if JSONArray.Items[I] is TJSONNumber then
-            begin
-              ValueStr := JSONArray.Items[I].Value;
-              if (Pos('.', ValueStr) > 0) or (Pos('e', LowerCase(ValueStr)) > 0) then
-              begin
-                if TryStrToFloat(ValueStr, FloatVal) then
-                  SubArray[I] := TValue.From<Double>(FloatVal)
-                else
-                  SubArray[I] := TValue.From<String>(ValueStr);
-              end
-              else if TryStrToInt64(ValueStr, Int64Val) then
-                SubArray[I] := TValue.From<Int64>(Int64Val)
-              else
-                SubArray[I] := TValue.From<String>(ValueStr);
-            end
-            else if JSONArray.Items[I] is TJSONTrue then
-              SubArray[I] := TValue.From<Boolean>(True)
-            else if JSONArray.Items[I] is TJSONFalse then
-              SubArray[I] := TValue.From<Boolean>(False)
-            else if JSONArray.Items[I] is TJSONString then
-              SubArray[I] := TValue.From<String>(TJSONString(JSONArray.Items[I]).Value)
-            else if JSONArray.Items[I] is TJSONNull then
-              SubArray[I] := TValue.Empty
-            else if JSONArray.Items[I] is TJSONObject then
-              SubArray[I] := TValue.From<TDictionary<String, TValue>>(ParseVariableDict(JSONArray.Items[I].ToString, Context))
-            else if JSONArray.Items[I] is TJSONArray then
-              SubArray[I] := TValue.From<TArray<TValue>>(ParseVariableDict(JSONArray.Items[I].ToString, Context).Values.ToArray)
-            else
-              SubArray[I] := TValue.From<String>(JSONArray.Items[I].ToString);
-          end;
-          Value := TValue.From<TArray<TValue>>(SubArray);
-        end
-        else
-        begin
-          // Fallback to manual array parsing if not valid JSON
-          var ArrayContent := RightSide.Substring(1, RightSide.Length - 2).Trim;
-          if ArrayContent = '' then
-            SetLength(SubArray, 0)
-          else
-          begin
-            var ArrayItems := ArrayContent.Split([','], TStringSplitOptions.ExcludeEmpty);
-            SetLength(SubArray, Length(ArrayItems));
-            for I := 0 to High(ArrayItems) do
-            begin
-              ValueStr := Trim(ArrayItems[I]).Replace('''', '', [rfReplaceAll]).Replace('"', '', [rfReplaceAll]);
-              SubArray[I] := GetExpressionValue(ValueStr, Context);
-            end;
-          end;
-          Value := TValue.From<TArray<TValue>>(SubArray);
-        end;
-      finally
-        JSONValue.Free;
+      SetTagStart := LowerTemplate.IndexOf('{%set', CurrentPos);
+      if SetTagStart < 0 then
+        SetTagStart := LowerTemplate.IndexOf('{% set', CurrentPos);
+      if SetTagStart < 0 then Break;
+      ResultSB.Append(Template.Substring(CurrentPos, SetTagStart - CurrentPos));
+      SetTagEnd := LowerTemplate.IndexOf('%}', SetTagStart + 2);
+      if SetTagEnd < 0 then Break;
+      SetExpr := Trim(Template.Substring(SetTagStart + 2, SetTagEnd - SetTagStart - 2));
+      if not SetExpr.ToLower.StartsWith('set') then
+      begin
+        CurrentPos := SetTagEnd + 2;
+        Continue;
       end;
-    end
-    else if RightSide.StartsWith('{') and RightSide.EndsWith('}') then
-      Value := TValue.From<TDictionary<String, TValue>>(ParseVariableDict(RightSide, Context))
-    else
-      Value := EvaluateExpression(RightSide, Context);
-
-    Context.AddOrSetValue(VarName, Value);
-    Result := StringReplace(Result, Match.Value, '', [rfReplaceAll]);
-    Match := Match.NextMatch;
+      SetExpr := SetExpr.Substring(SetExpr.ToLower.IndexOf('set') + 3).Trim;
+      // Use a regex that captures the variable name and the full value expression
+      Regex := TRegEx.Create('^(\w+)\s*=\s*([\s\S]*)$', [roIgnoreCase, roSingleLine]);
+      Match := Regex.Match(SetExpr);
+      if not Match.Success then
+      begin
+        CurrentPos := SetTagEnd + 2;
+        Continue;
+      end;
+      VarName := Trim(Match.Groups[1].Value);
+      ValueExpr := Trim(Match.Groups[2].Value);
+      // Parse the full value expression using GetExpressionValue
+      Value := GetExpressionValue(ValueExpr, Context);
+      Context.AddOrSetValue(VarName, Value);
+      CurrentPos := SetTagEnd + 2;
+    end;
+    ResultSB.Append(Template.Substring(CurrentPos));
+    Result := ResultSB.ToString;
+  finally
+    ResultSB.Free;
   end;
 end;
 

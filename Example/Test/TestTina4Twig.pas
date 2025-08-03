@@ -207,9 +207,9 @@ begin
   ReturnValue := FTina4Twig.Render(TemplateOrContent);
   Check(ReturnValue = 'Fabien', TemplateOrContent + ' - Should be Fabien, got ' + ReturnValue);
 
-  TemplateOrContent := '{% set tasks = [{''id'': 1, ''name'': ''Test''},[{''id'': 2, ''name'': ''Test 2''}] %}{{dump(tasks)}}';
+  TemplateOrContent := '{% set tasks = [{''id'': 1, ''name'': ''Test''},{''id'': 2, ''name'': ''Test 2''}] %}{{dump(tasks)}}';
   ReturnValue := FTina4Twig.Render(TemplateOrContent);
-  Check(ReturnValue = 'Something Cool', TemplateOrContent + ' - Should be Something Cool, got ' + ReturnValue);
+  Check(ReturnValue = '<pre>tasks ='#$D#$A'  array(2) {'#$D#$A'    [0]=>'#$D#$A'      array(2) {'#$D#$A'        ["id"]=>'#$D#$A'          int(1)'#$D#$A'        ["name"]=>'#$D#$A'          string(4) "Test"'#$D#$A'      }'#$D#$A'    [1]=>'#$D#$A'      array(2) {'#$D#$A'        ["id"]=>'#$D#$A'          int(2)'#$D#$A'        ["name"]=>'#$D#$A'          string(6) "Test 2"'#$D#$A'      }'#$D#$A'  }'#$D#$A'</pre>', TemplateOrContent + ' - Should be <pre>tasks ='#$D#$A'  array(2) {'#$D#$A'    [0]=>'#$D#$A'      array(2) {'#$D#$A'        ["id"]=>'#$D#$A'          int(1)'#$D#$A'        ["name"]=>'#$D#$A'          string(4) "Test"'#$D#$A'      }'#$D#$A'    [1]=>'#$D#$A'      array(2) {'#$D#$A'        ["id"]=>'#$D#$A'          int(2)'#$D#$A'        ["name"]=>'#$D#$A'          string(6) "Test 2"'#$D#$A'      }'#$D#$A'  }'#$D#$A'</pre>, got ' + ReturnValue);
 end;
 
 procedure TestTTina4Twig.TestComplex;

@@ -33,6 +33,9 @@ type
     procedure TestIf;
     procedure TestTags;
     procedure TestComplex;
+    procedure TextExpressions;
+    procedure TestFilters;
+    procedure TestMacros;
   end;
 
 implementation
@@ -170,6 +173,45 @@ begin
 
 end;
 
+procedure TestTTina4Twig.TextExpressions;
+var
+  ReturnValue: string;
+  TemplateOrContent: string;
+begin
+  TemplateOrContent := '{% set name = "Something Cool" %}{{name}}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = 'Something Cool', TemplateOrContent + ' - Should be Something Cool, got ' + ReturnValue);
+
+  TemplateOrContent := '{% set number = 1 %}{{number + 1}}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = '2', TemplateOrContent + ' - Should be 2, got ' + ReturnValue);
+
+  TemplateOrContent := '{% set name = "Jim" %}{{name ~ " Beam"}}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = 'Jim Beam', TemplateOrContent + ' - Should be Jim Beam, got ' + ReturnValue);
+
+  TemplateOrContent := '{% set number = 1.859 %}{{number | number_format (2,"-") }}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = '1-86', TemplateOrContent + ' - Should be 1-86, got ' + ReturnValue);
+
+  TemplateOrContent := '{% set number = 1.859 %}{{number | number_format (2,"-") }}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = '1-86', TemplateOrContent + ' - Should be 1-86, got ' + ReturnValue);
+
+
+  TemplateOrContent := '{% set number = 1.859 %}{{number | number_format (2,".") + 2 }}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = '3.86', TemplateOrContent + ' - Should be 3.86, got ' + ReturnValue);
+
+  TemplateOrContent := '{% set user = {''name'': ''Fabien''} %}{{user.name}}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = 'Fabien', TemplateOrContent + ' - Should be Fabien, got ' + ReturnValue);
+
+  TemplateOrContent := '{% set tasks = [{''id'': 1, ''name'': ''Test''},[{''id'': 2, ''name'': ''Test 2''}] %}{{dump(tasks)}}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = 'Something Cool', TemplateOrContent + ' - Should be Something Cool, got ' + ReturnValue);
+end;
+
 procedure TestTTina4Twig.TestComplex;
 var
   ReturnValue: string;
@@ -183,6 +225,41 @@ begin
   ReturnValue := FTina4Twig.Render(TemplateOrContent);
   Check(ReturnValue = 'NOOKNO', TemplateOrContent + ' - Should be NOOKNO, got ' + ReturnValue);
 
+end;
+
+procedure TestTTina4Twig.TestFilters;
+var
+  ReturnValue: string;
+  TemplateOrContent: string;
+
+begin
+  TemplateOrContent := '{{ [1, 2, 3, 4]|last }}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = '4', TemplateOrContent + ' - Should be 4, got ' + ReturnValue);
+
+  TemplateOrContent := '{{ [1, 2, 3, 4]| last }}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = '4', TemplateOrContent + ' - Should be 4, got ' + ReturnValue);
+
+  TemplateOrContent := '{{ [1, 2, 3, 4] | last }}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = '4', TemplateOrContent + ' - Should be 4, got ' + ReturnValue);
+
+  TemplateOrContent := '{{[1, 2, 3, 4]|last}}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = '4', TemplateOrContent + ' - Should be 4, got ' + ReturnValue);
+
+  TemplateOrContent := '{{"1234"|last}}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = '4', TemplateOrContent + ' - Should be 4, got ' + ReturnValue);
+
+  TemplateOrContent := '{{ "1234" | last }}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = '4', TemplateOrContent + ' - Should be 4, got ' + ReturnValue);
+
+  TemplateOrContent := '{{ "1234" | last ~ "5" }}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = '45', TemplateOrContent + ' - Should be 45, got ' + ReturnValue);
 end;
 
 procedure TestTTina4Twig.TestForLoops;
@@ -297,6 +374,24 @@ begin
   Check(ReturnValue = 'High', TemplateOrContent + ' - Should be High, got ' + ReturnValue);
 end;
 
+procedure TestTTina4Twig.TestMacros;
+var
+  ReturnValue: string;
+  TemplateOrContent: string;
+begin
+
+  TemplateOrContent := '{% macro input(name, value, type = "text", size = 20) %}<input type="{{ type }}" name="{{ name }}" value="{{ value|e }}" size="{{ size }}"/>{% endmacro %}{{input("Test")}}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = '<input type="text" name="Test" value="" size="20"/>', TemplateOrContent+'- Should be <input type="text" name="Test" value="" size="20"/> , got '+ReturnValue);
+
+
+  TemplateOrContent := '{% macro a(name, value, type = "text", size = 20) %}A<input type="{{ type }}" name="{{ name }}" value="{{ value|e }}" size="{{ size }}"/>{% endmacro %}{% macro b(name, value, type = "text", size = 20) %}B<input type="{{ type }}" name="{{ name }}" value="{{ value|e }}" size="{{ size }}"/>{% endmacro %}{{a("Test")}}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = 'A<input type="text" name="Test" value="" size="20"/>', TemplateOrContent+'- Should be A<input type="text" name="Test" value="" size="20"/>, got '+ReturnValue);
+
+
+end;
+
 procedure TestTTina4Twig.TestRender;
 var
   ReturnValue: string;
@@ -366,16 +461,6 @@ begin
   ReturnValue := FTina4Twig.Render(TemplateOrContent);
   Check(ReturnValue = 'No', TemplateOrContent+' Should be No, got '+ ReturnValue);
 
-
-
-  TemplateOrContent := '{% macro input(name, value, type = "text", size = 20) %}<input type="{{ type }}" name="{{ name }}" value="{{ value|e }}" size="{{ size }}"/>{% endmacro %}{{input("Test")}}';
-  ReturnValue := FTina4Twig.Render(TemplateOrContent);
-  Check(ReturnValue = '<input type="text" name="Test" value="" size="20"/>', TemplateOrContent+'- Should be <input type="text" name="Test" value="" size="20"/> '+ReturnValue);
-
-
-  TemplateOrContent := '{% macro a(name, value, type = "text", size = 20) %}A<input type="{{ type }}" name="{{ name }}" value="{{ value|e }}" size="{{ size }}"/>{% endmacro %}{% macro b(name, value, type = "text", size = 20) %}B<input type="{{ type }}" name="{{ name }}" value="{{ value|e }}" size="{{ size }}"/>{% endmacro %}{{a("Test")}}';
-  ReturnValue := FTina4Twig.Render(TemplateOrContent);
-  Check(ReturnValue = 'A<input type="text" name="Test" value="" size="20"/>', TemplateOrContent+'- Should be A<input type="text" name="Test" value="" size="20"/> '+ReturnValue);
 
 
 

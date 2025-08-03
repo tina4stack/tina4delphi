@@ -76,6 +76,79 @@ begin
 end;
 
 
+/// <summary>
+/// Splits a string on top-level pipe symbols, respecting parentheses and quotes.
+/// Stops splitting when encountering operators like ~ that indicate the end of a filter chain.
+/// </summary>
+/// <param name="S">The input string to split.</param>
+/// <returns>An array of strings split on top-level pipes.</returns>
+function SplitOnTopLevelPipe(const S: String): TArray<String>;
+var
+  Parts: TList<String>;
+  Current: String;
+  Depth: Integer;
+  QuoteChar: Char;
+  InQuote: Boolean;
+  I: Integer;
+begin
+  Parts := TList<String>.Create;
+  try
+    Current := '';
+    Depth := 0;
+    InQuote := False;
+    QuoteChar := #0;
+    for I := 1 to Length(S) do
+    begin
+      if InQuote then
+      begin
+        Current := Current + S[I];
+        if S[I] = QuoteChar then
+          InQuote := False;
+      end
+      else if S[I] in ['''', '"'] then
+      begin
+        InQuote := True;
+        QuoteChar := S[I];
+        Current := Current + S[I];
+      end
+      else if S[I] = '(' then
+      begin
+        Inc(Depth);
+        Current := Current + S[I];
+      end
+      else if S[I] = ')' then
+      begin
+        Dec(Depth);
+        Current := Current + S[I];
+      end
+      else if (S[I] = '|') and (Depth = 0) then
+      begin
+        // Check if the next non-whitespace character is an operator like ~
+        var J := I + 1;
+        while (J <= Length(S)) and (S[J] in [' ', #9, #10, #13]) do
+          Inc(J);
+        if (J <= Length(S)) and (S[J] = '~') then
+        begin
+          Current := Current + S[I];
+        end
+        else
+        begin
+          Parts.Add(Trim(Current));
+          Current := '';
+        end;
+      end
+      else
+        Current := Current + S[I];
+    end;
+    if Current <> '' then
+      Parts.Add(Trim(Current));
+    Result := Parts.ToArray;
+  finally
+    Parts.Free;
+  end;
+end;
+
+
 function Tokenize(const Expr: String): TArray<String>;
 var
   Tokens: TList<String>;
@@ -96,12 +169,30 @@ begin
         Continue;
       end;
 
-      // Handle multi-character operators (<=, =>)
+      // Handle multi-character operators (<=, >=, ==, !=, etc.)
       if (I < Length(Expr)) then
       begin
         if (Expr[I] = '<') and (Expr[I + 1] = '=') then
         begin
           Tokens.Add('<=');
+          Inc(I, 2);
+          Continue;
+        end;
+        if (Expr[I] = '>') and (Expr[I + 1] = '=') then
+        begin
+          Tokens.Add('>=');
+          Inc(I, 2);
+          Continue;
+        end;
+        if (Expr[I] = '=') and (Expr[I + 1] = '=') then
+        begin
+          Tokens.Add('==');
+          Inc(I, 2);
+          Continue;
+        end;
+        if (Expr[I] = '!') and (Expr[I + 1] = '=') then
+        begin
+          Tokens.Add('!=');
           Inc(I, 2);
           Continue;
         end;
@@ -114,7 +205,7 @@ begin
       end;
 
       // Handle single-character operators
-      if CharInSet(Expr[I], ['+', '-', '*', '/', '%', '(', ')', '|', ',']) then
+      if CharInSet(Expr[I], ['+', '-', '*', '/', '%', '(', ')', '|', ',', '~']) then
       begin
         Tokens.Add(Expr[I]);
         Inc(I);
@@ -179,6 +270,44 @@ begin
         Continue;
       end;
 
+      // Handle array literals
+      if Expr[I] = '[' then
+      begin
+        Token := '[';
+        Inc(I);
+        while (I <= Length(Expr)) and (Expr[I] <> ']') do
+        begin
+          Token := Token + Expr[I];
+          Inc(I);
+        end;
+        if I <= Length(Expr) then
+        begin
+          Token := Token + ']';
+          Inc(I);
+        end;
+        Tokens.Add(Token);
+        Continue;
+      end;
+
+      // Handle dictionary literals
+      if Expr[I] = '{' then
+      begin
+        Token := '{';
+        Inc(I);
+        while (I <= Length(Expr)) and (Expr[I] <> '}') do
+        begin
+          Token := Token + Expr[I];
+          Inc(I);
+        end;
+        if I <= Length(Expr) then
+        begin
+          Token := Token + '}';
+          Inc(I);
+        end;
+        Tokens.Add(Token);
+        Continue;
+      end;
+
       raise Exception.Create('Invalid character in expression: ' + Expr[I]);
     end;
     Result := Tokens.ToArray;
@@ -198,6 +327,8 @@ var
   FilterChain: String;
   I: Integer;
   InFilter: Boolean;
+  ParenDepth: Integer;
+  LastAppended: String;
 begin
   Precedence := TDictionary<String, Integer>.Create;
   try
@@ -206,10 +337,15 @@ begin
     Precedence.Add('*', 2);
     Precedence.Add('/', 2);
     Precedence.Add('%', 2);
+    Precedence.Add('~', 1);
     Output := TList<String>.Create;
     OpStack := TStack<String>.Create;
     try
       I := 0;
+      InFilter := False;
+      ParenDepth := 0;
+      FilterChain := '';
+      LastAppended := '';
       while I <= High(Tokens) do
       begin
         Token := Tokens[I];
@@ -219,30 +355,43 @@ begin
           Continue;
         end;
 
-        // Handle filter chains (e.g., task.start_date|date('U'))
+        // Handle filter chains (e.g., number | number_format(2, "."))
         if (Token = '|') or InFilter then
         begin
           if not InFilter then
           begin
-            FilterChain := Tokens[I - 1]; // Start with the previous token
+            if Output.Count = 0 then
+              raise Exception.Create('Invalid filter chain: no preceding value');
+            FilterChain := Output[Output.Count - 1]; // Start with the previous token
+            Output.Delete(Output.Count - 1); // Remove the value to append it with filter
             InFilter := True;
+            ParenDepth := 0;
           end;
           FilterChain := FilterChain + Token;
+          LastAppended := Token;
+          if Token = '(' then
+            Inc(ParenDepth);
+          if Token = ')' then
+            Dec(ParenDepth);
           Inc(I);
-          if (I > High(Tokens)) or (Tokens[I] = '|') then
+          // Continue collecting filter tokens until the filter chain ends
+          if (ParenDepth = 0) and (I <= High(Tokens)) and (Tokens[I] = '(') then
+            Continue;
+          if (ParenDepth = 0) and (LastAppended <> '|') and
+             ((I > High(Tokens)) or (Tokens[I] <> '|')) then
           begin
-            Output.Add(FilterChain);
+            Output.Add(FilterChain); // Add completed filter chain
             InFilter := False;
             Continue;
           end;
           Continue;
         end;
 
-        // Check if token is a number, quoted string, identifier, or filter expression
+        // Check if token is a number, quoted string, identifier
         if (TryStrToFloat(Token, Dummy) or
             Token.StartsWith('''') or
             Token.StartsWith('"') or
-            ((Length(Token) > 0) and not CharInSet(Token[1], ['+', '-', '*', '/', '%', '(', ')', ',']))) then
+            ((Length(Token) > 0) and not CharInSet(Token[1], ['+', '-', '*', '/', '%', '(', ')', ',', '~', '|']))) then
         begin
           Output.Add(Token);
           Inc(I);
@@ -270,7 +419,7 @@ begin
           Continue;
         end;
 
-        // Handle comma (used in filter arguments, e.g., round(0, 'floor'))
+        // Handle comma (used in filter arguments, e.g., number_format(2, '.'))
         if Token = ',' then
         begin
           Output.Add(Token);
@@ -321,19 +470,84 @@ var
   A, B: TValue;
   FA, FB: Double;
   IA, IB: Int64;
+  SA, SB: String;
   UseInt: Boolean;
+  Parts: TArray<String>;
+  J: Integer;
+  CurrentVal: TValue;
+  FilterExpr, FuncName, ArgsStr: String;
+  ArgTokens: TArray<String>;
+  ArgList: TList<String>;
+  CurrentArg: String;
+  ArgToken: String;
+  Args: TArray<String>;
+  Filter: TFilterFunc;
 begin
   Stack := TStack<TValue>.Create;
   try
     for Token in RPN do
     begin
+      if Token.Contains('|') then
+      begin
+        // Handle filter chain
+        Parts := Token.Split(['|']);
+        CurrentVal := GetExpressionValue(Parts[0], Context);
+        for J := 1 to High(Parts) do
+        begin
+          FilterExpr := Parts[J];
+          if FilterExpr.Contains('(') and FilterExpr.EndsWith(')') then
+          begin
+            FuncName := Copy(FilterExpr, 1, Pos('(', FilterExpr) - 1);
+            ArgsStr := Copy(FilterExpr, Pos('(', FilterExpr) + 1, Length(FilterExpr) - Pos('(', FilterExpr) - 1);
+            ArgTokens := Tokenize(ArgsStr);
+            ArgList := TList<String>.Create;
+            try
+              CurrentArg := '';
+              for ArgToken in ArgTokens do
+              begin
+                if ArgToken = ',' then
+                begin
+                  ArgList.Add(CurrentArg);
+                  CurrentArg := '';
+                end
+                else
+                  CurrentArg := CurrentArg + ArgToken;
+              end;
+              if CurrentArg <> '' then
+                ArgList.Add(CurrentArg);
+              Args := ArgList.ToArray;
+              // Trim quotes from args
+              for var K := 0 to High(Args) do
+              begin
+                Args[K] := Trim(Args[K]);
+                if ((Args[K].StartsWith('"') and Args[K].EndsWith('"')) or
+                    (Args[K].StartsWith('''') and Args[K].EndsWith(''''))) and (Length(Args[K]) >= 2) then
+                  Args[K] := Copy(Args[K], 2, Length(Args[K]) - 2);
+              end;
+            finally
+              ArgList.Free;
+            end;
+          end
+          else
+          begin
+            FuncName := FilterExpr;
+            SetLength(Args, 0);
+          end;
+          if FFilters.TryGetValue(FuncName, Filter) then
+            CurrentVal := TValue.From<String>(Filter(CurrentVal, Args))
+          else
+            CurrentVal := TValue.From<String>('(filter ' + FuncName + ' not found)');
+        end;
+        Stack.Push(CurrentVal);
+        Continue;
+      end;
       if TryStrToInt64(Token, IA) then
         Stack.Push(TValue.From<Int64>(IA))
       else if TryStrToFloat(Token, FA) then
         Stack.Push(TValue.From<Double>(FA))
       else if (Token.StartsWith('''') or Token.StartsWith('"')) and (Token.EndsWith(Token[1])) then
         Stack.Push(TValue.From<String>(Copy(Token, 2, Length(Token) - 2)))
-      else if not CharInSet(Token[1], ['+', '-', '*', '/', '%']) then
+      else if not CharInSet(Token[1], ['+', '-', '*', '/', '%', '~']) then
         Stack.Push(ResolveVariablePath(Token, Context))
       else
       begin
@@ -341,11 +555,24 @@ begin
           raise Exception.Create('Invalid expression');
         B := Stack.Pop;
         A := Stack.Pop;
-        UseInt := A.IsOrdinal and B.IsOrdinal;
+        if Token = '~' then
+        begin
+          Stack.Push(TValue.From<String>(A.ToString + B.ToString));
+          Continue;
+        end;
+        // Try to convert operands to numbers for arithmetic operations
+        UseInt := (A.IsOrdinal or (A.Kind in [tkString, tkUString]) and TryStrToInt64(A.AsString, IA)) and
+                  (B.IsOrdinal or (B.Kind in [tkString, tkUString]) and TryStrToInt64(B.AsString, IB));
         if UseInt then
         begin
-          IA := A.AsInt64;
-          IB := B.AsInt64;
+          if A.Kind in [tkString, tkUString] then
+            TryStrToInt64(A.AsString, IA)
+          else
+            IA := A.AsInt64;
+          if B.Kind in [tkString, tkUString] then
+            TryStrToInt64(B.AsString, IB)
+          else
+            IB := B.AsInt64;
           case Token[1] of
             '+': Stack.Push(TValue.From<Int64>(IA + IB));
             '-': Stack.Push(TValue.From<Int64>(IA - IB));
@@ -356,8 +583,15 @@ begin
         end
         else
         begin
-          FA := A.AsExtended;
-          FB := B.AsExtended;
+          // Convert to extended for floating-point operations
+          if (A.Kind in [tkString, tkUString]) and TryStrToFloat(A.AsString, FA) then
+            // FA set
+          else
+            FA := A.AsExtended;
+          if (B.Kind in [tkString, tkUString]) and TryStrToFloat(B.AsString, FB) then
+            // FB set
+          else
+            FB := B.AsExtended;
           case Token[1] of
             '+': Stack.Push(TValue.From<Double>(FA + FB));
             '-': Stack.Push(TValue.From<Double>(FA - FB));
@@ -376,6 +610,7 @@ begin
     Stack.Free;
   end;
 end;
+
 
 function TTina4Twig.EvaluateExpression(const Expr: String; Context: TDictionary<String, TValue>): TValue;
 var
@@ -415,11 +650,107 @@ begin
   Result := TValue.Empty;
 end;
 
+function SplitOnTopLevel(const S: String; Delim: Char): TArray<String>;
+var
+  Parts: TList<String>;
+  Current: String;
+  Depth: Integer;
+  QuoteChar: Char;
+  InQuote: Boolean;
+  I: Integer;
+begin
+  Parts := TList<String>.Create;
+  try
+    Current := '';
+    Depth := 0;
+    InQuote := False;
+    QuoteChar := #0;
+    for I := 1 to Length(S) do
+    begin
+      if InQuote then
+      begin
+        Current := Current + S[I];
+        if S[I] = QuoteChar then
+          InQuote := False;
+      end
+      else if S[I] in ['''', '"'] then
+      begin
+        InQuote := True;
+        QuoteChar := S[I];
+        Current := Current + S[I];
+      end
+      else if S[I] in ['(', '[', '{'] then
+      begin
+        Inc(Depth);
+        Current := Current + S[I];
+      end
+      else if S[I] in [')', ']', '}'] then
+      begin
+        Dec(Depth);
+        Current := Current + S[I];
+      end
+      else if (S[I] = Delim) and (Depth = 0) then
+      begin
+        Parts.Add(Trim(Current));
+        Current := '';
+      end
+      else
+        Current := Current + S[I];
+    end;
+    if Current <> '' then
+      Parts.Add(Trim(Current));
+    Result := Parts.ToArray;
+  finally
+    Parts.Free;
+  end;
+end;
+
+function FindTopLevelPos(const S: String; Ch: Char): Integer;
+var
+  Depth: Integer;
+  QuoteChar: Char;
+  InQuote: Boolean;
+  I: Integer;
+begin
+  Result := -1;
+  Depth := 0;
+  InQuote := False;
+  QuoteChar := #0;
+  for I := 1 to Length(S) do
+  begin
+    if InQuote then
+    begin
+      if S[I] = QuoteChar then
+        InQuote := False;
+    end
+    else if S[I] in ['''', '"'] then
+    begin
+      InQuote := True;
+      QuoteChar := S[I];
+    end
+    else if S[I] in ['(', '[', '{'] then
+      Inc(Depth)
+    else if S[I] in [')', ']', '}'] then
+      Dec(Depth)
+    else if (S[I] = Ch) and (Depth = 0) then
+    begin
+      Result := I;
+      Exit;
+    end;
+  end;
+end;
+
 function TTina4Twig.GetExpressionValue(const Expr: String; Context: TDictionary<String, TValue>): TValue;
 var
-  CleanExpr, Lower: String;
+  CleanExpr, Lower, Inner, Key, ValueStr: String;
   IntVal: Int64;
   FloatVal: Double;
+  ElemStrs: TArray<String>;
+  Arr: TList<TValue>;
+  Elem, AElem: String;
+  Dict: TDictionary<String, TValue>;
+  PosColon: Integer;
+  Val: TValue;
 begin
   CleanExpr := Trim(Expr);
   if ((CleanExpr.StartsWith('"') and CleanExpr.EndsWith('"')) or (CleanExpr.StartsWith('''') and CleanExpr.EndsWith(''''))) and (Length(CleanExpr) >= 2) then
@@ -436,6 +767,52 @@ begin
 
   if TryStrToFloat(CleanExpr, FloatVal) then
     Exit(TValue.From<Double>(FloatVal));
+
+  if CleanExpr.StartsWith('[') and CleanExpr.EndsWith(']') then
+  begin
+    Inner := Copy(CleanExpr, 2, Length(CleanExpr) - 2);
+    ElemStrs := SplitOnTopLevel(Inner, ',');
+    Arr := TList<TValue>.Create;
+    try
+      for Elem in ElemStrs do
+      begin
+        if Trim(Elem) <> '' then
+          Arr.Add(EvaluateExpression(Trim(Elem), Context));
+      end;
+      Result := TValue.From<TArray<TValue>>(Arr.ToArray);
+    finally
+      Arr.Free;
+    end;
+    Exit;
+  end;
+
+  if CleanExpr.StartsWith('{') and CleanExpr.EndsWith('}') then
+  begin
+    Inner := Copy(CleanExpr, 2, Length(CleanExpr) - 2);
+    ElemStrs := SplitOnTopLevel(Inner, ',');
+    Dict := TDictionary<String, TValue>.Create;
+    try
+      for AElem in ElemStrs do
+      begin
+        Elem := Trim(AElem);
+        if Elem = '' then Continue;
+        PosColon := FindTopLevelPos(Elem, ':');
+        if PosColon <= 0 then
+          raise Exception.Create('Invalid dictionary pair: ' + Elem);
+        Key := Trim(Copy(Elem, 1, PosColon - 1));
+        if ((Key.StartsWith('"') and Key.EndsWith('"')) or (Key.StartsWith('''') and Key.EndsWith(''''))) and (Length(Key) >= 2) then
+          Key := Copy(Key, 2, Length(Key) - 2);
+        ValueStr := Trim(Copy(Elem, PosColon + 1, MaxInt));
+        Val := GetExpressionValue(ValueStr, Context);
+        Dict.Add(Key, Val);
+      end;
+      Result := TValue.From<TDictionary<String, TValue>>(Dict);
+    except
+      Dict.Free;
+      raise;
+    end;
+    Exit;
+  end;
 
   Result := ResolveVariablePath(CleanExpr, Context);
 end;
@@ -1230,147 +1607,82 @@ end;
 /// <remarks>
 /// Handles {{ var | filter(arg) }}, function calls, and macro calls.
 /// Prioritizes macro lookup to ensure correct macro execution.
+/// Uses EvaluateExpression for complex expressions with filters and operators.
+/// Strips quotes from macro and function arguments to ensure correct rendering.
 /// </remarks>
 function TTina4Twig.ReplaceContextVariables(const Template: String; Context: TDictionary<String, TValue>): String;
 var
   Regex: TRegEx;
   Match: TMatch;
-  FullMatch, Expr, VarName, FilterChain, FuncName, ArgsStr: String;
-  Args: TArray<String>;
+  FullMatch, Expr: String;
   TempVal: TValue;
   Func: TFunctionFunc;
   Macro: TMacroFunc;
-  Filter: TFilterFunc;
   FilteredValue: String;
   I: Integer;
-  DebugLog: TStringList;
+  Args: TArray<String>;
 begin
   Result := Template;
-  DebugLog := TStringList.Create;
-  try
-    Regex := TRegEx.Create('{{\s*([^}]+)\s*}}', [roSingleLine, roIgnoreCase]);
+  Regex := TRegEx.Create('{{\s*([^}]+)\s*}}', [roSingleLine, roIgnoreCase]);
 
-    while True do
+  while True do
+  begin
+    Match := Regex.Match(Result);
+    if not Match.Success then
+      Break;
+
+    FullMatch := Match.Value;
+    Expr := Trim(Match.Groups[1].Value);
+
+
+    // Initialize Args to empty array to avoid undefined issues
+    SetLength(Args, 0);
+
+    // Handle expressions with filters and/or operators
+    if Expr.Contains('|') or Expr.Contains('+') or Expr.Contains('-') or Expr.Contains('*') or Expr.Contains('/') or Expr.Contains('%') or Expr.Contains('~') then
     begin
-      Match := Regex.Match(Result);
-      if not Match.Success then
-        Break;
-
-      FullMatch := Match.Value;
-      Expr := Trim(Match.Groups[1].Value);
-
-      VarName := Expr;
-      FilterChain := '';
-      if Expr.Contains('|') then
-      begin
-        var Parts := Expr.Split(['|'], TStringSplitOptions.ExcludeEmpty);
-        VarName := Trim(Parts[0]);
-        for I := 1 to High(Parts) do
-          FilterChain := FilterChain + '|' + Trim(Parts[I]);
-      end;
-
-      if (Pos('(', VarName) > 0) and VarName.EndsWith(')') then
-      begin
-        FuncName := Trim(Copy(VarName, 1, Pos('(', VarName) - 1));
-        ArgsStr := Copy(VarName, Pos('(', VarName) + 1, Length(VarName) - Pos('(', VarName) - 1);
-        Args := ArgsStr.Split([','], TStringSplitOptions.ExcludeEmpty);
-        for I := 0 to High(Args) do
-        begin
-          Args[I] := Trim(Args[I]);
-          if (Args[I].StartsWith('"') and Args[I].EndsWith('"')) or
-             (Args[I].StartsWith('''') and Args[I].EndsWith('''')) then
-            Args[I] := Args[I].Substring(1, Args[I].Length - 2)
-          else
-            Args[I] := Args[I];
-        end;
-
-        DebugLog.Add('Attempting to call: ' + FuncName + ' with args: ' + String.Join(', ', Args));
-        DebugLog.Add('Available macros: ' + String.Join(', ', FMacros.Keys.ToArray));
-        DebugLog.Add('Available functions: ' + String.Join(', ', FFunctions.Keys.ToArray));
-
-        if FMacros.ContainsKey(FuncName) then
-        begin
-          if FMacros.TryGetValue(FuncName, Macro) then
-          begin
-            FilteredValue := Macro(FuncName, Args, Context);
-            DebugLog.Add('Called macro: ' + FuncName);
-          end
-          else
-          begin
-            FilteredValue := '(macro ' + FuncName + ' lookup failed)';
-            DebugLog.Add('Failed to lookup macro: ' + FuncName);
-          end;
-        end
-        else if FFunctions.ContainsKey(FuncName) then
-        begin
-          if FFunctions.TryGetValue(FuncName, Func) then
-          begin
-            FilteredValue := Func(Args, Context);
-            DebugLog.Add('Called function: ' + FuncName);
-          end
-          else
-          begin
-            FilteredValue := '(function ' + FuncName + ' lookup failed)';
-            DebugLog.Add('Failed to lookup function: ' + FuncName);
-          end;
-        end
-        else
-        begin
-          FilteredValue := '(function or macro ' + FuncName + ' not found)';
-          DebugLog.Add('Macro/function not found: ' + FuncName);
-        end;
-      end
-      else
-      begin
-        TempVal := ResolveVariablePath(VarName, Context);
-        if FilterChain <> '' then
-        begin
-          FilteredValue := TempVal.ToString; // Initialize for filter chain
-          var Filters := FilterChain.TrimLeft(['|']).Split(['|'], TStringSplitOptions.ExcludeEmpty);
-          var CurrentVal := TempVal; // Start with raw TValue
-          for var FilterExp in Filters do
-          begin
-            var FilterExpr := Trim(FilterExp);
-            if FilterExpr.Contains('(') and FilterExpr.EndsWith(')') then
-            begin
-              FuncName := Copy(FilterExpr, 1, Pos('(', FilterExpr) - 1);
-              ArgsStr := Copy(FilterExpr, Pos('(', FilterExpr) + 1, Length(FilterExpr) - Pos('(', FilterExpr) - 1);
-              Args := ArgsStr.Split([','], TStringSplitOptions.ExcludeEmpty);
-              for I := 0 to High(Args) do
-                Args[I] := Trim(Args[I]);
-            end
-            else
-            begin
-              FuncName := FilterExpr;
-              SetLength(Args, 0);
-            end;
-
-            if FFilters.TryGetValue(FuncName, Filter) then
-            begin
-              FilteredValue := Filter(CurrentVal, Args);
-              DebugLog.Add('Applied filter: ' + FuncName + ', result: ' + FilteredValue);
-              CurrentVal := TValue.From<String>(FilteredValue);
-            end
-            else
-            begin
-              FilteredValue := '(filter ' + FuncName + ' not found)';
-              DebugLog.Add('Failed to lookup filter: ' + FuncName);
-              CurrentVal := TValue.From<String>(FilteredValue);
-            end;
-          end;
-        end
-        else if not TempVal.IsEmpty then
-          FilteredValue := TempVal.ToString
-        else
-          FilteredValue := ''; // Return empty string for undefined variables
-      end;
-
-      Result := StringReplace(Result, FullMatch, FilteredValue, [rfReplaceAll]);
+      TempVal := EvaluateExpression(Expr, Context);
+      Result := StringReplace(Result, FullMatch, TempVal.ToString, [rfReplaceAll]);
+      Continue;
     end;
 
-    DebugLog.SaveToFile('debug_log.txt');
-  finally
-    DebugLog.Free;
+    // Handle function or macro calls (e.g., {{ dump(var) }} or {{ input("Test") }})
+    if Expr.Contains('(') and Expr.EndsWith(')') then
+    begin
+      var FuncName := Trim(Copy(Expr, 1, Pos('(', Expr) - 1));
+      var ArgsStr := Trim(Copy(Expr, Pos('(', Expr) + 1, Length(Expr) - Pos('(', Expr) - 1));
+      if ArgsStr <> '' then
+        Args := ArgsStr.Split([','], TStringSplitOptions.ExcludeEmpty);
+      for I := 0 to High(Args) do
+      begin
+        Args[I] := Trim(Args[I]);
+        // Strip quotes from string literals in arguments
+        if ((Args[I].StartsWith('"') and Args[I].EndsWith('"')) or
+            (Args[I].StartsWith('''') and Args[I].EndsWith(''''))) and (Length(Args[I]) >= 2) then
+          Args[I] := Copy(Args[I], 2, Length(Args[I]) - 2);
+      end;
+
+      // Try macro first
+      if FMacros.TryGetValue(FuncName, Macro) then
+      begin
+        FilteredValue := Macro(FuncName, Args, Context);
+        Result := StringReplace(Result, FullMatch, FilteredValue, [rfReplaceAll]);
+        Continue;
+      end
+      else if FFunctions.TryGetValue(FuncName, Func) then
+      begin
+        FilteredValue := Func(Args, Context);
+        Result := StringReplace(Result, FullMatch, FilteredValue, [rfReplaceAll]);
+        Continue;
+      end;
+    end;
+
+    // Handle simple variable lookup
+    TempVal := ResolveVariablePath(Expr, Context);
+    if not TempVal.IsEmpty then
+      Result := StringReplace(Result, FullMatch, TempVal.ToString, [rfReplaceAll])
+    else
+      Result := StringReplace(Result, FullMatch, '', [rfReplaceAll]);
   end;
 end;
 
@@ -1400,6 +1712,8 @@ var
   RttiCtx: TRttiContext;
   RttiType: TRttiType;
   Prop: TRttiProperty;
+  FloatVal: Double;
+  IntVal: Int64;
 begin
   Result := TValue.Empty;
 
@@ -1421,7 +1735,24 @@ begin
 
   // Initial lookup
   if not Context.TryGetValue(Parts[0], Current) then
-    Exit(TValue.Empty);
+  begin
+    // Check if VariablePath is a number, JSON array, or JSON object
+    if TryStrToInt64(VariablePath, IntVal) or
+       TryStrToFloat(VariablePath, FloatVal) or
+       ((VariablePath.StartsWith('"') and VariablePath.EndsWith('"')) or
+        (VariablePath.StartsWith('''') and VariablePath.EndsWith(''''))) or
+       VariablePath.StartsWith('[') or
+       VariablePath.StartsWith('{') then
+    begin
+      Result := GetExpressionValue(VariablePath, Context);
+      Exit; // Return immediately since literals don't have nested paths
+    end
+    else
+    begin
+      Exit(TValue.Empty); // Not found in context and not a literal
+    end;
+  end;
+
 
   // Process each part of the path
   for i := 1 to High(Parts) do
@@ -3234,24 +3565,34 @@ begin
     end);
 
   FFilters.Add('number_format',
-    function(const Input: TValue; const Args: TArray<String>): String
-    var
-      Val: Double;
-      Decimals: Integer;
-    begin
-      Decimals := 2;
-      if Length(Args) > 0 then
-        Decimals := StrToIntDef(Args[0], 2);
-      if Input.IsOrdinal then
-        Val := Input.AsInt64
-      else if Input.isType<Real> then
-        Val := Input.AsExtended
-      else if (Input.Kind in [tkString, tkUString]) and TryStrToFloat(Input.AsString, Val) then
-        // Val already set
-      else
-        Exit(Input.ToString);
-      Result := FormatFloat('0.' + StringOfChar('0', Decimals), Val);
-    end);
+  function(const Input: TValue; const Args: TArray<String>): String
+  var
+    Val: Double;
+    Decimals: Integer;
+    DecPoint, ThousandsSep: String;
+  begin
+    Decimals := 2;
+    DecPoint := '.';
+    ThousandsSep := ',';
+    if Length(Args) > 0 then
+      Decimals := StrToIntDef(Args[0], 2);
+    if Length(Args) > 1 then
+      DecPoint := Args[1];
+    if Length(Args) > 2 then
+      ThousandsSep := Args[2];
+    if Input.IsOrdinal then
+      Val := Input.AsInt64
+    else if Input.IsType<Real> then
+      Val := Input.AsExtended
+    else if (Input.Kind in [tkString, tkUString]) and TryStrToFloat(Input.AsString, Val) then
+      // Val already set
+    else
+      Exit(Input.ToString);
+    Result := FormatFloat('0.' + StringOfChar('0', Decimals), Val);
+    if Decimals > 0 then
+      Result := StringReplace(Result, '.', DecPoint, [rfReplaceAll]);
+    // Note: Thousands separator not implemented due to lack of direct support in FormatFloat
+  end);
 
   FFilters.Add('plural',
     function(const Input: TValue; const Args: TArray<String>): String
@@ -3324,26 +3665,39 @@ begin
     end);
 
   FFilters.Add('round',
-    function(const Input: TValue; const Args: TArray<String>): String
-    var
-      Val: Double;
-      Decimals: Integer;
-      FormatStr: String;
-    begin
-      Decimals := 0;
-      if Length(Args) > 0 then
-        Decimals := StrToIntDef(Args[0], 0);
-      if Input.IsOrdinal then
-        Val := Input.AsInt64
-      else if Input.IsType<Real> then
-        Val := Input.AsExtended
-      else if (Input.Kind in [tkString, tkUString]) and TryStrToFloat(Input.AsString, Val) then
-        // Val already set
-      else
-        Exit(Input.ToString);
-      FormatStr := '0.' + StringOfChar('0', Decimals);
-      Result := FormatFloat(FormatStr, RoundTo(Val, -Decimals));
-    end);
+  function(const Input: TValue; const Args: TArray<String>): String
+  var
+    Val: Double;
+    Decimals: Integer;
+    Method: String;
+    Multiplier: Double;
+  begin
+    Decimals := 0;
+    Method := 'common';
+    if Length(Args) > 0 then
+      Decimals := StrToIntDef(Args[0], 0);
+    if Length(Args) > 1 then
+      Method := Args[1].ToLower;
+    if Input.IsOrdinal then
+      Val := Input.AsInt64
+    else if Input.IsType<Real> then
+      Val := Input.AsExtended
+    else if (Input.Kind in [tkString, tkUString]) and TryStrToFloat(Input.AsString, Val) then
+      // Val set
+    else
+      Exit(Input.ToString);
+    Multiplier := Power(10, Decimals);
+    if Method = 'floor' then
+      Val := Floor(Val * Multiplier) / Multiplier
+    else if Method = 'ceil' then
+      Val := Ceil(Val * Multiplier) / Multiplier
+    else // 'common' or default
+      Val := RoundTo(Val, -Decimals);
+    if Decimals = 0 then
+      Result := IntToStr(Trunc(Val))
+    else
+      Result := FloatToStrF(Val, ffFixed, 15, Decimals);
+  end);
 
   FFilters.Add('shuffle',
     function(const Input: TValue; const Args: TArray<String>): String

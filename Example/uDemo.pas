@@ -11,10 +11,12 @@ uses
 type
   TForm2 = class(TForm)
     btnRender: TButton;
-    HtPanel1: THtPanel;
-    memTwig: TMemo;
     btnSave: TButton;
     SaveDialog1: TSaveDialog;
+    Panel1: TPanel;
+    HtPanel1: THtPanel;
+    Splitter1: TSplitter;
+    memTwig: TMemo;
     procedure HtPanel1Click(Sender: TObject);
     procedure btnRenderClick(Sender: TObject);
     procedure btnSaveClick(Sender: TObject);

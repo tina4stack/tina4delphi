@@ -1,7 +1,7 @@
 object Form2: TForm2
   Left = 0
   Top = 0
-  Caption = 'Form2'
+  Caption = 'Twig Demo Form'
   ClientHeight = 480
   ClientWidth = 916
   FormFactor.Width = 320
@@ -18,45 +18,10 @@ object Form2: TForm2
     TextSettings.Trimming = None
     OnClick = btnRenderClick
   end
-  object HtPanel1: THtPanel
-    Anchors = [akLeft, akTop, akBottom]
-    Position.X = 8.000000000000000000
-    Position.Y = 48.000000000000000000
-    Size.Width = 337.000000000000000000
-    Size.Height = 394.000000000000000000
-    Size.PlatformDefault = False
-    TabOrder = 1
-    OnClick = HtPanel1Click
-    AutoHeight = False
-    Active = True
-    TouchScroll = True
-    ContentScale = 1.000000000000000000
-    AdaptiveZoom = False
-    EnableSelection = False
-    SelectHandleStyle = shPlatform
-    WebLoading = False
-    ScaleMin = 0.100000001490116100
-    ScaleMax = 100.000000000000000000
-    Viewport.Width = 337.000000000000000000
-    Viewport.Height = 394.000000000000000000
-  end
-  object memTwig: TMemo
-    Touch.InteractiveGestures = [Pan, LongTap, DoubleTap]
-    DataDetectorTypes = []
-    Anchors = [akLeft, akTop, akRight, akBottom]
-    Position.X = 353.000000000000000000
-    Position.Y = 48.000000000000000000
-    Size.Width = 555.000000000000000000
-    Size.Height = 394.000000000000000000
-    Size.PlatformDefault = False
-    TabOrder = 2
-    Viewport.Width = 551.000000000000000000
-    Viewport.Height = 390.000000000000000000
-  end
   object btnSave: TButton
     Position.X = 8.000000000000000000
     Position.Y = 450.000000000000000000
-    TabOrder = 3
+    TabOrder = 1
     Text = 'Save'
     TextSettings.Trimming = None
     OnClick = btnSaveClick
@@ -64,5 +29,53 @@ object Form2: TForm2
   object SaveDialog1: TSaveDialog
     Left = 176
     Top = 232
+  end
+  object Panel1: TPanel
+    Align = Top
+    Anchors = [akLeft, akTop, akRight, akBottom]
+    Size.Width = 916.000000000000000000
+    Size.Height = 442.000000000000000000
+    Size.PlatformDefault = False
+    TabOrder = 4
+    object HtPanel1: THtPanel
+      Align = Left
+      Size.Width = 337.000000000000000000
+      Size.Height = 442.000000000000000000
+      Size.PlatformDefault = False
+      TabOrder = 2
+      OnClick = HtPanel1Click
+      AutoHeight = False
+      Active = True
+      TouchScroll = True
+      ContentScale = 1.000000000000000000
+      AdaptiveZoom = False
+      EnableSelection = False
+      SelectHandleStyle = shPlatform
+      WebLoading = False
+      ScaleMin = 0.100000001490116100
+      ScaleMax = 100.000000000000000000
+      Viewport.Width = 337.000000000000000000
+      Viewport.Height = 442.000000000000000000
+    end
+    object Splitter1: TSplitter
+      Align = Left
+      Cursor = crHSplit
+      MinSize = 20.000000000000000000
+      Position.X = 337.000000000000000000
+      Size.Width = 24.000000000000000000
+      Size.Height = 442.000000000000000000
+      Size.PlatformDefault = False
+    end
+    object memTwig: TMemo
+      Touch.InteractiveGestures = [Pan, LongTap, DoubleTap]
+      DataDetectorTypes = []
+      Align = Client
+      Size.Width = 555.000000000000000000
+      Size.Height = 442.000000000000000000
+      Size.PlatformDefault = False
+      TabOrder = 1
+      Viewport.Width = 551.000000000000000000
+      Viewport.Height = 438.000000000000000000
+    end
   end
 end

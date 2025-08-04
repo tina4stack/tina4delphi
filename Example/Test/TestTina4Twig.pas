@@ -226,6 +226,40 @@ begin
   ReturnValue := FTina4Twig.Render(TemplateOrContent);
   Check(ReturnValue = 'NOOKNO', TemplateOrContent + ' - Should be NOOKNO, got ' + ReturnValue);
 
+  TemplateOrContent := '''
+  {% set tasks = [
+      {
+          name: 'Project Kickoff',
+          start_date: '2025-08-01',
+          end_date: '2025-08-05',
+          duration: 4,
+          dependencies: []
+      },
+      {
+          name: 'Design Phase',
+          start_date: '2025-08-03',
+          end_date: '2025-08-10',
+          duration: 7,
+          dependencies: ['Project Kickoff']
+      },
+      {
+          name: 'Development',
+          start_date: '2025-08-08',
+          end_date: '2025-08-15',
+          duration: 7,
+          dependencies: ['Design Phase']
+      },
+      {
+          name: 'Testing',
+          start_date: '2025-08-12',
+          end_date: '2025-08-18',
+          duration: 6,
+          dependencies: ['Development']
+      }
+  ] %}{% for task in tasks %} {% set start_offset = ((start_date - tasks[0].start_date|date(''U'')) / 86400) | round %}{% if task.dependencies|length > 0 %}{{ task.dependencies|join(', ') }}{% else %}None{% endif %}{% endfor %}
+  ''';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = 'None Project Kickoff Design Phase Development', TemplateOrContent + ' - Should be NoneProject KickoffDesign PhaseDevelopment, got ' + ReturnValue);
 end;
 
 procedure TestTTina4Twig.TestFilters;
@@ -459,7 +493,7 @@ begin
   FTina4Twig.SetVariable('text', TValue.From<String>('Hello World'));
   var Dict := TDictionary<String, TValue>.Create;
   Dict.Add('name', TValue.From<String>('Alice'));
-  Dict.Add('age', TValue.From<Integer>(25));
+  Dict.Add('age', TValue.From<Integer>(36));
   FTina4Twig.SetVariable('user', TValue.From<TDictionary<String, TValue>>(Dict));
   var Arr: TArray<TValue> := [TValue.From<String>('apple'), TValue.From<String>('banana'), TValue.From<String>('orange')];
   FTina4Twig.SetVariable('fruits', TValue.From<TArray<TValue>>(Arr));
@@ -512,6 +546,19 @@ begin
   TemplateOrContent := '{% if is_active %}{% if number > 40 %}High{% else %}Low{% endif %}{% else %}Inactive{% endif %}';
   ReturnValue := FTina4Twig.Render(TemplateOrContent);
   Check(ReturnValue = 'High', TemplateOrContent + ' - Should be High, got ' + ReturnValue);
+
+  TemplateOrContent := '{%if user.age > 35 %}Older than 35{%else%}Younger than 35{%endif%}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = 'Older than 35', TemplateOrContent + ' - Should be Older than 35, got ' + ReturnValue);
+
+  TemplateOrContent := '{%if user.age > 35 %}Older than 35{%endif%}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = 'Older than 35', TemplateOrContent + ' - Should be Older than 35, got ' + ReturnValue);
+
+  TemplateOrContent := '{% for data in user %}{%if age > 35 %}Older than 35{%endif%}{% endfor %}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = 'Older than 35', TemplateOrContent + ' - Should be Older than 35, got ' + ReturnValue);
+
 end;
 
 procedure TestTTina4Twig.TestMacros;

@@ -23,6 +23,9 @@ type
     FMacroBodies: TDictionary<String, String>;
     FTemplatePath: String;
     function LoadTemplate(const TemplateName: String): String;
+    function IsStrictNumeric(const Value: TValue): Boolean;
+    function GetAsExtendedLenient(const Value: TValue): Extended;
+    function CompareValues(const Left, Right: TValue; const Op: String): Boolean;
     function ReplaceContextVariables(const Template: String; Context: TDictionary<String, TValue>): String;
     function EvaluateIfBlocks(const Template: String; Context: TDictionary<String, TValue>): String;
     function EvaluateIncludes(const Template: String; Context: TDictionary<String, TValue>): String;
@@ -144,6 +147,9 @@ var
   Token: String;
   Quote: Char;
   HasDot: Boolean;
+  Depth: Integer;
+  InQuote: Boolean;
+  QuoteChar: Char;
 begin
   Tokens := TList<String>.Create;
   try
@@ -190,6 +196,20 @@ begin
           Inc(I, 2);
           Continue;
         end;
+      end;
+
+      // Handle single < and >
+      if Expr[I] = '<' then
+      begin
+        Tokens.Add('<');
+        Inc(I);
+        Continue;
+      end;
+      if Expr[I] = '>' then
+      begin
+        Tokens.Add('>');
+        Inc(I);
+        Continue;
       end;
 
       // Handle single-character operators
@@ -244,15 +264,68 @@ begin
         Continue;
       end;
 
-      // Handle identifiers (including dotted paths)
+      // Handle identifiers (including dotted paths and subscripts)
       if CharInSet(Expr[I], ['a'..'z', 'A'..'Z', '_']) then
       begin
         Token := Expr[I];
         Inc(I);
-        while (I <= Length(Expr)) and CharInSet(Expr[I], ['a'..'z', 'A'..'Z', '0'..'9', '_', '.']) do
+        while (I <= Length(Expr)) and CharInSet(Expr[I], ['a'..'z', 'A'..'Z', '0'..'9', '_']) do
         begin
           Token := Token + Expr[I];
           Inc(I);
+        end;
+        // Handle chained .prop [index]
+        while (I <= Length(Expr)) and (Expr[I] in ['.', '[']) do
+        begin
+          if Expr[I] = '.' then
+          begin
+            Token := Token + '.';
+            Inc(I);
+            if (I > Length(Expr)) or not CharInSet(Expr[I], ['a'..'z', 'A'..'Z', '_']) then
+              raise Exception.Create('Expected identifier after .');
+            Token := Token + Expr[I];
+            Inc(I);
+            while (I <= Length(Expr)) and CharInSet(Expr[I], ['a'..'z', 'A'..'Z', '0'..'9', '_']) do
+            begin
+              Token := Token + Expr[I];
+              Inc(I);
+            end;
+          end
+          else if Expr[I] = '[' then
+          begin
+            Token := Token + '[';
+            Inc(I);
+            Depth := 1;
+            InQuote := False;
+            QuoteChar := #0;
+            while (I <= Length(Expr)) and (Depth > 0) do
+            begin
+              if InQuote then
+              begin
+                if Expr[I] = QuoteChar then
+                  InQuote := False;
+                Token := Token + Expr[I];
+                Inc(I);
+                Continue;
+              end;
+              if Expr[I] in ['''', '"'] then
+              begin
+                QuoteChar := Expr[I];
+                InQuote := True;
+                Token := Token + Expr[I];
+                Inc(I);
+                Continue;
+              end;
+              if Expr[I] = '[' then
+                Inc(Depth)
+              else if Expr[I] = ']' then
+                Dec(Depth);
+              Token := Token + Expr[I];
+              Inc(I);
+            end;
+            if Depth > 0 then
+              raise Exception.Create('Unmatched [ in expression');
+          end;
         end;
         Tokens.Add(Token);
         Continue;
@@ -296,7 +369,7 @@ begin
         Continue;
       end;
 
-      raise Exception.Create('Invalid character in expression: ' + Expr[I]);
+      Inc(I);
     end;
     Result := Tokens.ToArray;
   finally
@@ -527,7 +600,7 @@ begin
       else if (Token.StartsWith('''') or Token.StartsWith('"')) and (Token.EndsWith(Token[1])) then
         Stack.Push(TValue.From<String>(Copy(Token, 2, Length(Token) - 2)))
       else if not CharInSet(Token[1], ['+', '-', '*', '/', '%', '~']) then
-        Stack.Push(GetExpressionValue(Token, Context)) // Use GetExpressionValue for variables
+        Stack.Push(GetExpressionValue(Token, Context))
       else
       begin
         if Stack.Count < 2 then
@@ -537,6 +610,12 @@ begin
         if Token = '~' then
         begin
           Stack.Push(TValue.From<String>(A.ToString + B.ToString));
+          Continue;
+        end;
+        // Handle TDateTime subtraction
+        if A.IsType<TDateTime> and B.IsType<TDateTime> and (Token = '-') then
+        begin
+          Stack.Push(TValue.From<Double>(DaysBetween(A.AsType<TDateTime>, B.AsType<TDateTime>)));
           Continue;
         end;
         // Try to convert operands to numbers for arithmetic operations
@@ -840,6 +919,7 @@ begin
       Output.Free;
     end;
   end);
+
 end;
 
 /// <summary>
@@ -1043,6 +1123,9 @@ end;
 /// Handles empty values, ordinal types, strings, and objects.
 /// </remarks>
 function TTina4Twig.ValuesAreEqual(const A, B: TValue): Boolean;
+var
+  IsNumA, IsNumB: Boolean;
+  NA, NB: Extended;
 begin
   if A.IsEmpty and B.IsEmpty then
     Exit(True);
@@ -1050,7 +1133,14 @@ begin
   if A.IsEmpty <> B.IsEmpty then
     Exit(False);
 
-  if (A.IsOrdinal and B.IsOrdinal) or (A.IsType<Real> and B.IsType<Real>) then
+  if (A.Kind = tkEnumeration) and (A.TypeInfo = TypeInfo(Boolean)) and
+     (B.Kind = tkEnumeration) and (B.TypeInfo = TypeInfo(Boolean)) then
+    Exit(A.AsBoolean = B.AsBoolean);
+
+  IsNumA := IsStrictNumeric(A);
+  IsNumB := IsStrictNumeric(B);
+
+  if IsNumA and IsNumB then
     Exit(Abs(A.AsExtended - B.AsExtended) < 1E-12);
 
   if (A.Kind in [tkString, tkLString, tkWString, tkUString]) and
@@ -1060,8 +1150,9 @@ begin
   if A.IsObject and B.IsObject then
     Exit(A.AsObject = B.AsObject);
 
-  // Convert to string as a fallback for other types
-  Exit(A.ToString = B.ToString);
+  NA := GetAsExtendedLenient(A);
+  NB := GetAsExtendedLenient(B);
+  Exit(Abs(NA - NB) < 1E-12);
 end;
 
 /// <summary>
@@ -1235,7 +1326,7 @@ begin
         else
           ValueRaw := '';
       end
-      else
+        else
       begin
         VarName := Trim(IfExpr);
         Op := '';
@@ -1251,14 +1342,15 @@ begin
         Condition := ValuesAreEqual(VarValue, CompareValue)
       else if Op = '!=' then
         Condition := not ValuesAreEqual(VarValue, CompareValue)
+      // In EvaluateIfBlocks, replace the condition calculations for <, >, <=, >= in both the if and elseif sections with:
       else if Op = '<' then
-        Condition := (VarValue.IsOrdinal and CompareValue.IsOrdinal) and (VarValue.AsExtended < CompareValue.AsExtended)
+        Condition := CompareValues(VarValue, CompareValue, '<')
       else if Op = '>' then
-        Condition := (VarValue.IsOrdinal and CompareValue.IsOrdinal) and (VarValue.AsExtended > CompareValue.AsExtended)
+        Condition := CompareValues(VarValue, CompareValue, '>')
       else if Op = '<=' then
-        Condition := (VarValue.IsOrdinal and CompareValue.IsOrdinal) and (VarValue.AsExtended <= CompareValue.AsExtended)
+        Condition := CompareValues(VarValue, CompareValue, '<=')
       else if Op = '>=' then
-        Condition := (VarValue.IsOrdinal and CompareValue.IsOrdinal) and (VarValue.AsExtended >= CompareValue.AsExtended)
+        Condition := CompareValues(VarValue, CompareValue, '>=')
       else if Op = 'in' then
         Condition := Contains(VarValue, CompareValue)
       else if Op = 'not in' then
@@ -1322,13 +1414,13 @@ begin
             else if Op = '!=' then
               Condition := not ValuesAreEqual(VarValue, CompareValue)
             else if Op = '<' then
-              Condition := (VarValue.IsOrdinal and CompareValue.IsOrdinal) and (VarValue.AsExtended < CompareValue.AsExtended)
+              Condition := CompareValues(VarValue, CompareValue, '<')
             else if Op = '>' then
-              Condition := (VarValue.IsOrdinal and CompareValue.IsOrdinal) and (VarValue.AsExtended > CompareValue.AsExtended)
+              Condition := CompareValues(VarValue, CompareValue, '>')
             else if Op = '<=' then
-              Condition := (VarValue.IsOrdinal and CompareValue.IsOrdinal) and (VarValue.AsExtended <= CompareValue.AsExtended)
+              Condition := CompareValues(VarValue, CompareValue, '<=')
             else if Op = '>=' then
-              Condition := (VarValue.IsOrdinal and CompareValue.IsOrdinal) and (VarValue.AsExtended >= CompareValue.AsExtended)
+              Condition := CompareValues(VarValue, CompareValue, '>=')
             else if Op = 'in' then
               Condition := Contains(VarValue, CompareValue)
             else if Op = 'not in' then
@@ -1529,6 +1621,113 @@ begin
     Match := Match.NextMatch;
   end;
 end;
+
+/// <summary>
+/// Determines if a value is strictly numeric (integer, float, or a string that fully represents a number).
+/// </summary>
+/// <param name="Value">The value to check.</param>
+/// <returns>True if the value is strictly numeric; otherwise, False.</returns>
+function TTina4Twig.IsStrictNumeric(const Value: TValue): Boolean;
+var
+  Dummy: Double;
+begin
+  case Value.Kind of
+    tkInteger, tkInt64, tkFloat:
+      Result := True;
+    tkString, tkLString, tkWString, tkUString:
+      Result := TryStrToFloat(Value.AsString, Dummy);
+    else
+      Result := False;
+  end;
+end;
+
+/// <summary>
+/// Converts a value to an extended floating-point number using lenient conversion rules similar to PHP.
+/// </summary>
+/// <param name="Value">The value to convert.</param>
+/// <returns>The converted extended value.</returns>
+function TTina4Twig.GetAsExtendedLenient(const Value: TValue): Extended;
+var
+  S: String;
+  Match: TMatch;
+begin
+  case Value.Kind of
+    tkInteger, tkInt64, tkFloat:
+      Result := Value.AsExtended;
+    tkEnumeration:
+      if Value.TypeInfo = TypeInfo(Boolean) then
+        Result := IfThen(Value.AsBoolean, 1.0, 0.0)
+      else
+        Result := 0.0;
+    tkString, tkLString, tkWString, tkUString:
+      begin
+        S := Value.AsString;
+        Match := TRegEx.Match(S, '^\s*([+-]?(?:(?:\d+(?:\.\d*)?)|\.\d+)(?:[eE][+-]?\d+)?)');
+        if Match.Success then
+          Result := StrToFloatDef(Match.Groups[1].Value, 0.0)
+        else
+          Result := 0.0;
+      end;
+    else
+      Result := 0.0;
+  end;
+end;
+
+/// <summary>
+/// Compares two values using the specified operator, handling types similarly to Twig/PHP.
+/// </summary>
+/// <param name="Left">The left value.</param>
+/// <param name="Right">The right value.</param>
+/// <param name="Op">The comparison operator (&lt;, &gt;, &lt;=, &gt;=).</param>
+/// <returns>True if the comparison holds; otherwise, False.</returns>
+function TTina4Twig.CompareValues(const Left, Right: TValue; const Op: String): Boolean;
+var
+  IsNumL, IsNumR: Boolean;
+  NL, NR: Extended;
+begin
+  IsNumL := IsStrictNumeric(Left);
+  IsNumR := IsStrictNumeric(Right);
+
+  if IsNumL and IsNumR then
+  begin
+    NL := Left.AsExtended;
+    NR := Right.AsExtended;
+  end
+   else
+  if (Left.Kind in [tkString, tkUString]) and (Right.Kind in [tkString, tkUString]) then
+  begin
+    if Op.ToLower = '<' then
+        Result := Left.AsString < Right.AsString
+    else
+    if Op.ToLower = '>' then
+      Result := Left.AsString > Right.AsString
+    else
+    if Op.ToLower = '<=' then
+     Result := Left.AsString <= Right.AsString
+    else
+    if Op.ToLower = '>=' then
+      Result := Left.AsString >= Right.AsString
+    else Result := False;
+
+    Exit;
+  end
+    else
+  begin
+    NL := GetAsExtendedLenient(Left);
+    NR := GetAsExtendedLenient(Right);
+  end;
+
+  if Op.ToLower = '<' then Result := NL < NR
+  else
+  if Op.ToLower = '>' then Result := NL > NR
+  else
+  if Op.ToLower = '<=' then Result := NL <= NR
+  else
+  if Op.ToLower = '>=' then Result := NL >= NR
+  else
+  Result := False;
+end;
+
 
 /// <summary>
 /// Replaces variable placeholders in the template with context values, applying filters and functions.

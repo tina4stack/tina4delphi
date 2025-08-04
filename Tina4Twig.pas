@@ -4,11 +4,11 @@ interface
 
 uses
   System.SysUtils, System.Classes, System.Generics.Collections, System.RegularExpressions,
-  System.Rtti, JSON, System.NetEncoding, System.Math, Variants, System.TypInfo;
+  System.Rtti, JSON, System.NetEncoding, System.Math, Variants, System.TypInfo, System.DateUtils;
 
 type
   TStringDict = TDictionary<String, TValue>;
-  TFilterFunc = reference to function(const Input: TValue; const Args: TArray<String>): String;
+  TFilterFunc = reference to function(const Input: TValue; const Args: TArray<String>;const Context: TDictionary<String, TValue>): String;
   TFunctionFunc = reference to function(const Args: TArray<String>; const Context: TDictionary<String, TValue>): String;
   TMacroFunc = reference to function(const MacroName: String; const Args: TArray<String>; const MacroContext: TDictionary<String, TValue>): String;
 
@@ -38,18 +38,16 @@ type
     function Contains(const Left, Right: TValue): Boolean;
     function ValuesAreEqual(const A, B: TValue): Boolean;
     function ToBool(const Value: TValue): Boolean;
-    procedure DumpValue(const Value: TValue; List: TStringList; const Indent: String);
-    function ParseValue(const S: String; Context: TDictionary<String, TValue>): TValue;
     function GetExpressionValue(const Expr: String; Context: TDictionary<String, TValue>): TValue;
-    function  EvaluateExpression(const Expr: String; Context: TDictionary<String, TValue>): TValue;
+    function EvaluateExpression(const Expr: String; Context: TDictionary<String, TValue>): TValue;
     function EvaluateRPN(const RPN: TArray<String>; const Context: TDictionary<String, TValue>): TValue;
+    procedure DumpValue(const Value: TValue; List: TStringList; const Indent: String);
     procedure RegisterDefaultFilters;
   public
     constructor Create(const TemplatePath: String = '');
     destructor Destroy; override;
-    procedure SetVariable(AName: string; AValue: TValue);
     function Render(const TemplateOrContent: String; Variables: TStringDict = nil): String;
-
+    procedure SetVariable(AName: string; AValue: TValue);
   end;
 
 implementation
@@ -82,7 +80,7 @@ end;
 /// </summary>
 /// <param name="S">The input string to split.</param>
 /// <returns>An array of strings split on top-level pipes.</returns>
-function SplitOnTopLevelPipe(const S: String): TArray<String>;
+function SplitOnTopLevel(const S: String; Delim: Char): TArray<String>;
 var
   Parts: TList<String>;
   Current: String;
@@ -111,31 +109,20 @@ begin
         QuoteChar := S[I];
         Current := Current + S[I];
       end
-      else if S[I] = '(' then
+      else if S[I] in ['(', '[', '{'] then
       begin
         Inc(Depth);
         Current := Current + S[I];
       end
-      else if S[I] = ')' then
+      else if S[I] in [')', ']', '}'] then
       begin
         Dec(Depth);
         Current := Current + S[I];
       end
-      else if (S[I] = '|') and (Depth = 0) then
+      else if (S[I] = Delim) and (Depth = 0) then
       begin
-        // Check if the next non-whitespace character is an operator like ~
-        var J := I + 1;
-        while (J <= Length(S)) and (S[J] in [' ', #9, #10, #13]) do
-          Inc(J);
-        if (J <= Length(S)) and (S[J] = '~') then
-        begin
-          Current := Current + S[I];
-        end
-        else
-        begin
-          Parts.Add(Trim(Current));
-          Current := '';
-        end;
+        Parts.Add(Trim(Current));
+        Current := '';
       end
       else
         Current := Current + S[I];
@@ -147,6 +134,7 @@ begin
     Parts.Free;
   end;
 end;
+
 
 
 function Tokenize(const Expr: String): TArray<String>;
@@ -463,6 +451,15 @@ begin
   end;
 end;
 
+/// <summary>
+/// Evaluates a Reverse Polish Notation (RPN) expression.
+/// </summary>
+/// <param name="RPN">Array of tokens in RPN.</param>
+/// <param name="Context">The context dictionary for variable resolution.</param>
+/// <returns>The evaluated result as a TValue.</returns>
+/// <remarks>
+/// Processes arithmetic operations, filter chains, and variable resolutions.
+/// </remarks>
 function TTina4Twig.EvaluateRPN(const RPN: TArray<String>; const Context: TDictionary<String, TValue>): TValue;
 var
   Stack: TStack<TValue>;
@@ -470,7 +467,6 @@ var
   A, B: TValue;
   FA, FB: Double;
   IA, IB: Int64;
-  SA, SB: String;
   UseInt: Boolean;
   Parts: TArray<String>;
   J: Integer;
@@ -490,51 +486,34 @@ begin
       if Token.Contains('|') then
       begin
         // Handle filter chain
-        Parts := Token.Split(['|']);
+        Parts := SplitOnTopLevel(Token, '|');
         CurrentVal := GetExpressionValue(Parts[0], Context);
         for J := 1 to High(Parts) do
         begin
-          FilterExpr := Parts[J];
+          FilterExpr := Trim(Parts[J]);
           if FilterExpr.Contains('(') and FilterExpr.EndsWith(')') then
           begin
-            FuncName := Copy(FilterExpr, 1, Pos('(', FilterExpr) - 1);
+            FuncName := Trim(Copy(FilterExpr, 1, Pos('(', FilterExpr) - 1));
             ArgsStr := Copy(FilterExpr, Pos('(', FilterExpr) + 1, Length(FilterExpr) - Pos('(', FilterExpr) - 1);
-            ArgTokens := Tokenize(ArgsStr);
+            ArgTokens := SplitOnTopLevel(ArgsStr, ',');
             ArgList := TList<String>.Create;
             try
-              CurrentArg := '';
               for ArgToken in ArgTokens do
               begin
-                if ArgToken = ',' then
-                begin
-                  ArgList.Add(CurrentArg);
-                  CurrentArg := '';
-                end
-                else
-                  CurrentArg := CurrentArg + ArgToken;
+                ArgList.Add(Trim(ArgToken));
               end;
-              if CurrentArg <> '' then
-                ArgList.Add(CurrentArg);
               Args := ArgList.ToArray;
-              // Trim quotes from args
-              for var K := 0 to High(Args) do
-              begin
-                Args[K] := Trim(Args[K]);
-                if ((Args[K].StartsWith('"') and Args[K].EndsWith('"')) or
-                    (Args[K].StartsWith('''') and Args[K].EndsWith(''''))) and (Length(Args[K]) >= 2) then
-                  Args[K] := Copy(Args[K], 2, Length(Args[K]) - 2);
-              end;
             finally
               ArgList.Free;
             end;
           end
           else
           begin
-            FuncName := FilterExpr;
+            FuncName := Trim(FilterExpr);
             SetLength(Args, 0);
           end;
           if FFilters.TryGetValue(FuncName, Filter) then
-            CurrentVal := TValue.From<String>(Filter(CurrentVal, Args))
+            CurrentVal := TValue.From<String>(Filter(CurrentVal, Args, Context))
           else
             CurrentVal := TValue.From<String>('(filter ' + FuncName + ' not found)');
         end;
@@ -548,7 +527,7 @@ begin
       else if (Token.StartsWith('''') or Token.StartsWith('"')) and (Token.EndsWith(Token[1])) then
         Stack.Push(TValue.From<String>(Copy(Token, 2, Length(Token) - 2)))
       else if not CharInSet(Token[1], ['+', '-', '*', '/', '%', '~']) then
-        Stack.Push(ResolveVariablePath(Token, Context))
+        Stack.Push(GetExpressionValue(Token, Context)) // Use GetExpressionValue for variables
       else
       begin
         if Stack.Count < 2 then
@@ -626,84 +605,6 @@ begin
   Result := EvaluateRPN(RPN, Context);
 end;
 
-function TTina4Twig.ParseValue(const S: String; Context: TDictionary<String, TValue>): TValue;
-var
-  LowerVal: String;
-  IntVal: Int64;
-  FloatVal: Double;
-begin
-  LowerVal := S.ToLower;
-  if LowerVal = 'true' then
-    Exit(TValue.From<Boolean>(True))
-  else if LowerVal = 'false' then
-    Exit(TValue.From<Boolean>(False));
-
-  if TryStrToInt64(S, IntVal) then
-    Exit(TValue.From<Int64>(IntVal));
-
-  if TryStrToFloat(S, FloatVal) then
-    Exit(TValue.From<Double>(FloatVal));
-
-  if Context.TryGetValue(S, Result) then
-    Exit;
-
-  Result := TValue.Empty;
-end;
-
-function SplitOnTopLevel(const S: String; Delim: Char): TArray<String>;
-var
-  Parts: TList<String>;
-  Current: String;
-  Depth: Integer;
-  QuoteChar: Char;
-  InQuote: Boolean;
-  I: Integer;
-begin
-  Parts := TList<String>.Create;
-  try
-    Current := '';
-    Depth := 0;
-    InQuote := False;
-    QuoteChar := #0;
-    for I := 1 to Length(S) do
-    begin
-      if InQuote then
-      begin
-        Current := Current + S[I];
-        if S[I] = QuoteChar then
-          InQuote := False;
-      end
-      else if S[I] in ['''', '"'] then
-      begin
-        InQuote := True;
-        QuoteChar := S[I];
-        Current := Current + S[I];
-      end
-      else if S[I] in ['(', '[', '{'] then
-      begin
-        Inc(Depth);
-        Current := Current + S[I];
-      end
-      else if S[I] in [')', ']', '}'] then
-      begin
-        Dec(Depth);
-        Current := Current + S[I];
-      end
-      else if (S[I] = Delim) and (Depth = 0) then
-      begin
-        Parts.Add(Trim(Current));
-        Current := '';
-      end
-      else
-        Current := Current + S[I];
-    end;
-    if Current <> '' then
-      Parts.Add(Trim(Current));
-    Result := Parts.ToArray;
-  finally
-    Parts.Free;
-  end;
-end;
 
 function FindTopLevelPos(const S: String; Ch: Char): Integer;
 var
@@ -2919,7 +2820,7 @@ begin
   FFilters.Clear;
 
   FFilters.Add('abs',
-    function(const Input: TValue; const Args: TArray<String>): String
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
     var
       Val: Double;
     begin
@@ -2934,7 +2835,7 @@ begin
     end);
 
   FFilters.Add('batch',
-    function(const Input: TValue; const Args: TArray<String>): String
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
     var
       Size: Integer;
       Arr: TArray<TValue>;
@@ -3004,7 +2905,7 @@ begin
     end);
 
   FFilters.Add('capitalize',
-    function(const Input: TValue; const Args: TArray<String>): String
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
     begin
       if (Input.Kind in [tkString, tkUString]) and (Input.AsString <> '') then
         Result := UpperCase(Input.AsString[1]) + LowerCase(Copy(Input.AsString, 2, MaxInt))
@@ -3013,7 +2914,7 @@ begin
     end);
 
   FFilters.Add('column',
-    function(const Input: TValue; const Args: TArray<String>): String
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
     var
       Key: String;
       Arr: TArray<TValue>;
@@ -3072,35 +2973,35 @@ begin
     end);
 
   FFilters.Add('convert_encoding',
-    function(const Input: TValue; const Args: TArray<String>): String
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
     begin
       // Stub: encoding conversion not implemented
       Result := Input.ToString;
     end);
 
   FFilters.Add('country_name',
-    function(const Input: TValue; const Args: TArray<String>): String
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
     begin
       // Stub: country name lookup not implemented
       Result := Input.ToString;
     end);
 
   FFilters.Add('currency_name',
-    function(const Input: TValue; const Args: TArray<String>): String
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
     begin
       // Stub: currency name lookup not implemented
       Result := Input.ToString;
     end);
 
   FFilters.Add('currency_symbol',
-    function(const Input: TValue; const Args: TArray<String>): String
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
     begin
       // Stub: currency symbol lookup not implemented
       Result := Input.ToString;
     end);
 
   FFilters.Add('data_uri',
-    function(const Input: TValue; const Args: TArray<String>): String
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
     begin
       if Input.Kind in [tkString, tkUString] then
         Result := 'data:;base64,' + TNetEncoding.Base64.Encode(Input.AsString)
@@ -3109,7 +3010,7 @@ begin
     end);
 
   FFilters.Add('date',
-    function(const Input: TValue; const Args: TArray<String>): String
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
     var
       dt: TDateTime;
       fmt: String;
@@ -3118,21 +3019,27 @@ begin
         fmt := Args[0]
       else
         fmt := 'yyyy-mm-dd';
-      if (Input.Kind in [tkString, tkUString]) and TryStrToDateTime(Input.AsString, dt) then
-        Result := FormatDateTime(fmt, dt)
+      if Input.IsType<TDateTime> then
+        dt := Input.AsType<TDateTime>
+      else if (Input.Kind in [tkString, tkUString]) and TryStrToDateTime(Input.AsString, dt) then
+        // dt already set
       else
-        Result := Input.ToString;
+        Exit(Input.ToString);
+      if UpperCase(fmt) = 'U' then
+        Result := IntToStr(DateTimeToUnix(dt))
+      else
+        Result := FormatDateTime(fmt, dt);
     end);
 
-  FFilters.Add('date_modify',
-    function(const Input: TValue; const Args: TArray<String>): String
+   FFilters.Add('date_modify',
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
     begin
       // Stub: date arithmetic not implemented
       Result := Input.ToString;
     end);
 
   FFilters.Add('default',
-    function(const Input: TValue; const Args: TArray<String>): String
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
     begin
       if (Input.IsEmpty or (Input.Kind in [tkString, tkUString]) and (Input.AsString = '')) then
       begin
@@ -3146,7 +3053,7 @@ begin
     end);
 
     FFilters.Add('escape',
-    function(const Input: TValue; const Args: TArray<String>): String
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
     var
       Strategy: String;
       InputStr: String;
@@ -3193,14 +3100,14 @@ begin
   FFilters.Add('e', FFilters['escape']);
 
   FFilters.Add('filter',
-    function(const Input: TValue; const Args: TArray<String>): String
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
     begin
       // Stub: generic filter not implemented
       Result := Input.ToString;
     end);
 
   FFilters.Add('find',
-    function(const Input: TValue; const Args: TArray<String>): String
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
     begin
       if (Length(Args) > 0) and (Input.Kind in [tkString, tkUString]) then
       begin
@@ -3215,7 +3122,7 @@ begin
     end);
 
   FFilters.Add('first',
-    function(const Input: TValue; const Args: TArray<String>): String
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
     begin
       if (Input.Kind in [tkString, tkUString]) and (Input.AsString <> '') then
         Result := Input.AsString[1]
@@ -3228,16 +3135,287 @@ begin
     end);
 
   FFilters.Add('format',
-    function(const Input: TValue; const Args: TArray<String>): String
-    begin
-      if Length(Args) > 0 then
-        Result := Format(Args[0], [Input.ToString])
-      else
-        Result := Input.ToString;
-    end);
+  function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
+  var
+    Fmt: String;
+    SB: TStringBuilder;
+    ArgIndex: Integer;
+    I: Integer;
+    ArgValues: TArray<String>;
+  begin
+    Fmt := Input.ToString;
+    SB := TStringBuilder.Create;
+    try
+      // Resolve all arguments via context, handling variables and literals
+      SetLength(ArgValues, Length(Args));
+      for I := 0 to High(Args) do
+      begin
+        ArgValues[I] := GetExpressionValue(Args[I], Context).ToString;
+        // Remove quotes from string literals if present
+        if ((ArgValues[I].StartsWith('"') and ArgValues[I].EndsWith('"')) or
+            (ArgValues[I].StartsWith('''') and ArgValues[I].EndsWith(''''))) and (Length(ArgValues[I]) >= 2) then
+          ArgValues[I] := Copy(ArgValues[I], 2, Length(ArgValues[I]) - 2);
+      end;
+
+      ArgIndex := 0;
+      I := 1;
+      while I <= Length(Fmt) do
+      begin
+        if Fmt[I] <> '%' then
+        begin
+          SB.Append(Fmt[I]);
+          Inc(I);
+          Continue;
+        end;
+        Inc(I);
+        if (I <= Length(Fmt)) and (Fmt[I] = '%') then
+        begin
+          SB.Append('%');
+          Inc(I);
+          Continue;
+        end;
+        // Parse argnum tentatively
+        var StartI := I;
+        var ArgNumStr := '';
+        while (I <= Length(Fmt)) and CharInSet(Fmt[I], ['0'..'9']) do
+        begin
+          ArgNumStr := ArgNumStr + Fmt[I];
+          Inc(I);
+        end;
+        var ArgNum := ArgIndex;
+        if (ArgNumStr <> '') and (I <= Length(Fmt)) and (Fmt[I] = '$') then
+        begin
+          ArgNum := StrToIntDef(ArgNumStr, ArgIndex + 1) - 1;
+          Inc(I);
+        end
+        else
+        begin
+          // Not argnum, rewind I
+          I := StartI;
+          ArgNum := ArgIndex;
+        end;
+        // Flags
+        var FlagLeftJustify := False;
+        var FlagSign := False;
+        var FlagSpace := False;
+        var FlagZeroPad := False;
+        var PadChar := ' ';
+        while (I <= Length(Fmt)) and CharInSet(Fmt[I], ['-', '+', ' ', '0', '''']) do
+        begin
+          case Fmt[I] of
+            '-': FlagLeftJustify := True;
+            '+': FlagSign := True;
+            ' ': FlagSpace := True;
+            '0': FlagZeroPad := True;
+            '''':
+              begin
+                Inc(I);
+                if I <= Length(Fmt) then PadChar := Fmt[I];
+              end;
+          end;
+          Inc(I);
+        end;
+        if (I > 1) and (Fmt[I-1] = '''') then Dec(I); // Adjust if ' was last
+        // Width
+        var WidthStr := '';
+        var WidthFromArg := False;
+        while (I <= Length(Fmt)) and CharInSet(Fmt[I], ['0'..'9']) do
+        begin
+          WidthStr := WidthStr + Fmt[I];
+          Inc(I);
+        end;
+        var Width := StrToIntDef(WidthStr, 0);
+        if (I <= Length(Fmt)) and (Fmt[I] = '*') then
+        begin
+          Inc(I);
+          if ArgIndex <= High(ArgValues) then
+          begin
+            Width := StrToIntDef(ArgValues[ArgIndex], 0);
+            Inc(ArgIndex);
+            WidthFromArg := True;
+          end;
+        end;
+        // Precision
+        var Precision := -1;
+        if (I <= Length(Fmt)) and (Fmt[I] = '.') then
+        begin
+          Inc(I);
+          var PrecStr := '';
+          while (I <= Length(Fmt)) and CharInSet(Fmt[I], ['0'..'9']) do
+          begin
+            PrecStr := PrecStr + Fmt[I];
+            Inc(I);
+          end;
+          if PrecStr = '' then Precision := 0 else Precision := StrToIntDef(PrecStr, 0);
+          if (I <= Length(Fmt)) and (Fmt[I] = '*') then
+          begin
+            Inc(I);
+            if ArgIndex <= High(ArgValues) then
+            begin
+              Precision := StrToIntDef(ArgValues[ArgIndex], 0);
+              Inc(ArgIndex);
+            end;
+          end;
+        end;
+        // Specifier
+        if I > Length(Fmt) then
+          raise Exception.Create('Incomplete format specifier');
+        var Spec := Fmt[I];
+        Inc(I);
+        // Get arg
+        if ArgNum > High(ArgValues) then
+          raise Exception.Create('Too few arguments');
+        var Arg := ArgValues[ArgNum];
+        var StrVal: String;
+        var NumVal: Double;
+        var IntVal: Int64;
+        var UIntVal: UInt64;
+        case Spec of
+          'b':
+            begin
+              UIntVal := StrToUInt64Def(Arg, 0);
+              StrVal := '';
+              if UIntVal = 0 then StrVal := '0';
+              while UIntVal > 0 do
+              begin
+                StrVal := Char((UIntVal and 1) + Ord('0')) + StrVal;
+                UIntVal := UIntVal shr 1;
+              end;
+            end;
+          'c':
+            begin
+              IntVal := StrToIntDef(Arg, 0);
+              StrVal := Char(IntVal);
+              Width := 0; // Ignore width and padding for c
+            end;
+          'd':
+            begin
+              IntVal := StrToInt64Def(Arg, 0);
+              StrVal := IntToStr(Abs(IntVal));
+            end;
+          'e', 'E':
+            begin
+              NumVal := StrToFloatDef(Arg, 0);
+              if Precision = -1 then Precision := 6;
+              StrVal := LowerCase(FloatToStrF(Abs(NumVal), ffExponent, Precision + 1, 0));
+              if Spec = 'E' then StrVal := UpperCase(StrVal);
+            end;
+          'f', 'F':
+            begin
+              NumVal := StrToFloatDef(Arg, 0);
+              if Precision = -1 then Precision := 6;
+              StrVal := FloatToStrF(Abs(NumVal), ffFixed, 15, Precision);
+              if Spec = 'F' then StrVal := UpperCase(StrVal);
+            end;
+          'g', 'G':
+            begin
+              NumVal := StrToFloatDef(Arg, 0);
+              if Precision = -1 then Precision := 6;
+              if Precision = 0 then Precision := 1;
+              StrVal := FloatToStrF(Abs(NumVal), ffGeneral, Precision, 0);
+              if Spec = 'G' then StrVal := UpperCase(StrVal);
+            end;
+          'h', 'H':
+            begin
+              NumVal := StrToFloatDef(Arg, 0);
+              if Precision = -1 then Precision := 6;
+              StrVal := FloatToStrF(Abs(NumVal), ffGeneral, Precision, 0);
+              if Spec = 'H' then StrVal := UpperCase(StrVal);
+            end;
+          'o':
+            begin
+              UIntVal := StrToUInt64Def(Arg, 0);
+              StrVal := '';
+              if UIntVal = 0 then StrVal := '0';
+              while UIntVal > 0 do
+              begin
+                StrVal := Char((UIntVal and 7) + Ord('0')) + StrVal;
+                UIntVal := UIntVal shr 3;
+              end;
+            end;
+          's':
+            begin
+              if WidthFromArg then
+              begin
+                // If width was from *, use the next argument for the string
+                if ArgIndex > High(ArgValues) then
+                  raise Exception.Create('Too few arguments for * specifier');
+                StrVal := ArgValues[ArgIndex];
+                Inc(ArgIndex);
+              end
+              else
+                StrVal := Arg;
+              if Precision >= 0 then
+                StrVal := Copy(StrVal, 1, Precision);
+              // Apply width padding
+              var PadLen := Width - Length(StrVal);
+              if PadLen > 0 then
+              begin
+                var PadStr := StringOfChar(PadChar, PadLen);
+                if FlagLeftJustify then
+                  StrVal := StrVal + PadStr
+                else
+                  StrVal := PadStr + StrVal;
+              end;
+            end;
+          'u':
+            begin
+              UIntVal := StrToUInt64Def(Arg, 0);
+              StrVal := UIntToStr(UIntVal);
+            end;
+          'x', 'X':
+            begin
+              UIntVal := StrToUInt64Def(Arg, 0);
+              StrVal := IntToHex(UIntVal, 0);
+              if Spec = 'x' then StrVal := LowerCase(StrVal);
+            end;
+          else
+            StrVal := Arg; // Default to string representation
+        end;
+        // Apply sign for numeric
+        var IsNumeric := Spec in ['d', 'e', 'E', 'f', 'F', 'g', 'G', 'h', 'H'];
+        var IsPositive := (Spec = 'd') and (IntVal >= 0) or (Spec <> 'd') and (NumVal >= 0);
+        var Sign := '';
+        if IsNumeric then
+        begin
+          if IsPositive then
+          begin
+            if FlagSign then
+              Sign := '+'
+            else if FlagSpace then
+              Sign := ' ';
+          end
+          else
+          begin
+            Sign := '-';
+          end;
+          // Apply padding
+          var Pad := PadChar;
+          if FlagZeroPad and not FlagLeftJustify and (Precision = -1) then
+            Pad := '0';
+          // Calculate pad length
+          var PadLen := Width - Length(StrVal) - Length(Sign);
+          if PadLen < 0 then PadLen := 0;
+          var PadStr := StringOfChar(Pad, PadLen);
+          // Assemble
+          if FlagLeftJustify then
+            StrVal := Sign + StrVal + PadStr
+          else if Pad = '0' then
+            StrVal := Sign + PadStr + StrVal
+          else
+            StrVal := PadStr + Sign + StrVal;
+        end;
+        SB.Append(StrVal);
+        if (ArgNum = ArgIndex) and not WidthFromArg then Inc(ArgIndex);
+      end;
+      Result := SB.ToString;
+    finally
+      SB.Free;
+    end;
+  end);
 
   FFilters.Add('format_currency',
-    function(const Input: TValue; const Args: TArray<String>): String
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
     var
       Val: Double;
       Currency: String;
@@ -3254,13 +3432,13 @@ begin
     end);
 
   FFilters.Add('format_date',
-    function(const Input: TValue; const Args: TArray<String>): String
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
     begin
-      Result := FFilters['date'](Input, Args);
+      Result := FFilters['date'](Input, Args, Context);
     end);
 
   FFilters.Add('format_datetime',
-    function(const Input: TValue; const Args: TArray<String>): String
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
     var
       FormatStr: String;
     begin
@@ -3268,11 +3446,11 @@ begin
         FormatStr := 'yyyy-MM-dd HH:mm:ss'
       else
         FormatStr := Args[0];
-      Result := FFilters['date'](Input, [FormatStr]);
+      Result := FFilters['date'](Input, [FormatStr], Context);
     end);
 
   FFilters.Add('format_number',
-    function(const Input: TValue; const Args: TArray<String>): String
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
     var
       Val: Double;
       Decimals: Integer;
@@ -3292,34 +3470,34 @@ begin
     end);
 
   FFilters.Add('format_time',
-    function(const Input: TValue; const Args: TArray<String>): String
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
     begin
-      Result := FFilters['date'](Input, ['hh:nn:ss']);
+      Result := FFilters['date'](Input, ['hh:nn:ss'], Context);
     end);
 
   FFilters.Add('html_to_markdown',
-    function(const Input: TValue; const Args: TArray<String>): String
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
     begin
       // Stub: html-to-markdown not implemented
       Result := Input.ToString;
     end);
 
   FFilters.Add('inky_to_html',
-    function(const Input: TValue; const Args: TArray<String>): String
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
     begin
       // Stub: inky-to-html not implemented
       Result := Input.ToString;
     end);
 
   FFilters.Add('inline_css',
-    function(const Input: TValue; const Args: TArray<String>): String
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
     begin
       // Stub: inline CSS not implemented
       Result := Input.ToString;
     end);
 
   FFilters.Add('join',
-    function(const Input: TValue; const Args: TArray<String>): String
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
     var
       Delim: String;
       Arr: TArray<TValue>;
@@ -3368,7 +3546,7 @@ begin
     end);
 
   FFilters.Add('json_encode',
-    function(const Input: TValue; const Args: TArray<String>): String
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
     var
       JsonValue: TJSONValue;
     begin
@@ -3391,7 +3569,7 @@ begin
     end);
 
   FFilters.Add('keys',
-    function(const Input: TValue; const Args: TArray<String>): String
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
     var
       Dict: TDictionary<String, TValue>;
       I: Integer;
@@ -3429,14 +3607,14 @@ begin
     end);
 
   FFilters.Add('language_name',
-    function(const Input: TValue; const Args: TArray<String>): String
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
     begin
       // Stub: language name lookup not implemented
       Result := Input.ToString;
     end);
 
   FFilters.Add('last',
-    function(const Input: TValue; const Args: TArray<String>): String
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
     begin
       if (Input.Kind in [tkString, tkUString]) and (Input.AsString <> '') then
         Result := Input.AsString[Length(Input.AsString)]
@@ -3449,7 +3627,7 @@ begin
     end);
 
   FFilters.Add('length',
-    function(const Input: TValue; const Args: TArray<String>): String
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
     begin
       if Input.IsArray then
         Result := IntToStr(Input.GetArrayLength)
@@ -3466,14 +3644,14 @@ begin
     end);
 
   FFilters.Add('locale_name',
-    function(const Input: TValue; const Args: TArray<String>): String
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
     begin
       // Stub: locale name lookup not implemented
       Result := Input.ToString;
     end);
 
   FFilters.Add('lower',
-    function(const Input: TValue; const Args: TArray<String>): String
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
     begin
       if Input.Kind in [tkString, tkUString] then
         Result := LowerCase(Input.AsString)
@@ -3482,21 +3660,21 @@ begin
     end);
 
   FFilters.Add('map',
-    function(const Input: TValue; const Args: TArray<String>): String
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
     begin
       // Stub: map not implemented
       Result := Input.ToString;
     end);
 
   FFilters.Add('markdown_to_html',
-    function(const Input: TValue; const Args: TArray<String>): String
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
     begin
       // Stub: markdown-to-html not implemented
       Result := Input.ToString;
     end);
 
   FFilters.Add('merge',
-    function(const Input: TValue; const Args: TArray<String>): String
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
     var
       Dict: TDictionary<String, TValue>;
       JSONValue: TJSONValue;
@@ -3543,7 +3721,7 @@ begin
     end);
 
   FFilters.Add('nl2br',
-    function(const Input: TValue; const Args: TArray<String>): String
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
     begin
       if Input.Kind in [tkString, tkUString] then
         Result := StringReplace(Input.AsString, sLineBreak, '<br>', [rfReplaceAll])
@@ -3552,21 +3730,39 @@ begin
     end);
 
   FFilters.Add('number_format',
-  function(const Input: TValue; const Args: TArray<String>): String
+  function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
   var
     Val: Double;
     Decimals: Integer;
     DecPoint, ThousandsSep: String;
+    ArgValue: String;
+    FormatStr: String;
   begin
-    Decimals := 2;
+    Decimals := 0;
     DecPoint := '.';
     ThousandsSep := ',';
     if Length(Args) > 0 then
-      Decimals := StrToIntDef(Args[0], 2);
+      Decimals := StrToIntDef(GetExpressionValue(Args[0], Context).ToString, 0);
     if Length(Args) > 1 then
-      DecPoint := Args[1];
+    begin
+      ArgValue := GetExpressionValue(Args[1], Context).ToString;
+      // Remove quotes from string literal if present
+      if ((ArgValue.StartsWith('"') and ArgValue.EndsWith('"')) or
+          (ArgValue.StartsWith('''') and ArgValue.EndsWith(''''))) and (Length(ArgValue) >= 2) then
+        DecPoint := Copy(ArgValue, 2, Length(ArgValue) - 2)
+      else
+        DecPoint := ArgValue;
+    end;
     if Length(Args) > 2 then
-      ThousandsSep := Args[2];
+    begin
+      ArgValue := GetExpressionValue(Args[2], Context).ToString;
+      // Remove quotes from string literal if present
+      if ((ArgValue.StartsWith('"') and ArgValue.EndsWith('"')) or
+          (ArgValue.StartsWith('''') and ArgValue.EndsWith(''''))) and (Length(ArgValue) >= 2) then
+        ThousandsSep := Copy(ArgValue, 2, Length(ArgValue) - 2)
+      else
+        ThousandsSep := ArgValue;
+    end;
     if Input.IsOrdinal then
       Val := Input.AsInt64
     else if Input.IsType<Real> then
@@ -3575,34 +3771,39 @@ begin
       // Val already set
     else
       Exit(Input.ToString);
-    Result := FormatFloat('0.' + StringOfChar('0', Decimals), Val);
+    // Construct format string explicitly
+    if Decimals > 0 then
+      FormatStr := '0.' + StringOfChar('0', Decimals)
+    else
+      FormatStr := '0';
+    Result := FormatFloat(FormatStr, Val);
     if Decimals > 0 then
       Result := StringReplace(Result, '.', DecPoint, [rfReplaceAll]);
     // Note: Thousands separator not implemented due to lack of direct support in FormatFloat
   end);
 
   FFilters.Add('plural',
-    function(const Input: TValue; const Args: TArray<String>): String
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
     begin
       // Stub: pluralization not implemented
       Result := Input.ToString;
     end);
 
   FFilters.Add('raw',
-    function(const Input: TValue; const Args: TArray<String>): String
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
     begin
       Result := Input.ToString; // No escaping
     end);
 
   FFilters.Add('reduce',
-    function(const Input: TValue; const Args: TArray<String>): String
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
     begin
       // Stub: reduce not implemented
       Result := Input.ToString;
     end);
 
   FFilters.Add('replace',
-    function(const Input: TValue; const Args: TArray<String>): String
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
     begin
       if Length(Args) < 2 then
         Result := Input.ToString
@@ -3613,7 +3814,7 @@ begin
     end);
 
   FFilters.Add('reverse',
-    function(const Input: TValue; const Args: TArray<String>): String
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
     var
       I: Integer;
     begin
@@ -3652,7 +3853,7 @@ begin
     end);
 
   FFilters.Add('round',
-  function(const Input: TValue; const Args: TArray<String>): String
+  function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
   var
     Val: Double;
     Decimals: Integer;
@@ -3687,21 +3888,21 @@ begin
   end);
 
   FFilters.Add('shuffle',
-    function(const Input: TValue; const Args: TArray<String>): String
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
     begin
       // Stub: shuffle not implemented
       Result := Input.ToString;
     end);
 
   FFilters.Add('singular',
-    function(const Input: TValue; const Args: TArray<String>): String
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
     begin
       // Stub: singularization not implemented
       Result := Input.ToString;
     end);
 
   FFilters.Add('slice',
-    function(const Input: TValue; const Args: TArray<String>): String
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
     var
       StartIdx, Count, LenInput: Integer;
       Arr: TArray<TValue>;
@@ -3784,7 +3985,7 @@ begin
     end);
 
   FFilters.Add('slug',
-    function(const Input: TValue; const Args: TArray<String>): String
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
     var
       I: Integer;
       S: String;
@@ -3802,14 +4003,14 @@ begin
     end);
 
   FFilters.Add('sort',
-    function(const Input: TValue; const Args: TArray<String>): String
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
     begin
       // Stub: sorting not implemented
       Result := Input.ToString;
     end);
 
   FFilters.Add('spaceless',
-    function(const Input: TValue; const Args: TArray<String>): String
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
     begin
       if Input.Kind in [tkString, tkUString] then
         Result := StringReplace(Input.AsString, ' ', '', [rfReplaceAll])
@@ -3818,7 +4019,7 @@ begin
     end);
 
   FFilters.Add('split',
-    function(const Input: TValue; const Args: TArray<String>): String
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
     var
       Delim: String;
       Parts: TArray<String>;
@@ -3846,7 +4047,7 @@ begin
     end);
 
   FFilters.Add('striptags',
-    function(const Input: TValue; const Args: TArray<String>): String
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
     var
       Regex: TRegEx;
     begin
@@ -3860,14 +4061,14 @@ begin
     end);
 
   FFilters.Add('timezone_name',
-    function(const Input: TValue; const Args: TArray<String>): String
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
     begin
       // Stub: timezone name lookup not implemented
       Result := Input.ToString;
     end);
 
   FFilters.Add('title',
-    function(const Input: TValue; const Args: TArray<String>): String
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
     var
       I: Integer;
       Words: TArray<String>;
@@ -3885,7 +4086,7 @@ begin
     end);
 
   FFilters.Add('trim',
-    function(const Input: TValue; const Args: TArray<String>): String
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
     begin
       if Input.Kind in [tkString, tkUString] then
         Result := Trim(Input.AsString)
@@ -3894,14 +4095,14 @@ begin
     end);
 
   FFilters.Add('u',
-    function(const Input: TValue; const Args: TArray<String>): String
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
     begin
       // Twig u filter is Unicode string conversion
       Result := Input.ToString;
     end);
 
   FFilters.Add('upper',
-    function(const Input: TValue; const Args: TArray<String>): String
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
     begin
       if Input.Kind in [tkString, tkUString] then
         Result := UpperCase(Input.AsString)
@@ -3910,7 +4111,7 @@ begin
     end);
 
   FFilters.Add('url_encode',
-    function(const Input: TValue; const Args: TArray<String>): String
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
     begin
       if Input.Kind in [tkString, tkUString] then
         Result := TNetEncoding.URL.Encode(Input.AsString)

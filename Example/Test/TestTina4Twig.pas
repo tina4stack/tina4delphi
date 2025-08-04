@@ -36,6 +36,7 @@ type
     procedure TextExpressions;
     procedure TestFilters;
     procedure TestMacros;
+    procedure TestFormat;
   end;
 
 implementation
@@ -306,6 +307,145 @@ begin
   TemplateOrContent := '{%for a in persons%}{{a}}{%else%}No persons{%endfor%}';
   ReturnValue := FTina4Twig.Render(TemplateOrContent);
   Check(ReturnValue = 'No persons', TemplateOrContent+'- Should be No persons, got '+ReturnValue);
+end;
+
+procedure TestTTina4Twig.TestFormat;
+var
+  ReturnValue: string;
+  TemplateOrContent: string;
+begin
+  // TestFormatSimpleString
+  FTina4Twig.SetVariable('value', 'World');
+  TemplateOrContent := '{{ "Hello %s"|format(value) }}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = 'Hello World', TemplateOrContent + ' - Should be "Hello World", got ' + ReturnValue);
+
+  // TestFormatInteger
+  FTina4Twig.SetVariable('number', 123);
+  TemplateOrContent := '{{ "Number %d"|format(number) }}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = 'Number 123', TemplateOrContent + ' - Should be "Number 123", got ' + ReturnValue);
+
+  // TestFormatFloatPrecision
+  FTina4Twig.SetVariable('pi', 3.14159);
+  TemplateOrContent := '{{ "Pi is %.2f"|format(pi) }}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = 'Pi is 3.14', TemplateOrContent + ' - Should be "Pi is 3.14", got ' + ReturnValue);
+
+  // TestFormatPadding
+  FTina4Twig.SetVariable('text', 'hello');
+  TemplateOrContent := '{{ "%10s"|format(text) }}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = '     hello', TemplateOrContent + ' - Should be "     hello", got ' + ReturnValue);
+
+  // TestFormatLeftJustify
+  FTina4Twig.SetVariable('text', 'hello');
+  TemplateOrContent := '{{ "%-10s"|format(text) }}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = 'hello     ', TemplateOrContent + ' - Should be "hello     ", got ' + ReturnValue);
+
+  // TestFormatZeroPad
+  FTina4Twig.SetVariable('number', 42);
+  TemplateOrContent := '{{ "%010d"|format(number) }}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = '0000000042', TemplateOrContent + ' - Should be "0000000042", got ' + ReturnValue);
+
+  // TestFormatSignPositive
+  FTina4Twig.SetVariable('number', 42);
+  TemplateOrContent := '{{ "%+d"|format(number) }}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = '+42', TemplateOrContent + ' - Should be "+42", got ' + ReturnValue);
+
+  // TestFormatSignNegative
+  FTina4Twig.SetVariable('number', -42);
+  TemplateOrContent := '{{ "%+d"|format(number) }}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = '-42', TemplateOrContent + ' - Should be "-42", got ' + ReturnValue);
+
+  // TestFormatArgNum
+  FTina4Twig.SetVariable('word1', 'world');
+  FTina4Twig.SetVariable('word2', 'hello');
+  TemplateOrContent := '{{ "%2$s %1$s"|format(word1, word2) }}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = 'hello world', TemplateOrContent + ' - Should be "hello world", got ' + ReturnValue);
+
+  // TestFormatWidthAsterisk
+  FTina4Twig.SetVariable('width', 10);
+  FTina4Twig.SetVariable('text', 'hello');
+  TemplateOrContent := '{{ "%*s"|format(width, text) }}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = '     hello', TemplateOrContent + ' - Should be "     hello", got ' + ReturnValue);
+
+  // TestFormatPrecisionString
+  FTina4Twig.SetVariable('text', 'hello');
+  TemplateOrContent := '{{ "%.3s"|format(text) }}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = 'hel', TemplateOrContent + ' - Should be "hel", got ' + ReturnValue);
+
+  // TestFormatChar
+  FTina4Twig.SetVariable('code', 65);
+  TemplateOrContent := '{{ "%c"|format(code) }}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = 'A', TemplateOrContent + ' - Should be "A", got ' + ReturnValue);
+
+  // TestFormatPercentEscape
+  TemplateOrContent := '{{ "100%%"|format }}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = '100%', TemplateOrContent + ' - Should be "100%", got ' + ReturnValue);
+
+  // TestFormatComplex
+  FTina4Twig.SetVariable('number', 42);
+  TemplateOrContent := '{{ "%1$+5d"|format(number) }}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = '  +42', TemplateOrContent + ' - Should be "  +42", got ' + ReturnValue);
+
+  // TestFormatBinary
+  FTina4Twig.SetVariable('number', 10);
+  TemplateOrContent := '{{ "%b"|format(number) }}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = '1010', TemplateOrContent + ' - Should be "1010", got ' + ReturnValue);
+
+  // TestFormatOctal
+  FTina4Twig.SetVariable('number', 8);
+  TemplateOrContent := '{{ "%o"|format(number) }}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = '10', TemplateOrContent + ' - Should be "10", got ' + ReturnValue);
+
+  // TestFormatHexLower
+  FTina4Twig.SetVariable('number', 255);
+  TemplateOrContent := '{{ "%x"|format(number) }}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = 'ff', TemplateOrContent + ' - Should be "ff", got ' + ReturnValue);
+
+  // TestFormatHexUpper
+  FTina4Twig.SetVariable('number', 255);
+  TemplateOrContent := '{{ "%X"|format(number) }}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = 'FF', TemplateOrContent + ' - Should be "FF", got ' + ReturnValue);
+
+  // TestFormatScientificLower
+  FTina4Twig.SetVariable('number', 1234.56);
+  TemplateOrContent := '{{ "%e"|format(number) }}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = '1.234560e+3', TemplateOrContent + ' - Should be "1.234560e+3", got ' + ReturnValue);
+
+  // TestFormatScientificUpper
+  FTina4Twig.SetVariable('number', 1234.56);
+  TemplateOrContent := '{{ "%E"|format(number) }}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = '1.234560E+3', TemplateOrContent + ' - Should be "1.234560E+3", got ' + ReturnValue);
+
+  // TestFormatGeneral
+  FTina4Twig.SetVariable('number', 1234.56);
+  TemplateOrContent := '{{ "%g"|format(number) }}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = '1234.56', TemplateOrContent + ' - Should be "1234.56", got ' + ReturnValue);
+
+  // TestFormatUnsigned
+  FTina4Twig.SetVariable('number', 4294967295);
+  TemplateOrContent := '{{ "%u"|format(number) }}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = '4294967295', TemplateOrContent + ' - Should be "4294967295", got ' + ReturnValue);
 end;
 
 procedure TestTTina4Twig.TestIf;

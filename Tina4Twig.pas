@@ -22,7 +22,10 @@ type
     FMacroDefaults: TDictionary<String, TDictionary<String, String>>;
     FMacroBodies: TDictionary<String, String>;
     FTemplatePath: String;
+    FDateFormat: String;
+    FDaysFormat: String;
     function LoadTemplate(const TemplateName: String): String;
+    procedure SetDateFormat(FormatDate: String; FormatDays: String);
     function IsStrictNumeric(const Value: TValue): Boolean;
     function GetAsExtendedLenient(const Value: TValue): Extended;
     function CompareValues(const Left, Right: TValue; const Op: String): Boolean;
@@ -44,6 +47,7 @@ type
     function GetExpressionValue(const Expr: String; Context: TDictionary<String, TValue>): TValue;
     function EvaluateExpression(const Expr: String; Context: TDictionary<String, TValue>): TValue;
     function EvaluateRPN(const RPN: TArray<String>; const Context: TDictionary<String, TValue>): TValue;
+    function Tokenize(const Expr: String): TArray<String>;
     procedure DumpValue(const Value: TValue; List: TStringList; const Indent: String);
     procedure RegisterDefaultFilters;
   public
@@ -139,8 +143,62 @@ begin
 end;
 
 
+function NormalizeExpression(const Expr: String): String;
+var
+  SB: TStringBuilder;
+  I: Integer;
+  InQuote: Boolean;
+  QuoteChar: Char;
+  Depth: Integer;
+  IsWhitespace: Boolean;
+begin
+  SB := TStringBuilder.Create;
+  try
+    InQuote := False;
+    QuoteChar := #0;
+    Depth := 0;
+    for I := 1 to Length(Expr) do
+    begin
+      IsWhitespace := CharInSet(Expr[I], [#9, #10, #13, ' ']);
+      if InQuote then
+      begin
+        SB.Append(Expr[I]);
+        if Expr[I] = QuoteChar then
+          InQuote := False;
+      end
+      else if Expr[I] in ['''', '"'] then
+      begin
+        InQuote := True;
+        QuoteChar := Expr[I];
+        SB.Append(Expr[I]);
+      end
+      else if Expr[I] in ['(', '[', '{'] then
+      begin
+        Inc(Depth);
+        SB.Append(Expr[I]);
+      end
+      else if Expr[I] in [')', ']', '}'] then
+      begin
+        Dec(Depth);
+        SB.Append(Expr[I]);
+      end
+      else if IsWhitespace then
+      begin
+        // Collapse multiple whitespace to single space, but only outside structures
+        if (SB.Length > 0) and not CharInSet(SB.Chars[SB.Length - 1], [#9, #10, #13, ' ']) then
+          SB.Append(' ');
+      end
+      else
+        SB.Append(Expr[I]);
+    end;
+    Result := SB.ToString.Trim;
+  finally
+    SB.Free;
+  end;
+end;
 
-function Tokenize(const Expr: String): TArray<String>;
+
+function TTina4Twig.Tokenize(const Expr: String): TArray<String>;
 var
   Tokens: TList<String>;
   I: Integer;
@@ -220,7 +278,7 @@ begin
         Continue;
       end;
 
-      // Handle quoted strings
+      // Handle quoted strings (improved to handle filter arguments like 'U')
       if Expr[I] in ['''', '"'] then
       begin
         Quote := Expr[I];
@@ -228,7 +286,14 @@ begin
         Inc(I);
         while (I <= Length(Expr)) and (Expr[I] <> Quote) do
         begin
-          Token := Token + Expr[I];
+          if (Expr[I] = '\') and (I < Length(Expr)) then
+          begin
+            Inc(I); // Skip escape character
+            if I <= Length(Expr) then
+              Token := Token + Expr[I];
+          end
+          else
+            Token := Token + Expr[I];
           Inc(I);
         end;
         if I <= Length(Expr) then
@@ -336,15 +401,41 @@ begin
       begin
         Token := '[';
         Inc(I);
-        while (I <= Length(Expr)) and (Expr[I] <> ']') do
+        Depth := 1;
+        while (I <= Length(Expr)) and (Depth > 0) do
         begin
-          Token := Token + Expr[I];
-          Inc(I);
-        end;
-        if I <= Length(Expr) then
-        begin
-          Token := Token + ']';
-          Inc(I);
+          if Expr[I] in ['''', '"'] then
+          begin
+            Quote := Expr[I];
+            Token := Token + Quote;
+            Inc(I);
+            while (I <= Length(Expr)) and (Expr[I] <> Quote) do
+            begin
+              if (Expr[I] = '\') and (I < Length(Expr)) then
+              begin
+                Inc(I);
+                if I <= Length(Expr) then
+                  Token := Token + Expr[I];
+              end
+              else
+                Token := Token + Expr[I];
+              Inc(I);
+            end;
+            if I <= Length(Expr) then
+            begin
+              Token := Token + Quote;
+              Inc(I);
+            end;
+          end
+          else
+          begin
+            if Expr[I] = '[' then
+              Inc(Depth)
+            else if Expr[I] = ']' then
+              Dec(Depth);
+            Token := Token + Expr[I];
+            Inc(I);
+          end;
         end;
         Tokens.Add(Token);
         Continue;
@@ -355,15 +446,41 @@ begin
       begin
         Token := '{';
         Inc(I);
-        while (I <= Length(Expr)) and (Expr[I] <> '}') do
+        Depth := 1;
+        while (I <= Length(Expr)) and (Depth > 0) do
         begin
-          Token := Token + Expr[I];
-          Inc(I);
-        end;
-        if I <= Length(Expr) then
-        begin
-          Token := Token + '}';
-          Inc(I);
+          if Expr[I] in ['''', '"'] then
+          begin
+            Quote := Expr[I];
+            Token := Token + Quote;
+            Inc(I);
+            while (I <= Length(Expr)) and (Expr[I] <> Quote) do
+            begin
+              if (Expr[I] = '\') and (I < Length(Expr)) then
+              begin
+                Inc(I);
+                if I <= Length(Expr) then
+                  Token := Token + Expr[I];
+              end
+              else
+                Token := Token + Expr[I];
+              Inc(I);
+            end;
+            if I <= Length(Expr) then
+            begin
+              Token := Token + Quote;
+              Inc(I);
+            end;
+          end
+          else
+          begin
+            if Expr[I] = '{' then
+              Inc(Depth)
+            else if Expr[I] = '}' then
+              Dec(Depth);
+            Token := Token + Expr[I];
+            Inc(I);
+          end;
         end;
         Tokens.Add(Token);
         Continue;
@@ -399,6 +516,12 @@ begin
     Precedence.Add('/', 2);
     Precedence.Add('%', 2);
     Precedence.Add('~', 1);
+    Precedence.Add('==', 0);
+    Precedence.Add('!=', 0);
+    Precedence.Add('<', 0);
+    Precedence.Add('>', 0);
+    Precedence.Add('<=', 0);
+    Precedence.Add('>=', 0);
     Output := TList<String>.Create;
     OpStack := TStack<String>.Create;
     try
@@ -416,7 +539,7 @@ begin
           Continue;
         end;
 
-        // Handle filter chains (e.g., number | number_format(2, "."))
+        // Handle filter chains (e.g., tasks[0].start_date | date('U'))
         if (Token = '|') or InFilter then
         begin
           if not InFilter then
@@ -450,8 +573,8 @@ begin
 
         // Check if token is a number, quoted string, identifier
         if (TryStrToFloat(Token, Dummy) or
-            Token.StartsWith('''') or
-            Token.StartsWith('"') or
+            (Token.StartsWith('''') and Token.EndsWith('''')) or
+            (Token.StartsWith('"') and Token.EndsWith('"')) or
             ((Length(Token) > 0) and not CharInSet(Token[1], ['+', '-', '*', '/', '%', '(', ')', ',', '~', '|']))) then
         begin
           Output.Add(Token);
@@ -480,7 +603,7 @@ begin
           Continue;
         end;
 
-        // Handle comma (used in filter arguments, e.g., number_format(2, '.'))
+        // Handle comma (used in filter arguments, e.g., date('U'))
         if Token = ',' then
         begin
           Output.Add(Token);
@@ -488,7 +611,7 @@ begin
           Continue;
         end;
 
-        // Handle arithmetic operators
+        // Handle operators
         if not Precedence.ContainsKey(Token) then
           raise Exception.Create('Unknown operator: ' + Token);
         while (OpStack.Count > 0) and (OpStack.Peek <> '(') do
@@ -540,17 +663,16 @@ var
   A, B: TValue;
   FA, FB: Double;
   IA, IB: Int64;
-  UseInt: Boolean;
   Parts: TArray<String>;
   J: Integer;
   CurrentVal: TValue;
   FilterExpr, FuncName, ArgsStr: String;
   ArgTokens: TArray<String>;
   ArgList: TList<String>;
-  CurrentArg: String;
   ArgToken: String;
   Args: TArray<String>;
   Filter: TFilterFunc;
+  Condition: Boolean;
 begin
   Stack := TStack<TValue>.Create;
   try
@@ -586,7 +708,15 @@ begin
             SetLength(Args, 0);
           end;
           if FFilters.TryGetValue(FuncName, Filter) then
-            CurrentVal := TValue.From<String>(Filter(CurrentVal, Args, Context))
+          begin
+            CurrentVal := TValue.From<String>(Filter(CurrentVal, Args, Context));
+            // Convert date filter output to numeric if needed
+            if (FuncName = 'date') and (Length(Args) > 0) and ((UpperCase(Args[0]) = '''U''') or (UpperCase(Args[0]) = '"U"')) then
+            begin
+              if TryStrToInt64(CurrentVal.AsString, IA) then
+                CurrentVal := TValue.From<Int64>(IA);
+            end;
+          end
           else
             CurrentVal := TValue.From<String>('(filter ' + FuncName + ' not found)');
         end;
@@ -612,51 +742,27 @@ begin
           Stack.Push(TValue.From<String>(A.ToString + B.ToString));
           Continue;
         end;
-        // Handle TDateTime subtraction
-        if A.IsType<TDateTime> and B.IsType<TDateTime> and (Token = '-') then
+        // Handle comparison operators
+        if (Token = '==') or (Token = '!=') or (Token = '<') or (Token = '>') or (Token = '<=') or (Token = '>=') then
         begin
-          Stack.Push(TValue.From<Double>(DaysBetween(A.AsType<TDateTime>, B.AsType<TDateTime>)));
+          if Token = '==' then
+            Condition := ValuesAreEqual(A, B)
+          else if Token = '!=' then
+            Condition := not ValuesAreEqual(A, B)
+          else
+            Condition := CompareValues(A, B, Token);
+          Stack.Push(TValue.From<Boolean>(Condition));
           Continue;
         end;
-        // Try to convert operands to numbers for arithmetic operations
-        UseInt := (A.IsOrdinal or (A.Kind in [tkString, tkUString]) and TryStrToInt64(A.AsString, IA)) and
-                  (B.IsOrdinal or (B.Kind in [tkString, tkUString]) and TryStrToInt64(B.AsString, IB));
-        if UseInt then
-        begin
-          if A.Kind in [tkString, tkUString] then
-            TryStrToInt64(A.AsString, IA)
-          else
-            IA := A.AsInt64;
-          if B.Kind in [tkString, tkUString] then
-            TryStrToInt64(B.AsString, IB)
-          else
-            IB := B.AsInt64;
-          case Token[1] of
-            '+': Stack.Push(TValue.From<Int64>(IA + IB));
-            '-': Stack.Push(TValue.From<Int64>(IA - IB));
-            '*': Stack.Push(TValue.From<Int64>(IA * IB));
-            '/': if IB <> 0 then Stack.Push(TValue.From<Int64>(IA div IB)) else Stack.Push(TValue.From<Int64>(0));
-            '%': if IB <> 0 then Stack.Push(TValue.From<Int64>(IA mod IB)) else Stack.Push(TValue.From<Int64>(0));
-          end;
-        end
-        else
-        begin
-          // Convert to extended for floating-point operations
-          if (A.Kind in [tkString, tkUString]) and TryStrToFloat(A.AsString, FA) then
-            // FA set
-          else
-            FA := A.AsExtended;
-          if (B.Kind in [tkString, tkUString]) and TryStrToFloat(B.AsString, FB) then
-            // FB set
-          else
-            FB := B.AsExtended;
-          case Token[1] of
-            '+': Stack.Push(TValue.From<Double>(FA + FB));
-            '-': Stack.Push(TValue.From<Double>(FA - FB));
-            '*': Stack.Push(TValue.From<Double>(FA * FB));
-            '/': if FB <> 0 then Stack.Push(TValue.From<Double>(FA / FB)) else Stack.Push(TValue.From<Double>(0));
-            '%': if FB <> 0 then Stack.Push(TValue.From<Double>(fmod(FA, FB))) else Stack.Push(TValue.From<Double>(0));
-          end;
+        // Convert operands to numbers for arithmetic operations
+        FA := GetAsExtendedLenient(A);
+        FB := GetAsExtendedLenient(B);
+        case Token[1] of
+          '+': Stack.Push(TValue.From<Double>(FA + FB));
+          '-': Stack.Push(TValue.From<Double>(FA - FB));
+          '*': Stack.Push(TValue.From<Double>(FA * FB));
+          '/': if FB <> 0 then Stack.Push(TValue.From<Double>(FA / FB)) else Stack.Push(TValue.From<Double>(0));
+          '%': if FB <> 0 then Stack.Push(TValue.From<Double>(fmod(FA, FB))) else Stack.Push(TValue.From<Double>(0));
         end;
       end;
     end;
@@ -732,7 +838,7 @@ var
   PosColon: Integer;
   Val: TValue;
 begin
-  CleanExpr := Trim(Expr);
+  CleanExpr := NormalizeExpression(Expr);  // Normalize to handle multi-line/complex literals
   if ((CleanExpr.StartsWith('"') and CleanExpr.EndsWith('"')) or (CleanExpr.StartsWith('''') and CleanExpr.EndsWith(''''))) and (Length(CleanExpr) >= 2) then
     Exit(TValue.From<String>(Copy(CleanExpr, 2, Length(CleanExpr) - 2)));
 
@@ -841,6 +947,10 @@ constructor TTina4Twig.Create(const TemplatePath: String);
 begin
   inherited Create;
   FContext := TDictionary<String, TValue>.Create;
+
+  //Set the date format for the system to be used in date_format and date
+  FDateFormat := 'YYYY-mm-dd';
+  FDaysFormat := '%d days';
 
   if TemplatePath = '' then
   begin
@@ -1648,28 +1758,28 @@ end;
 /// <returns>The converted extended value.</returns>
 function TTina4Twig.GetAsExtendedLenient(const Value: TValue): Extended;
 var
-  S: String;
-  Match: TMatch;
+  dt: TDateTime;
 begin
+  if Value.IsEmpty then Exit(0);
   case Value.Kind of
-    tkInteger, tkInt64, tkFloat:
-      Result := Value.AsExtended;
-    tkEnumeration:
-      if Value.TypeInfo = TypeInfo(Boolean) then
-        Result := IfThen(Value.AsBoolean, 1.0, 0.0)
-      else
-        Result := 0.0;
-    tkString, tkLString, tkWString, tkUString:
+    tkInteger, tkInt64: Result := Value.AsInt64;
+    tkFloat:
       begin
-        S := Value.AsString;
-        Match := TRegEx.Match(S, '^\s*([+-]?(?:(?:\d+(?:\.\d*)?)|\.\d+)(?:[eE][+-]?\d+)?)');
-        if Match.Success then
-          Result := StrToFloatDef(Match.Groups[1].Value, 0.0)
+        if Value.TypeInfo = TypeInfo(TDateTime) then
+          Result := DateTimeToUnix(Value.AsType<TDateTime>)
         else
-          Result := 0.0;
+          Result := Value.AsExtended;
       end;
-    else
-      Result := 0.0;
+    tkString, tkUString:
+      begin
+        if TryStrToFloat(Value.AsString, Result) then
+          // Success
+        else if TryStrToDateTime(Value.AsString, dt) then
+          Result := DateTimeToUnix(dt)
+        else
+          Result := 0;
+      end;
+    else Result := 0;
   end;
 end;
 
@@ -2409,11 +2519,8 @@ function TTina4Twig.EvaluateSetBlocks(const Template: String; Context: TDictiona
 var
   ResultSB: TStringBuilder;
   LowerTemplate: String;
-  CurrentPos, SetTagStart, SetTagEnd: Integer;
-  SetExpr, VarName, ValueExpr: String;
-  Value: TValue;
-  Regex: TRegEx;
-  Match: TMatch;
+  CurrentPos, SetTagStart, SetTagEnd, PosColon: Integer;
+  SetContent, VarName, ValueStr: String;
 begin
   ResultSB := TStringBuilder.Create;
   LowerTemplate := LowerCase(Template);
@@ -2428,26 +2535,22 @@ begin
       ResultSB.Append(Template.Substring(CurrentPos, SetTagStart - CurrentPos));
       SetTagEnd := LowerTemplate.IndexOf('%}', SetTagStart + 2);
       if SetTagEnd < 0 then Break;
-      SetExpr := Trim(Template.Substring(SetTagStart + 2, SetTagEnd - SetTagStart - 2));
-      if not SetExpr.ToLower.StartsWith('set') then
+      SetContent := Trim(Template.Substring(SetTagStart + 2, SetTagEnd - SetTagStart - 2));
+      if not SetContent.ToLower.StartsWith('set') then
       begin
         CurrentPos := SetTagEnd + 2;
         Continue;
       end;
-      SetExpr := SetExpr.Substring(SetExpr.ToLower.IndexOf('set') + 3).Trim;
-      // Use a regex that captures the variable name and the full value expression
-      Regex := TRegEx.Create('^(\w+)\s*=\s*([\s\S]*)$', [roIgnoreCase, roSingleLine]);
-      Match := Regex.Match(SetExpr);
-      if not Match.Success then
+      SetContent := Trim(SetContent.Substring(3));  // Remove 'set'
+      PosColon := FindTopLevelPos(SetContent, '=');
+      if PosColon <= 0 then
       begin
         CurrentPos := SetTagEnd + 2;
         Continue;
       end;
-      VarName := Trim(Match.Groups[1].Value);
-      ValueExpr := Trim(Match.Groups[2].Value);
-      // Parse the full value expression using GetExpressionValue
-      Value := GetExpressionValue(ValueExpr, Context);
-      Context.AddOrSetValue(VarName, Value);
+      VarName := Trim(Copy(SetContent, 1, PosColon - 1));
+      ValueStr := Trim(Copy(SetContent, PosColon + 1, MaxInt));
+      Context.AddOrSetValue(VarName, EvaluateExpression(ValueStr, Context));
       CurrentPos := SetTagEnd + 2;
     end;
     ResultSB.Append(Template.Substring(CurrentPos));
@@ -3217,13 +3320,14 @@ begin
       if Length(Args) > 0 then
         fmt := Args[0]
       else
-        fmt := 'yyyy-mm-dd';
+        fmt := FDateFormat;
+
       if Input.IsType<TDateTime> then
         dt := Input.AsType<TDateTime>
       else if (Input.Kind in [tkString, tkUString]) and TryStrToDateTime(Input.AsString, dt) then
-        // dt already set
+        // Success
       else
-        Exit(Input.ToString);
+        Exit('0');  // Return 0 for invalid to avoid arithmetic failure
       if UpperCase(fmt) = 'U' then
         Result := IntToStr(DateTimeToUnix(dt))
       else
@@ -4379,6 +4483,12 @@ begin
   finally
     LocalContext.Free;
   end;
+end;
+
+procedure TTina4Twig.SetDateFormat(FormatDate, FormatDays: String);
+begin
+  FDateFormat := FormatDate;
+  FDaysFormat := FormatDays;
 end;
 
 /// <summary>

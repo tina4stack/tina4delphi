@@ -26,6 +26,7 @@ type
     procedure SetUp; override;
     procedure TearDown; override;
   published
+    procedure TestRemoveComments;
     procedure TestSetVariable;
     procedure TestRender;
     procedure TestForLoops;
@@ -227,6 +228,7 @@ begin
   Check(ReturnValue = 'NOOKNO', TemplateOrContent + ' - Should be NOOKNO, got ' + ReturnValue);
 
   TemplateOrContent := '''
+  {% set start_date = '2025-08-01' %}
   {% set tasks = [
       {
           name: 'Project Kickoff',
@@ -256,7 +258,7 @@ begin
           duration: 6,
           dependencies: ['Development']
       }
-  ] %}{% for task in tasks %} {% set start_offset = ((start_date - tasks[0].start_date|date(''U'')) / 86400) | round %}{% if task.dependencies|length > 0 %}{{ task.dependencies|join(', ') }}{% else %}None{% endif %}{% endfor %}
+  ] %}{% for task in tasks %}{% set start_offset = ((start_date - tasks[0].start_date | date('U')) / 86400) | round %}{% if task.dependencies|length > 0 %}{{ task.dependencies|join(', ') }}{% else %}None{% endif %}{% endfor %}
   ''';
   ReturnValue := FTina4Twig.Render(TemplateOrContent);
   Check(ReturnValue = 'None Project Kickoff Design Phase Development', TemplateOrContent + ' - Should be NoneProject KickoffDesign PhaseDevelopment, got ' + ReturnValue);
@@ -555,9 +557,9 @@ begin
   ReturnValue := FTina4Twig.Render(TemplateOrContent);
   Check(ReturnValue = 'Older than 35', TemplateOrContent + ' - Should be Older than 35, got ' + ReturnValue);
 
-  TemplateOrContent := '{% for data in user %}{%if age > 35 %}Older than 35{%endif%}{% endfor %}';
+  TemplateOrContent := '{% for data in user %}{{data}}{%if age > 35 %}Older than 35{%endif%}{% endfor %}';
   ReturnValue := FTina4Twig.Render(TemplateOrContent);
-  Check(ReturnValue = 'Older than 35', TemplateOrContent + ' - Should be Older than 35, got ' + ReturnValue);
+  Check(ReturnValue = '36Older than 35AliceOlder than 35', TemplateOrContent + ' - Should be 36Older than 35AliceOlder than 35, got ' + ReturnValue);
 
 end;
 
@@ -577,6 +579,17 @@ begin
   Check(ReturnValue = 'A<input type="text" name="Test" value="" size="20"/>', TemplateOrContent+'- Should be A<input type="text" name="Test" value="" size="20"/>, got '+ReturnValue);
 
 
+end;
+
+procedure TestTTina4Twig.TestRemoveComments;
+var
+  ReturnValue: string;
+  TemplateOrContent: string;
+
+begin
+  TemplateOrContent := '{# Comments #}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = '', 'Should be blank, got '+ReturnValue);
 end;
 
 procedure TestTTina4Twig.TestRender;

@@ -658,6 +658,7 @@ end;
 /// <returns>The evaluated result as a TValue.</returns>
 /// <remarks>
 /// Processes arithmetic operations, filter chains, and variable resolutions.
+/// Includes debug logging for filter inputs and outputs.
 /// Converts filter outputs to numeric if they represent simple integers without signs or leading zeros.
 /// </remarks>
 function TTina4Twig.EvaluateRPN(const RPN: TArray<String>; const Context: TDictionary<String, TValue>): TValue;
@@ -684,6 +685,7 @@ begin
   try
     for Token in RPN do
     begin
+     // WriteLn('Debug: RPN Token=', Token); // Debug: Log each token
       if Token.Contains('|') then
       begin
         Parts := SplitOnTopLevel(Token, '|');
@@ -691,6 +693,7 @@ begin
           CurrentVal := Stack.Pop
         else
           CurrentVal := GetExpressionValue(Parts[0], Context);
+        //WriteLn('Debug: Filter Chain Initial Value=', CurrentVal.ToString); // Debug: Log initial value
         for J := 1 to High(Parts) do
         begin
           FilterExpr := Trim(Parts[J]);
@@ -713,10 +716,11 @@ begin
             FuncName := Trim(FilterExpr);
             SetLength(Args, 0);
           end;
+          //WriteLn('Debug: Applying Filter=', FuncName, ', Args=', String.Join(',', Args)); // Debug: Log filter and args
           if FFilters.TryGetValue(FuncName, Filter) then
           begin
             CurrentVal := TValue.From<String>(Filter(CurrentVal, Args, Context));
-            // Convert to numeric if the output is a simple integer (no signs or leading zeros)
+            //WriteLn('Debug: Filter Output=', CurrentVal.ToString); // Debug: Log filter output
             IsSimpleInteger := TryStrToInt64(CurrentVal.AsString, IA);
             if IsSimpleInteger then
             begin
@@ -730,7 +734,10 @@ begin
               end;
             end;
             if IsSimpleInteger then
+            begin
               CurrentVal := TValue.From<Int64>(IA);
+              //WriteLn('Debug: Converted to Numeric=', CurrentVal.ToString); // Debug: Log numeric conversion
+            end;
           end
           else
             CurrentVal := TValue.From<String>('(filter ' + FuncName + ' not found)');
@@ -752,6 +759,7 @@ begin
           raise Exception.Create('Invalid expression');
         B := Stack.Pop;
         A := Stack.Pop;
+        //WriteLn('Debug: Operation=', Token, ', A=', A.ToString, ', B=', B.ToString); // Debug: Log operation
         if Token = '~' then
         begin
           Stack.Push(TValue.From<String>(A.ToString + B.ToString));
@@ -848,7 +856,7 @@ end;
 /// <returns>The evaluated value as a TValue.</returns>
 /// <remarks>
 /// Supports array literals, dictionary access, and filter chains.
-/// Ensures arrays are correctly resolved for length calculations.
+/// Includes debug logging for expression evaluation.
 /// </remarks>
 function TTina4Twig.GetExpressionValue(const Expr: String; Context: TDictionary<String, TValue>): TValue;
 var
@@ -863,26 +871,51 @@ var
   Val: TValue;
 begin
   CleanExpr := NormalizeExpression(Expr);
+  //WriteLn('Debug: GetExpressionValue Expr=', CleanExpr); // Debug: Log expression
   if ((CleanExpr.StartsWith('"') and CleanExpr.EndsWith('"')) or (CleanExpr.StartsWith('''') and CleanExpr.EndsWith(''''))) and (Length(CleanExpr) >= 2) then
-    Exit(TValue.From<String>(Copy(CleanExpr, 2, Length(CleanExpr) - 2)));
+  begin
+    Result := TValue.From<String>(Copy(CleanExpr, 2, Length(CleanExpr) - 2));
+    //WriteLn('Debug: GetExpressionValue Result (String)=', Result.ToString); // Debug: Log string result
+    Exit;
+  end;
 
   Lower := CleanExpr.ToLower;
   if Lower = 'true' then
-    Exit(TValue.From<Boolean>(True))
+  begin
+    Result := TValue.From<Boolean>(True);
+    //WriteLn('Debug: GetExpressionValue Result (Boolean)=', Result.ToString); // Debug: Log boolean result
+    Exit;
+  end
   else if Lower = 'false' then
-    Exit(TValue.From<Boolean>(False));
+  begin
+    Result := TValue.From<Boolean>(False);
+    //WriteLn('Debug: GetExpressionValue Result (Boolean)=', Result.ToString); // Debug: Log boolean result
+    Exit;
+  end;
 
   if TryStrToInt64(CleanExpr, IntVal) then
-    Exit(TValue.From<Int64>(IntVal));
+  begin
+    Result := TValue.From<Int64>(IntVal);
+    //WriteLn('Debug: GetExpressionValue Result (Int)=', Result.ToString); // Debug: Log integer result
+    Exit;
+  end;
 
   if TryStrToFloat(CleanExpr, FloatVal) then
-    Exit(TValue.From<Double>(FloatVal));
+  begin
+    Result := TValue.From<Double>(FloatVal);
+    //WriteLn('Debug: GetExpressionValue Result (Float)=', Result.ToString); // Debug: Log float result
+    Exit;
+  end;
 
   if CleanExpr.StartsWith('[') and CleanExpr.EndsWith(']') then
   begin
     Inner := Copy(CleanExpr, 2, Length(CleanExpr) - 2).Trim;
     if Inner = '' then
-      Exit(TValue.From<TArray<TValue>>([]));
+    begin
+      Result := TValue.From<TArray<TValue>>([]);
+      //WriteLn('Debug: GetExpressionValue Result (Empty Array)=', Result.ToString); // Debug: Log empty array
+      Exit;
+    end;
     ElemStrs := SplitOnTopLevel(Inner, ',');
     Arr := TList<TValue>.Create;
     try
@@ -923,6 +956,7 @@ begin
           Arr.Add(EvaluateExpression(Elem, Context));
       end;
       Result := TValue.From<TArray<TValue>>(Arr.ToArray);
+      //WriteLn('Debug: GetExpressionValue Result (Array)=', Result.ToString); // Debug: Log array result
     finally
       Arr.Free;
     end;
@@ -950,6 +984,7 @@ begin
         Dict.Add(Key, Val);
       end;
       Result := TValue.From<TDictionary<String, TValue>>(Dict);
+      //WriteLn('Debug: GetExpressionValue Result (Dict)=', Result.ToString); // Debug: Log dict result
     except
       Dict.Free;
       raise;
@@ -957,7 +992,16 @@ begin
     Exit;
   end;
 
-  Result := ResolveVariablePath(CleanExpr, Context);
+  if CleanExpr.Contains('|') then
+  begin
+    Result := EvaluateExpression(CleanExpr, Context);
+    WriteLn('Debug: GetExpressionValue Result ('+CleanExpr+')=', Result.ToString); // Debug: Log filter chain result
+  end
+   else
+  begin
+    Result := ResolveVariablePath(CleanExpr, Context);
+    WriteLn('Debug: GetExpressionValue Result ('+CleanExpr+')=', Result.ToString); // Debug: Log variable path result
+  end;
 end;
 
 /// <summary>
@@ -1396,11 +1440,9 @@ end;
 /// </summary>
 /// <param name="Template">The template string.</param>
 /// <param name="Context">The context dictionary.</param>
-/// <returns>
-/// The template with if blocks evaluated.
-/// </returns>
+/// <returns>The template with if blocks evaluated.</returns>
 /// <remarks>
-/// Supports conditions like ==, !=, <, >, in, starts with, etc., and optional else.
+/// Supports conditions with arithmetic expressions, filters, and operators, with debug logging.
 /// </remarks>
 function TTina4Twig.EvaluateIfBlocks(const Template: String; Context: TDictionary<String, TValue>): String;
 var
@@ -1442,6 +1484,7 @@ begin
       IfTagEnd := LowerTemplate.IndexOf('%}', IfTagStart + 2);
       if IfTagEnd < 0 then Break;
       IfExpr := Trim(Template.Substring(IfTagStart + 2, IfTagEnd - IfTagStart - 2));
+      WriteLn('Debug: IfBlocks IfExpr=', IfExpr); // Debug: Log if expression
       if not IfExpr.ToLower.StartsWith('if') then
       begin
         CurrentPos := IfTagEnd + 2;
@@ -1459,30 +1502,32 @@ begin
       Blocks.Add('');
       Conditions.Add(False);
 
-      // Parse the condition using regex to handle quoted strings and identifiers
-      Regex := TRegEx.Create('^([^|%}\s]+)(?:\s*(==|!=|<=|>=|<|>|in|not in|starts with|ends with|matches)\s*(''[^'']*''|"[^"]*"|[^|%}\s]+))?$', [roIgnoreCase]);
+      // Updated regex to handle arithmetic expressions
+      Regex := TRegEx.Create('^(.+?)\s*(==|!=|<=|>=|<|>|in|not in|starts with|ends with|matches)\s*(''[^'']*''|"[^"]*"|[^\s|%}]+)?$', [roIgnoreCase]);
       Match := Regex.Match(IfExpr);
       if Match.Success and (Match.Groups.Count > 1) then
       begin
-        VarName := Trim(Match.Groups[1].Value);
+        VarName := Trim(Match.Groups[1].Value); // e.g., 'value - task.duration'
         if Match.Groups.Count > 2 then
-          Op := Trim(Match.Groups[2].Value)
+          Op := Trim(Match.Groups[2].Value) // e.g., '>'
         else
           Op := '';
         if Match.Groups.Count > 3 then
-          ValueRaw := Trim(Match.Groups[3].Value)
+          ValueRaw := Trim(Match.Groups[3].Value) // e.g., '10'
         else
           ValueRaw := '';
       end
-        else
+      else
       begin
         VarName := Trim(IfExpr);
         Op := '';
         ValueRaw := '';
       end;
+      WriteLn('Debug: IfBlocks VarName=', VarName, ', Op=', Op, ', ValueRaw=', ValueRaw); // Debug: Log parsed condition
 
       VarValue := GetExpressionValue(VarName, Context);
       CompareValue := GetExpressionValue(ValueRaw, Context);
+      WriteLn('Debug: IfBlocks VarValue=', VarValue.ToString, ', CompareValue=', CompareValue.ToString); // Debug: Log condition values
 
       if Op = '' then
         Condition := ToBool(VarValue)
@@ -1490,7 +1535,6 @@ begin
         Condition := ValuesAreEqual(VarValue, CompareValue)
       else if Op = '!=' then
         Condition := not ValuesAreEqual(VarValue, CompareValue)
-      // In EvaluateIfBlocks, replace the condition calculations for <, >, <=, >= in both the if and elseif sections with:
       else if Op = '<' then
         Condition := CompareValues(VarValue, CompareValue, '<')
       else if Op = '>' then
@@ -1511,9 +1555,9 @@ begin
         Condition := (VarValue.Kind in [tkString, tkUString]) and (CompareValue.Kind in [tkString, tkUString]) and TRegEx.IsMatch(VarValue.AsString, CompareValue.AsString)
       else
         Condition := False;
+      WriteLn('Debug: IfBlocks Condition=', Condition); // Debug: Log condition result
       Conditions[0] := Condition;
 
-      // Process nested if, elseif, else, and endif
       while True do
       begin
         TagStart := LowerTemplate.IndexOf('{%', CurrentPos);
@@ -1555,6 +1599,7 @@ begin
             end;
             VarValue := GetExpressionValue(VarName, Context);
             CompareValue := GetExpressionValue(ValueRaw, Context);
+            WriteLn('Debug: IfBlocks VarName=', VarName, ', VarValue=', VarValue.ToString, ', CompareValue=', ValueRaw); // Debug: Log elseif condition
             if Op = '' then
               Condition := ToBool(VarValue)
             else if Op = '==' then
@@ -1581,12 +1626,13 @@ begin
               Condition := (VarValue.Kind in [tkString, tkUString]) and (CompareValue.Kind in [tkString, tkUString]) and TRegEx.IsMatch(VarValue.AsString, CompareValue.AsString)
             else
               Condition := False;
+            WriteLn('Debug: IfBlocks Condition=', Condition); // Debug: Log condition result
             Conditions.Add(Condition);
           end
           else
             Blocks[Blocks.Count - 1] := Blocks[Blocks.Count - 1] + Template.Substring(CurrentPos, TagEnd + 2 - CurrentPos);
         end
-        else if LowerTagContent = 'else' then
+        else if LowerTagContent.StartsWith('else') then
         begin
           if Depth = 1 then
           begin
@@ -1599,7 +1645,7 @@ begin
           else
             Blocks[Blocks.Count - 1] := Blocks[Blocks.Count - 1] + Template.Substring(CurrentPos, TagEnd + 2 - CurrentPos);
         end
-        else if LowerTagContent = 'endif' then
+        else if LowerTagContent.StartsWith('endif') then
         begin
           Dec(Depth);
           if Depth = 0 then
@@ -1616,22 +1662,26 @@ begin
           Blocks[Blocks.Count - 1] := Blocks[Blocks.Count - 1] + Template.Substring(CurrentPos, TagEnd + 2 - CurrentPos);
         CurrentPos := TagEnd + 2;
       end;
-      if EndIfTagStart < 0 then Break;
+
+      if EndIfTagStart < 0 then
+      begin
+        Blocks[Blocks.Count - 1] := Blocks[Blocks.Count - 1] + Template.Substring(CurrentPos);
+        CurrentPos := Length(Template);
+      end
+      else
+        CurrentPos := EndIfTagEnd + 2;
 
       SelectedBlock := '';
-      for var I := 0 to Blocks.Count - 1 do
-      begin
+      for var I  := 0 to Conditions.Count - 1 do
         if Conditions[I] then
         begin
           SelectedBlock := Blocks[I];
           Break;
         end;
-      end;
 
-      SelectedBlock := EvaluateIfBlocks(SelectedBlock, Context);
-      ResultSB.Append(SelectedBlock);
-      CurrentPos := EndIfTagEnd + 2;
+      ResultSB.Append(RenderInternal(SelectedBlock, Context));
     end;
+
     ResultSB.Append(Template.Substring(CurrentPos));
     Result := ResultSB.ToString;
   finally

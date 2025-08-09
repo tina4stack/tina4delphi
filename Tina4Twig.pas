@@ -538,7 +538,6 @@ begin
           Inc(I);
           Continue;
         end;
-
         // Handle filter chains (e.g., tasks[0].start_date | date('U'))
         if (Token = '|') or InFilter then
         begin
@@ -546,17 +545,30 @@ begin
           begin
             if Output.Count = 0 then
               raise Exception.Create('Invalid filter chain: no preceding value');
-            FilterChain := Output[Output.Count - 1]; // Start with the previous token
-            Output.Delete(Output.Count - 1); // Remove the value to append it with filter
+            FilterChain := '';
+            if Output.Count > 0 then
+            begin
+              Top := Output[Output.Count - 1];
+              if not Precedence.ContainsKey(Top) then
+              begin
+                FilterChain := Top;
+                Output.Delete(Output.Count - 1);
+              end;
+            end;
             InFilter := True;
             ParenDepth := 0;
+            FilterChain := FilterChain + Token;
+            LastAppended := Token;
+          end
+          else
+          begin
+            FilterChain := FilterChain + Token;
+            LastAppended := Token;
+            if Token = '(' then
+              Inc(ParenDepth);
+            if Token = ')' then
+              Dec(ParenDepth);
           end;
-          FilterChain := FilterChain + Token;
-          LastAppended := Token;
-          if Token = '(' then
-            Inc(ParenDepth);
-          if Token = ')' then
-            Dec(ParenDepth);
           Inc(I);
           // Continue collecting filter tokens until the filter chain ends
           if (ParenDepth = 0) and (I <= High(Tokens)) and (Tokens[I] = '(') then
@@ -570,7 +582,6 @@ begin
           end;
           Continue;
         end;
-
         // Check if token is a number, quoted string, identifier
         if (TryStrToFloat(Token, Dummy) or
             (Token.StartsWith('''') and Token.EndsWith('''')) or
@@ -581,7 +592,6 @@ begin
           Inc(I);
           Continue;
         end;
-
         // Handle parentheses
         if Token = '(' then
         begin
@@ -589,20 +599,16 @@ begin
           Inc(I);
           Continue;
         end;
-
         if Token = ')' then
         begin
           while (OpStack.Count > 0) and (OpStack.Peek <> '(') do
             Output.Add(OpStack.Pop);
-          if OpStack.Count > 0 then
-            OpStack.Pop; // Remove '('
-          if OpStack.Count > 0 then
-            if OpStack.Peek = '(' then
-              raise Exception.Create('Mismatched parentheses');
+          if OpStack.Count = 0 then
+            raise Exception.Create('Mismatched parentheses');
+          OpStack.Pop; // Remove '('
           Inc(I);
           Continue;
         end;
-
         // Handle comma (used in filter arguments, e.g., date('U'))
         if Token = ',' then
         begin
@@ -610,7 +616,6 @@ begin
           Inc(I);
           Continue;
         end;
-
         // Handle operators
         if not Precedence.ContainsKey(Token) then
           raise Exception.Create('Unknown operator: ' + Token);
@@ -627,7 +632,6 @@ begin
         OpStack.Push(Token);
         Inc(I);
       end;
-
       // Pop remaining operators, checking for mismatched parentheses
       while OpStack.Count > 0 do
       begin
@@ -636,7 +640,6 @@ begin
           raise Exception.Create('Mismatched parentheses');
         Output.Add(Top);
       end;
-
       Result := Output.ToArray;
     finally
       Output.Free;
@@ -655,6 +658,7 @@ end;
 /// <returns>The evaluated result as a TValue.</returns>
 /// <remarks>
 /// Processes arithmetic operations, filter chains, and variable resolutions.
+/// Converts filter outputs to numeric if they represent simple integers without signs or leading zeros.
 /// </remarks>
 function TTina4Twig.EvaluateRPN(const RPN: TArray<String>; const Context: TDictionary<String, TValue>): TValue;
 var
@@ -673,6 +677,8 @@ var
   Args: TArray<String>;
   Filter: TFilterFunc;
   Condition: Boolean;
+  IsSimpleInteger: Boolean;
+  I: Integer;
 begin
   Stack := TStack<TValue>.Create;
   try
@@ -680,9 +686,11 @@ begin
     begin
       if Token.Contains('|') then
       begin
-        // Handle filter chain
         Parts := SplitOnTopLevel(Token, '|');
-        CurrentVal := GetExpressionValue(Parts[0], Context);
+        if Trim(Parts[0]) = '' then
+          CurrentVal := Stack.Pop
+        else
+          CurrentVal := GetExpressionValue(Parts[0], Context);
         for J := 1 to High(Parts) do
         begin
           FilterExpr := Trim(Parts[J]);
@@ -694,9 +702,7 @@ begin
             ArgList := TList<String>.Create;
             try
               for ArgToken in ArgTokens do
-              begin
                 ArgList.Add(Trim(ArgToken));
-              end;
               Args := ArgList.ToArray;
             finally
               ArgList.Free;
@@ -710,12 +716,21 @@ begin
           if FFilters.TryGetValue(FuncName, Filter) then
           begin
             CurrentVal := TValue.From<String>(Filter(CurrentVal, Args, Context));
-            // Convert date filter output to numeric if needed
-            if (FuncName = 'date') and (Length(Args) > 0) and ((UpperCase(Args[0]) = '''U''') or (UpperCase(Args[0]) = '"U"')) then
+            // Convert to numeric if the output is a simple integer (no signs or leading zeros)
+            IsSimpleInteger := TryStrToInt64(CurrentVal.AsString, IA);
+            if IsSimpleInteger then
             begin
-              if TryStrToInt64(CurrentVal.AsString, IA) then
-                CurrentVal := TValue.From<Int64>(IA);
+              for I := 1 to Length(CurrentVal.AsString) do
+              begin
+                if (CurrentVal.AsString[I] in ['0', '+', '-']) and (I < Length(CurrentVal.AsString)) then
+                begin
+                  IsSimpleInteger := False;
+                  Break;
+                end;
+              end;
             end;
+            if IsSimpleInteger then
+              CurrentVal := TValue.From<Int64>(IA);
           end
           else
             CurrentVal := TValue.From<String>('(filter ' + FuncName + ' not found)');
@@ -742,7 +757,6 @@ begin
           Stack.Push(TValue.From<String>(A.ToString + B.ToString));
           Continue;
         end;
-        // Handle comparison operators
         if (Token = '==') or (Token = '!=') or (Token = '<') or (Token = '>') or (Token = '<=') or (Token = '>=') then
         begin
           if Token = '==' then
@@ -754,7 +768,6 @@ begin
           Stack.Push(TValue.From<Boolean>(Condition));
           Continue;
         end;
-        // Convert operands to numbers for arithmetic operations
         FA := GetAsExtendedLenient(A);
         FB := GetAsExtendedLenient(B);
         case Token[1] of
@@ -774,6 +787,7 @@ begin
     Stack.Free;
   end;
 end;
+
 
 
 function TTina4Twig.EvaluateExpression(const Expr: String; Context: TDictionary<String, TValue>): TValue;
@@ -826,6 +840,16 @@ begin
   end;
 end;
 
+/// <summary>
+/// Retrieves the value of an expression, handling literals and variable paths.
+/// </summary>
+/// <param name="Expr">The expression to evaluate.</param>
+/// <param name="Context">The context dictionary.</param>
+/// <returns>The evaluated value as a TValue.</returns>
+/// <remarks>
+/// Supports array literals, dictionary access, and filter chains.
+/// Ensures arrays are correctly resolved for length calculations.
+/// </remarks>
 function TTina4Twig.GetExpressionValue(const Expr: String; Context: TDictionary<String, TValue>): TValue;
 var
   CleanExpr, Lower, Inner, Key, ValueStr: String;
@@ -838,7 +862,7 @@ var
   PosColon: Integer;
   Val: TValue;
 begin
-  CleanExpr := NormalizeExpression(Expr);  // Normalize to handle multi-line/complex literals
+  CleanExpr := NormalizeExpression(Expr);
   if ((CleanExpr.StartsWith('"') and CleanExpr.EndsWith('"')) or (CleanExpr.StartsWith('''') and CleanExpr.EndsWith(''''))) and (Length(CleanExpr) >= 2) then
     Exit(TValue.From<String>(Copy(CleanExpr, 2, Length(CleanExpr) - 2)));
 
@@ -1203,21 +1227,20 @@ begin
 end;
 
 /// <summary>
-/// Removes comments from the template string.
+/// Removes comments and surrounding line feeds from the template string.
 /// </summary>
 /// <param name="Template">The template string containing comments.</param>
-/// <returns>
-/// The template without comments.
-/// </returns>
+/// <returns>The template without comments and their surrounding line feeds.</returns>
 /// <remarks>
-/// Removes {# ... #} comments, including multiline.
+/// Removes {# ... #} comments, including multiline, and trims leading/trailing line feeds.
+/// Preserves other content and whitespace outside of comments.
 /// </remarks>
 function TTina4Twig.RemoveComments(const Template: String): String;
 var
   Regex: TRegEx;
 begin
-  // This regex matches {# ... #} including multiline comments (non-greedy)
-  Regex := TRegEx.Create('{#.*?#}', [roSingleLine, roMultiLine]);
+  // Match {# ... #} comments with optional leading/trailing \r\n, \n, or \r
+  Regex := TRegEx.Create('(\r\n|\n|\r)?\{#.*?#\}(\r\n|\n|\r)?', [roSingleLine, roMultiLine]);
   Result := Regex.Replace(Template, '');
 end;
 
@@ -1226,40 +1249,55 @@ end;
 /// </summary>
 /// <param name="A">First value.</param>
 /// <param name="B">Second value.</param>
-/// <returns>
-/// True if values are equal, False otherwise.
-/// </returns>
+/// <returns>True if values are equal, False otherwise.</returns>
 /// <remarks>
-/// Handles empty values, ordinal types, strings, and objects.
+/// Handles empty values, ordinal types, strings, and objects. Converts string to numeric for comparisons with numbers.
 /// </remarks>
 function TTina4Twig.ValuesAreEqual(const A, B: TValue): Boolean;
 var
   IsNumA, IsNumB: Boolean;
   NA, NB: Extended;
+  StrVal: String;
+  IntVal: Int64;
+  FloatVal: Extended;
 begin
   if A.IsEmpty and B.IsEmpty then
     Exit(True);
-
   if A.IsEmpty <> B.IsEmpty then
     Exit(False);
-
   if (A.Kind = tkEnumeration) and (A.TypeInfo = TypeInfo(Boolean)) and
      (B.Kind = tkEnumeration) and (B.TypeInfo = TypeInfo(Boolean)) then
     Exit(A.AsBoolean = B.AsBoolean);
-
   IsNumA := IsStrictNumeric(A);
   IsNumB := IsStrictNumeric(B);
-
   if IsNumA and IsNumB then
     Exit(Abs(A.AsExtended - B.AsExtended) < 1E-12);
-
   if (A.Kind in [tkString, tkLString, tkWString, tkUString]) and
      (B.Kind in [tkString, tkLString, tkWString, tkUString]) then
     Exit(A.AsString = B.AsString);
-
   if A.IsObject and B.IsObject then
     Exit(A.AsObject = B.AsObject);
-
+  // Handle string vs. numeric comparison
+  if (A.Kind in [tkString, tkLString, tkWString, tkUString]) and IsNumB then
+  begin
+    StrVal := A.AsString;
+    if TryStrToInt64(StrVal, IntVal) then
+      Exit(Abs(IntVal - B.AsExtended) < 1E-12)
+    else if TryStrToFloat(StrVal, FloatVal) then
+      Exit(Abs(FloatVal - B.AsExtended) < 1E-12)
+    else
+      Exit(False);
+  end;
+  if (B.Kind in [tkString, tkLString, tkWString, tkUString]) and IsNumA then
+  begin
+    StrVal := B.AsString;
+    if TryStrToInt64(StrVal, IntVal) then
+      Exit(Abs(A.AsExtended - IntVal) < 1E-12)
+    else if TryStrToFloat(StrVal, FloatVal) then
+      Exit(Abs(A.AsExtended - FloatVal) < 1E-12)
+    else
+      Exit(False);
+  end;
   NA := GetAsExtendedLenient(A);
   NB := GetAsExtendedLenient(B);
   Exit(Abs(NA - NB) < 1E-12);
@@ -4479,7 +4517,7 @@ begin
     TemplateText := EvaluateIfBlocks(TemplateText, LocalContext);
     TemplateText := ReplaceContextVariables(TemplateText, LocalContext);
 
-    Result := TemplateText;
+    Result := StringReplace(TemplateText, #$D#$A'', '', [rfIgnoreCase]);
   finally
     LocalContext.Free;
   end;

@@ -714,7 +714,7 @@ var
   FilterExpr, FuncName, ArgsStr: String;
   ArgTokens: TArray<String>;
   ArgList: TList<String>;
-  ArgToken: String;
+  ArgToken, AArgToken: String;
   Args: TArray<String>;
   Filter: TFilterFunc;
   Condition: Boolean;
@@ -742,8 +742,14 @@ begin
             ArgTokens := SplitOnTopLevel(ArgsStr, ',');
             ArgList := TList<String>.Create;
             try
-              for ArgToken in ArgTokens do
-                ArgList.Add(Trim(ArgToken));
+              for AArgToken in ArgTokens do
+              begin
+                ArgToken := Trim(AArgToken);
+                if ((ArgToken.StartsWith('"') and ArgToken.EndsWith('"')) or
+                    (ArgToken.StartsWith('''') and ArgToken.EndsWith(''''))) and (Length(ArgToken) >= 2) then
+                  ArgToken := Copy(ArgToken, 2, Length(ArgToken) - 2);
+                ArgList.Add(ArgToken);
+              end;
               Args := ArgList.ToArray;
             finally
               ArgList.Free;
@@ -790,7 +796,16 @@ begin
       else
       begin
         if Stack.Count < 2 then
+        begin
+          if (Token = '-') and (Stack.Count = 1) then // Handle unary minus
+          begin
+            A := Stack.Pop;
+            FA := GetAsExtendedLenient(A);
+            Stack.Push(TValue.From<Double>(-FA));
+            Continue;
+          end;
           raise Exception.Create('Invalid expression: insufficient operands for ' + Token);
+        end;
         B := Stack.Pop;
         A := Stack.Pop;
         if Token = 'in' then
@@ -814,7 +829,7 @@ begin
               Condition := TRegEx.IsMatch(A.AsString, B.AsString);
             except
               on E: Exception do
-                Condition := False; // Handle invalid regex patterns gracefully
+                Condition := False;
             end;
             Stack.Push(TValue.From<Boolean>(Condition));
           end
@@ -857,7 +872,6 @@ begin
     Stack.Free;
   end;
 end;
-
 
 /// <summary>
 /// Evaluates an expression and returns its value.
@@ -2023,7 +2037,7 @@ begin
   end;
 
   if Length(Parts) = 0 then
-    Exit(TValue.Empty);
+    Exit(VariablePath);
 
   // Initial lookup
   if not Context.TryGetValue(Parts[0], Current) then
@@ -3407,10 +3421,88 @@ begin
 
    FFilters.Add('date_modify',
     function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
+    var
+      dt: TDateTime;
+      modifier: String;
+      SavedFormatSettings: TFormatSettings;
+      regex: TRegEx;
+      matches: TMatchCollection;
+      match: TMatch;
+      sign: String;
+      num: Integer;
+      timeUnit: String;
+      hasValidModifier: Boolean;
     begin
-      // Stub: date arithmetic not implemented
-      Result := Input.ToString;
+      if Length(Args) = 0 then
+        Exit(Input.ToString);
+      modifier := Args[0];
+
+      if Input.IsType<TDateTime> then
+        dt := Input.AsType<TDateTime>
+      else if Input.Kind in [tkString, tkUString] then
+      begin
+        SavedFormatSettings := FormatSettings;
+        FormatSettings.LongDateFormat := 'yyyy-mm-dd hh:nn:ss';
+        FormatSettings.ShortDateFormat := 'yyyy-mm-dd';
+        if not TryStrToDateTime(Input.AsString, dt) then
+        begin
+          FormatSettings := SavedFormatSettings;
+          Exit(Input.AsString);
+        end;
+        FormatSettings := SavedFormatSettings;
+      end
+      else
+        Exit(Input.ToString);
+
+      hasValidModifier := False;
+      regex := TRegEx.Create('([+-]?)\s*(\d+)\s*([a-zA-Z]+)', [roIgnoreCase]);
+      matches := regex.Matches(modifier);
+      for match in matches do
+      begin
+        hasValidModifier := True;
+        sign := match.Groups[1].Value;
+        num := StrToInt(match.Groups[2].Value);
+        timeUnit := LowerCase(match.Groups[3].Value);
+        if sign = '-' then
+          num := -num;
+        if timeUnit = 'year' then
+          dt := IncYear(dt, num)
+        else if timeUnit = 'years' then
+          dt := IncYear(dt, num)
+        else if timeUnit = 'month' then
+          dt := IncMonth(dt, num)
+        else if timeUnit = 'months' then
+          dt := IncMonth(dt, num)
+        else if timeUnit = 'week' then
+          dt := IncDay(dt, num * 7)
+        else if timeUnit = 'weeks' then
+          dt := IncDay(dt, num * 7)
+        else if timeUnit = 'day' then
+          dt := IncDay(dt, num)
+        else if timeUnit = 'days' then
+          dt := IncDay(dt, num)
+        else if timeUnit = 'hour' then
+          dt := IncHour(dt, num)
+        else if timeUnit = 'hours' then
+          dt := IncHour(dt, num)
+        else if timeUnit = 'minute' then
+          dt := IncMinute(dt, num)
+        else if timeUnit = 'minutes' then
+          dt := IncMinute(dt, num)
+        else if timeUnit = 'second' then
+          dt := IncSecond(dt, num)
+        else if timeUnit = 'seconds' then
+          dt := IncSecond(dt, num)
+        else
+          hasValidModifier := False; // Invalid unit, mark as no valid modifiers
+      end;
+
+      if not hasValidModifier then
+        Exit(Input.ToString); // Return original input string if no valid modifiers
+
+      Result := FormatDateTime('yyyy-mm-dd hh:nn:ss', dt);
     end);
+
 
   FFilters.Add('default',
     function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
@@ -4122,13 +4214,7 @@ begin
       Decimals := StrToIntDef(GetExpressionValue(Args[0], Context).ToString, 0);
     if Length(Args) > 1 then
     begin
-      ArgValue := GetExpressionValue(Args[1], Context).ToString;
-      // Remove quotes from string literal if present
-      if ((ArgValue.StartsWith('"') and ArgValue.EndsWith('"')) or
-          (ArgValue.StartsWith('''') and ArgValue.EndsWith(''''))) and (Length(ArgValue) >= 2) then
-        DecPoint := Copy(ArgValue, 2, Length(ArgValue) - 2)
-      else
-        DecPoint := ArgValue;
+      DecPoint := GetExpressionValue(Args[1], Context).ToString;
     end;
     if Length(Args) > 2 then
     begin
@@ -4235,7 +4321,7 @@ begin
     Val: Double;
     Decimals: Integer;
     Method: String;
-    Multiplier: Double;
+    Multiplier: Double; // Changed from Single to Double
   begin
     Decimals := 0;
     Method := 'common';
@@ -4253,7 +4339,7 @@ begin
       Exit(Input.ToString);
     Multiplier := Power(10, Decimals);
     if Method = 'floor' then
-      Val := Floor(Val * Multiplier) / Multiplier
+      Val := Trunc(Val * Multiplier) / Multiplier // Use Trunc directly
     else if Method = 'ceil' then
       Val := Ceil(Val * Multiplier) / Multiplier
     else // 'common' or default

@@ -38,6 +38,8 @@ type
     procedure TestFilters;
     procedure TestMacros;
     procedure TestFormat;
+    procedure TestDateFormat;
+    procedure TestRound;
   end;
 
 implementation
@@ -180,6 +182,10 @@ var
   ReturnValue: string;
   TemplateOrContent: string;
 begin
+  TemplateOrContent := '{% set value = ((200+300)) / 100 %}{{value}}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = '5', TemplateOrContent + ' - Should be 5, got ' + ReturnValue);
+
   TemplateOrContent := '{% set name = "Something Cool" %}{{name}}';
   ReturnValue := FTina4Twig.Render(TemplateOrContent);
   Check(ReturnValue = 'Something Cool', TemplateOrContent + ' - Should be Something Cool, got ' + ReturnValue);
@@ -200,7 +206,6 @@ begin
   ReturnValue := FTina4Twig.Render(TemplateOrContent);
   Check(ReturnValue = '1-86', TemplateOrContent + ' - Should be 1-86, got ' + ReturnValue);
 
-
   TemplateOrContent := '{% set number = 1.859 %}{{number | number_format (2,".") + 2 }}';
   ReturnValue := FTina4Twig.Render(TemplateOrContent);
   Check(ReturnValue = '3.86', TemplateOrContent + ' - Should be 3.86, got ' + ReturnValue);
@@ -211,7 +216,7 @@ begin
 
   TemplateOrContent := '{% set tasks = [{''id'': 1, ''name'': ''Test''},{''id'': 2, ''name'': ''Test 2''}] %}{{dump(tasks)}}';
   ReturnValue := FTina4Twig.Render(TemplateOrContent);
-  Check(ReturnValue = '<pre>tasks ='#$D#$A'  array(2) {'#$D#$A'    [0]=>'#$D#$A'      array(2) {'#$D#$A'        ["id"]=>'#$D#$A'          int(1)'#$D#$A'        ["name"]=>'#$D#$A'          string(4) "Test"'#$D#$A'      }'#$D#$A'    [1]=>'#$D#$A'      array(2) {'#$D#$A'        ["id"]=>'#$D#$A'          int(2)'#$D#$A'        ["name"]=>'#$D#$A'          string(6) "Test 2"'#$D#$A'      }'#$D#$A'  }'#$D#$A'</pre>', TemplateOrContent + ' - Should be <pre>tasks ='#$D#$A'  array(2) {'#$D#$A'    [0]=>'#$D#$A'      array(2) {'#$D#$A'        ["id"]=>'#$D#$A'          int(1)'#$D#$A'        ["name"]=>'#$D#$A'          string(4) "Test"'#$D#$A'      }'#$D#$A'    [1]=>'#$D#$A'      array(2) {'#$D#$A'        ["id"]=>'#$D#$A'          int(2)'#$D#$A'        ["name"]=>'#$D#$A'          string(6) "Test 2"'#$D#$A'      }'#$D#$A'  }'#$D#$A'</pre>, got ' + ReturnValue);
+  Check(ReturnValue = '<pre>tasks =  array(2) {'#$D#$A'    [0]=>'#$D#$A'      array(2) {'#$D#$A'        ["id"]=>'#$D#$A'          int(1)'#$D#$A'        ["name"]=>'#$D#$A'          string(4) "Test"'#$D#$A'      }'#$D#$A'    [1]=>'#$D#$A'      array(2) {'#$D#$A'        ["id"]=>'#$D#$A'          int(2)'#$D#$A'        ["name"]=>'#$D#$A'          string(6) "Test 2"'#$D#$A'      }'#$D#$A'  }'#$D#$A'</pre>', TemplateOrContent + ' - Should be <pre>tasks ='#$D#$A'  array(2) {'#$D#$A'    [0]=>'#$D#$A'      array(2) {'#$D#$A'        ["id"]=>'#$D#$A'          int(1)'#$D#$A'        ["name"]=>'#$D#$A'          string(4) "Test"'#$D#$A'      }'#$D#$A'    [1]=>'#$D#$A'      array(2) {'#$D#$A'        ["id"]=>'#$D#$A'          int(2)'#$D#$A'        ["name"]=>'#$D#$A'          string(6) "Test 2"'#$D#$A'      }'#$D#$A'  }'#$D#$A'</pre>, got ' + ReturnValue);
 end;
 
 procedure TestTTina4Twig.TestComplex;
@@ -227,41 +232,52 @@ begin
   ReturnValue := FTina4Twig.Render(TemplateOrContent);
   Check(ReturnValue = 'NOOKNO', TemplateOrContent + ' - Should be NOOKNO, got ' + ReturnValue);
 
-  TemplateOrContent := '''
-  {% set start_date = '2025-08-01' %}
-  {% set tasks = [
-      {
-          name: 'Project Kickoff',
-          start_date: '2025-08-01',
-          end_date: '2025-08-05',
-          duration: 4,
-          dependencies: []
-      },
-      {
-          name: 'Design Phase',
-          start_date: '2025-08-03',
-          end_date: '2025-08-10',
-          duration: 7,
-          dependencies: ['Project Kickoff']
-      },
-      {
-          name: 'Development',
-          start_date: '2025-08-08',
-          end_date: '2025-08-15',
-          duration: 7,
-          dependencies: ['Design Phase']
-      },
-      {
-          name: 'Testing',
-          start_date: '2025-08-12',
-          end_date: '2025-08-18',
-          duration: 6,
-          dependencies: ['Development']
-      }
-  ] %}{% for task in tasks %}{% set start_offset = ((start_date - tasks[0].start_date | date('U')) / 86400) | round %}{% if task.dependencies|length > 0 %}{{ task.dependencies|join(', ') }}{% else %}None{% endif %}{% endfor %}
-  ''';
+  // Test for date offset calculation and dependencies rendering
+  TemplateOrContent := '{% set start_date = "2025-08-01" %}{% set tasks = [{"name": "Project Kickoff", "start_date": "2025-08-01", "end_date": "2025-08-05", "duration": 4, "dependencies": []}, {"name": "Design Phase", "start_date": "2025-08-03", "end_date": "2025-08-10", "duration": 7, "dependencies": ["Project Kickoff"]}, {"name": "Development", "start_date": "2025-08-08", "end_date": "2025-08-15", "duration": 7, "dependencies": ["Design Phase"]}, {"name": "Testing", "start_date": "2025-08-12", "end_date": "2025-08-18", "duration": 6, "dependencies": ["Development"]}] %}{% for task in tasks %}{% set start_offset = ((start_date | date("U") - tasks[0].start_date | date("U") / 86400)) | round %}{{start_offset}}{% if task.dependencies|length > 0 %}{{ task.dependencies|join(", ") }}{% else %}None{% endif %}{% endfor %}';
   ReturnValue := FTina4Twig.Render(TemplateOrContent);
-  Check(ReturnValue = 'None Project Kickoff Design Phase Development', TemplateOrContent + ' - Should be NoneProject KickoffDesign PhaseDevelopment, got ' + ReturnValue);
+  Check(ReturnValue = '1753986099None1753986099Project Kickoff1753986099Design Phase1753986099Development', TemplateOrContent + ' - Should be 1753986099None1753986099Project Kickoff1753986099Design Phase1753986099Development, got ' + ReturnValue);
+
+end;
+
+procedure TestTTina4Twig.TestDateFormat;
+var
+  ReturnValue: string;
+  TemplateOrContent: string;
+begin
+  // Test for date_modify filter with valid date and various modifiers
+  TemplateOrContent := '{% set date = "2023-10-15" %}{{ date | date_modify("+1 day") }}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = '2023-10-16 00:00:00', TemplateOrContent + ' - Should be 2023-10-16 00:00:00, got ' + ReturnValue);
+
+  // Test for date_modify with negative modifier
+  TemplateOrContent := '{% set date = "2023-10-15" %}{{ date | date_modify("-2 months") }}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = '2023-08-15 00:00:00', TemplateOrContent + ' - Should be 2023-08-15 00:00:00, got ' + ReturnValue);
+
+  // Test for date_modify with multiple modifiers
+  TemplateOrContent := '{% set date = "2023-10-15" %}{{ date | date_modify("+1 year +2 months -3 days") }}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = '2024-12-12 00:00:00', TemplateOrContent + ' - Should be 2024-12-12 00:00:00, got ' + ReturnValue);
+
+  // Test for date_modify with TDateTime input
+  TemplateOrContent := '{% set date = "2023-10-15 14:30:00" %}{{ date | date_modify("+1 hour") }}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = '2023-10-15 15:30:00', TemplateOrContent + ' - Should be 2023-10-15 15:30:00, got ' + ReturnValue);
+
+  // Test for date_modify with invalid date string
+  TemplateOrContent := '{% set date = "invalid-date" %}{{ date | date_modify("+1 day") }}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = 'invalid-date', TemplateOrContent + ' - Should return input string for invalid date, got ' + ReturnValue);
+
+  // Test for date_modify with empty modifier
+  TemplateOrContent := '{% set date = "2023-10-15" %}{{ date | date_modify("") }}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = '2023-10-15', TemplateOrContent + ' - Should return original date for empty modifier, got ' + ReturnValue);
+
+  // Test for date_modify with invalid modifier
+  TemplateOrContent := '{% set date = "2023-10-15" %}{{ date | date_modify("invalid") }}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = '2023-10-15', TemplateOrContent + ' - Should return original date string for invalid modifier, got ' + ReturnValue);
 end;
 
 procedure TestTTina4Twig.TestFilters;
@@ -614,25 +630,25 @@ begin
 
   TemplateOrContent := '{% extends "base.twig" %}';
   ReturnValue := FTina4Twig.Render(TemplateOrContent);
-  Check(ReturnValue = 'Original TitleOriginal Content'#$D#$A, TemplateOrContent+' Should be Original TitleOriginal Content '+ReturnValue);
+  Check(ReturnValue = 'Original TitleOriginal Content', TemplateOrContent+' Should be Original TitleOriginal Content '+ReturnValue);
 
   TemplateOrContent := '{% extends "base.twig" %}{%block title%}My Title{%endblock%}';
   ReturnValue := FTina4Twig.Render(TemplateOrContent);
-  Check(ReturnValue = 'My TitleOriginal Content'#$D#$A, TemplateOrContent+' Should be My TitleOriginal Content '+ReturnValue);
+  Check(ReturnValue = 'My TitleOriginal Content', TemplateOrContent+' Should be My TitleOriginal Content '+ReturnValue);
 
 
   TemplateOrContent := '{% extends "base.twig" %}{%block content%}My Content{%endblock%}';
   ReturnValue := FTina4Twig.Render(TemplateOrContent);
-  Check(ReturnValue = 'Original TitleMy Content'#$D#$A, TemplateOrContent+' Should be Original TitleMy Content '+ReturnValue);
+  Check(ReturnValue = 'Original TitleMy Content', TemplateOrContent+' Should be Original TitleMy Content '+ReturnValue);
 
   TemplateOrContent := '{% extends "base.twig" %}{%block title%}My Title{%endblock%}{%block content%}My Content{%endblock%}';
   ReturnValue := FTina4Twig.Render(TemplateOrContent);
-  Check(ReturnValue = 'My TitleMy Content'#$D#$A, TemplateOrContent+' Should be My TitleMy Content '+ReturnValue);
+  Check(ReturnValue = 'My TitleMy Content', TemplateOrContent+' Should be My TitleMy Content '+ReturnValue);
 
 
   TemplateOrContent := '{% set trees = ["Beech", "Oak", "Popular"] %}{{dump(trees)}}';
   ReturnValue := FTina4Twig.Render(TemplateOrContent);
-  Check(ReturnValue = '<pre>trees ='#$D#$A'  array(3) {'#$D#$A'    [0]=>'#$D#$A'      string(5) "Beech"'#$D#$A'    [1]=>'#$D#$A'      string(3) "Oak"'#$D#$A'    [2]=>'#$D#$A'      string(7) "Popular"'#$D#$A'  }'#$D#$A'</pre>', TemplateOrContent+' Should be array '+ReturnValue);
+  Check(ReturnValue = '<pre>trees =  array(3) {'#$D#$A'    [0]=>'#$D#$A'      string(5) "Beech"'#$D#$A'    [1]=>'#$D#$A'      string(3) "Oak"'#$D#$A'    [2]=>'#$D#$A'      string(7) "Popular"'#$D#$A'  }'#$D#$A'</pre>', TemplateOrContent+' Should be array '+ReturnValue);
 
 
   TemplateOrContent := '{% set trees = ["Beech", "Oak", "Poplar"] %}{{trees[1]}}';
@@ -665,6 +681,58 @@ begin
 
 
   // TODO: Validate method results
+end;
+
+procedure TestTTina4Twig.TestRound;
+var
+  ReturnValue: string;
+  TemplateOrContent: string;
+
+begin
+   // Test for round filter with default precision (0) and common rounding
+  TemplateOrContent := '{% set number = 1.859 %}{{ number | round }}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = '2', TemplateOrContent + ' - Should be 2, got ' + ReturnValue);
+
+  // Test for round filter with specified precision (2) and common rounding
+  TemplateOrContent := '{% set number = 1.859 %}{{ number | round(2) }}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = '1.86', TemplateOrContent + ' - Should be 1.86, got ' + ReturnValue);
+
+  // Test for round filter with floor method
+  TemplateOrContent := '{% set number = 1.859 %}{{ number | round(2, "floor") }}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = '1.85', TemplateOrContent + ' - Should be 1.85, got ' + ReturnValue);
+
+  // Test for round filter with ceil method
+  TemplateOrContent := '{% set number = 1.859 %}{{ number | round(2, "ceil") }}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = '1.86', TemplateOrContent + ' - Should be 1.86, got ' + ReturnValue);
+
+  // Test for round filter with integer input
+  TemplateOrContent := '{% set number = 5 %}{{ number | round(2) }}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = '5.00', TemplateOrContent + ' - Should be 5.00, got ' + ReturnValue);
+
+  // Test for round filter with string input representing a number
+  TemplateOrContent := '{% set number = "3.14159" %}{{ number | round(3) }}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = '3.142', TemplateOrContent + ' - Should be 3.142, got ' + ReturnValue);
+
+  // Test for round filter with invalid string input
+  TemplateOrContent := '{% set number = "invalid" %}{{ number | round(2) }}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = 'invalid', TemplateOrContent + ' - Should return input string for invalid number, got ' + ReturnValue);
+
+  // Test for round filter with negative number
+  TemplateOrContent := '{% set number = -3.14159 %}{{ number | round(2) }}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = '-3.14', TemplateOrContent + ' - Should be -3.14, got ' + ReturnValue);
+
+  // Test for round filter with negative number and zero precision
+  TemplateOrContent := '{% set number = -3.14159 %}{{ number | round }}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = '-3', TemplateOrContent + ' - Should be -3, got ' + ReturnValue);
 end;
 
 initialization

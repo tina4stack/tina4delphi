@@ -29,7 +29,6 @@ type
     procedure TestRemoveComments;
     procedure TestSetVariable;
     procedure TestRender;
-    procedure TestForLoops;
     procedure TestWith;
     procedure TestIf;
     procedure TestTags;
@@ -40,6 +39,7 @@ type
     procedure TestFormat;
     procedure TestDateFormat;
     procedure TestRound;
+    procedure TestForLoops;
   end;
 
 implementation
@@ -359,6 +359,23 @@ begin
   TemplateOrContent := '{%for a in persons%}{{a}}{%else%}No persons{%endfor%}';
   ReturnValue := FTina4Twig.Render(TemplateOrContent);
   Check(ReturnValue = 'No persons', TemplateOrContent+'- Should be No persons, got '+ReturnValue);
+
+  TemplateOrContent := '{% for i in 0..5 %}{{i}}{% endfor %}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = '012345', TemplateOrContent + ' - Should be 012345, got ' + ReturnValue);
+
+  TemplateOrContent := '{% for i in 5..1 %}{{i}}{% endfor %}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = '54321', TemplateOrContent + ' - Should be 54321, got ' + ReturnValue);
+
+
+  TemplateOrContent := '{% set total_days = 3 %}{% for i in 0..(total_days - 1) %}OK{% endfor %}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = 'OKOKOK', TemplateOrContent + ' - Should be OKOKOK, got ' + ReturnValue);
+
+  TemplateOrContent := '{% set current_date = "2023-01-01" %}{% set max_date = "2023-12-31" %}{% for i in 0..1000 if current_date <= max_date %}OK{% endfor %}';
+ReturnValue := FTina4Twig.Render(TemplateOrContent);
+Check(Length(ReturnValue) = 1001 * Length('OK'), TemplateOrContent + ' - Should be OK repeated 1001 times, got length ' + IntToStr(Length(ReturnValue)));
 end;
 
 procedure TestTTina4Twig.TestFormat;

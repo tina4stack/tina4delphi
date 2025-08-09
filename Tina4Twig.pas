@@ -207,6 +207,15 @@ end;
 /// Handles numbers, quoted strings, identifiers with dotted paths and subscripts, operators, and array/dictionary literals.
 /// Updated to robustly recognize 'in', 'starts with', and 'matches' operators with flexible spacing and case.
 /// </remarks>
+/// <summary>
+/// Tokenizes an expression into an array of tokens.
+/// </summary>
+/// <param name="Expr">The expression to tokenize.</param>
+/// <returns>An array of tokens representing the expression.</returns>
+/// <remarks>
+/// Handles numbers, quoted strings, identifiers with dotted paths and subscripts, operators, and array/dictionary literals.
+/// Updated to robustly recognize 'in', 'starts with', 'matches', and '..' operators with flexible spacing and case.
+/// </remarks>
 function TTina4Twig.Tokenize(const Expr: String): TArray<String>;
 var
   Tokens: TList<String>;
@@ -229,6 +238,14 @@ begin
       if CharInSet(Expr[I], [' ', #9, #10, #13]) then
       begin
         Inc(I);
+        Continue;
+      end;
+
+      // Handle '..' operator before numbers
+      if (I < Length(Expr)) and (Expr[I] = '.') and (Expr[I + 1] = '.') then
+      begin
+        Tokens.Add('..');
+        Inc(I, 2);
         Continue;
       end;
 
@@ -329,7 +346,7 @@ begin
         Continue;
       end;
 
-      // Handle numbers
+      // Handle numbers (integers and decimals)
       if CharInSet(Expr[I], ['0'..'9', '-']) then
       begin
         Token := Expr[I];
@@ -339,8 +356,11 @@ begin
         begin
           if Expr[I] = '.' then
           begin
-            if HasDot then Break;
+            if HasDot then Break; // Only one decimal point allowed
             HasDot := True;
+            // Ensure not followed by another dot (to avoid '..')
+            if (I < Length(Expr)) and (Expr[I + 1] = '.') then
+              Break;
             Token := Token + '.';
             Inc(I);
             Continue;
@@ -362,6 +382,9 @@ begin
         begin
           if Expr[I] = '.' then
           begin
+            // Ensure not followed by another dot (to avoid '..')
+            if (I < Length(Expr)) and (Expr[I + 1] = '.') then
+              Break;
             Token := Token + '.';
             Inc(I);
             if (I > Length(Expr)) or not CharInSet(Expr[I], ['a'..'z', 'A'..'Z', '_']) then
@@ -514,6 +537,8 @@ begin
 
       Inc(I);
     end;
+    // Debug: Log tokenized output
+    //WriteLn('Debug: Tokenize Input=', Expr, ' Output=', String.Join(' ', Tokens.ToArray));
     Result := Tokens.ToArray;
   finally
     Tokens.Free;
@@ -527,7 +552,7 @@ end;
 /// <returns>Array of tokens in RPN.</returns>
 /// <remarks>
 /// Uses the Shunting Yard algorithm to handle operator precedence and parentheses.
-/// Updated to correctly order operands for 'in', 'starts with', and 'matches' operators.
+/// Correctly orders operands for 'in', 'starts with', 'matches', and '..' operators.
 /// </remarks>
 function InfixToRPN(const Tokens: TArray<String>): TArray<String>;
 var
@@ -560,6 +585,8 @@ begin
     Precedence.Add('in', 0);
     Precedence.Add('starts with', 0);
     Precedence.Add('matches', 0);
+    Precedence.Add('..', 0);
+
     Output := TList<String>.Create;
     OpStack := TStack<String>.Create;
     try
@@ -568,6 +595,8 @@ begin
       ParenDepth := 0;
       FilterChain := '';
       LastAppended := '';
+      // Debug: Log input tokens
+      //WriteLn('Debug: InfixToRPN Input=', String.Join(' ', Tokens));
       while I <= High(Tokens) do
       begin
         Token := Tokens[I];
@@ -587,7 +616,7 @@ begin
             if Output.Count > 0 then
             begin
               Top := Output[Output.Count - 1];
-              if not Precedence.ContainsKey(Top) then
+              if not Precedence.ContainsKey(Top) and (Top <> '(') and (Top <> ')') and (Top <> ',') then
               begin
                 FilterChain := Top;
                 Output.Delete(Output.Count - 1);
@@ -613,8 +642,10 @@ begin
           if (ParenDepth = 0) and (LastAppended <> '|') and
              ((I > High(Tokens)) or (Tokens[I] <> '|')) then
           begin
-            Output.Add(FilterChain); // Add completed filter chain
+            Output.Add(FilterChain);
             InFilter := False;
+            // Debug: Log filter chain
+            //WriteLn('Debug: Added FilterChain=', FilterChain, ' Output=', String.Join(' ', Output.ToArray));
             Continue;
           end;
           Continue;
@@ -630,6 +661,8 @@ begin
         begin
           Output.Add(Token);
           Inc(I);
+          // Debug: Log operand
+          //WriteLn('Debug: Added Operand=', Token, ' Output=', String.Join(' ', Output.ToArray));
           Continue;
         end;
         // Handle parentheses
@@ -637,6 +670,8 @@ begin
         begin
           OpStack.Push(Token);
           Inc(I);
+          // Debug: Log push to stack
+          //WriteLn('Debug: Pushed to OpStack=', Token, ' OpStack=', String.Join(' ', OpStack.ToArray));
           Continue;
         end;
         if Token = ')' then
@@ -647,6 +682,8 @@ begin
             raise Exception.Create('Mismatched parentheses');
           OpStack.Pop; // Remove '('
           Inc(I);
+          // Debug: Log after parentheses
+          //WriteLn('Debug: Processed ) Output=', String.Join(' ', Output.ToArray), ' OpStack=', String.Join(' ', OpStack.ToArray));
           Continue;
         end;
         // Handle comma (used in filter arguments, e.g., date('U'))
@@ -654,8 +691,9 @@ begin
         begin
           while (OpStack.Count > 0) and (OpStack.Peek <> '(') do
             Output.Add(OpStack.Pop);
-          Output.Add(Token);
           Inc(I);
+          // Debug: Log after comma
+          //WriteLn('Debug: Processed , Output=', String.Join(' ', Output.ToArray), ' OpStack=', String.Join(' ', OpStack.ToArray));
           Continue;
         end;
         // Handle operators
@@ -666,12 +704,16 @@ begin
           Top := OpStack.Peek;
           if not Precedence.TryGetValue(Top, TopPrec) then
             Break;
-          if Precedence[Token] >= TopPrec then // Changed to >= for correct operator precedence
+          if Precedence[Token] >= TopPrec then // Use >= for standard precedence
             Break;
           Output.Add(OpStack.Pop);
+          // Debug: Log operator pop
+          //WriteLn('Debug: Popped Operator=', Top, ' Output=', String.Join(' ', Output.ToArray));
         end;
         OpStack.Push(Token);
         Inc(I);
+        // Debug: Log operator push
+        //WriteLn('Debug: Pushed Operator=', Token, ' OpStack=', String.Join(' ', OpStack.ToArray));
       end;
       // Pop remaining operators
       while OpStack.Count > 0 do
@@ -680,8 +722,12 @@ begin
         if Top = '(' then
           raise Exception.Create('Mismatched parentheses');
         Output.Add(Top);
+        // Debug: Log final operator pop
+        //WriteLn('Debug: Final Pop Operator=', Top, ' Output=', String.Join(' ', Output.ToArray));
       end;
       Result := Output.ToArray;
+      // Debug: Log final RPN output
+      //WriteLn('Debug: InfixToRPN Final Output=', String.Join(' ', Result));
     finally
       Output.Free;
       OpStack.Free;
@@ -698,8 +744,9 @@ end;
 /// <param name="Context">The context dictionary for variable resolution.</param>
 /// <returns>The evaluated result as a TValue.</returns>
 /// <remarks>
-/// Processes arithmetic operations, filter chains, comparisons, and 'in', 'starts with', 'matches' operators.
-/// Updated to safely handle regex evaluation for 'matches' operator.
+/// Processes arithmetic operations, filter chains, comparisons, 'in', 'starts with', 'matches', and range '..' operators.
+/// Updated to safely handle regex evaluation for 'matches' operator and range operator for array creation.
+/// Ensures integer operands for '..' by converting strings and floats to integers where possible.
 /// </remarks>
 function TTina4Twig.EvaluateRPN(const RPN: TArray<String>; const Context: TDictionary<String, TValue>): TValue;
 var
@@ -723,8 +770,10 @@ var
 begin
   Stack := TStack<TValue>.Create;
   try
+    //WriteLn('Debug: EvaluateRPN Input=', String.Join(' ', RPN));
     for Token in RPN do
     begin
+      //WriteLn('Debug: Processing Token=', Token, ' StackCount=', Stack.Count);
       if Token.Contains('|') then
       begin
         Parts := SplitOnTopLevel(Token, '|');
@@ -782,17 +831,36 @@ begin
             CurrentVal := TValue.From<String>('(filter ' + FuncName + ' not found)');
         end;
         Stack.Push(CurrentVal);
+        //WriteLn('Debug: After Filter=', Token, ' StackCount=', Stack.Count);
         Continue;
       end;
       if TryStrToInt64(Token, IA) then
-        Stack.Push(TValue.From<Int64>(IA))
+      begin
+        Stack.Push(TValue.From<Int64>(IA));
+        //WriteLn('Debug: Pushed Int=', Token, ' StackCount=', Stack.Count);
+      end
       else if TryStrToFloat(Token, FA) then
-        Stack.Push(TValue.From<Double>(FA))
+      begin
+        Stack.Push(TValue.From<Double>(FA));
+        //WriteLn('Debug: Pushed Float=', Token, ' StackCount=', Stack.Count);
+      end
       else if (Token.StartsWith('''') or Token.StartsWith('"')) and (Token.EndsWith(Token[1])) then
-        Stack.Push(TValue.From<String>(Copy(Token, 2, Length(Token) - 2)))
+      begin
+        Stack.Push(TValue.From<String>(Copy(Token, 2, Length(Token) - 2)));
+        //WriteLn('Debug: Pushed String=', Token, ' StackCount=', Stack.Count);
+      end
       else if not CharInSet(Token[1], ['+', '-', '*', '/', '%', '~', '<', '>', '=', '!']) and
-              (Token <> 'in') and (Token <> 'starts with') and (Token <> 'matches') then
-        Stack.Push(GetExpressionValue(Token, Context))
+              (Token <> 'in') and (Token <> 'starts with') and (Token <> 'matches') and (Token <> '..') then
+      begin
+        CurrentVal := GetExpressionValue(Token, Context);
+        // Convert string or float to integer if possible for numeric operations
+        if (CurrentVal.Kind in [tkString, tkUString]) and TryStrToInt64(CurrentVal.AsString, IA) then
+          CurrentVal := TValue.From<Int64>(IA)
+        else if CurrentVal.IsType<Double> and (Frac(CurrentVal.AsExtended) = 0) then
+          CurrentVal := TValue.From<Int64>(Trunc(CurrentVal.AsExtended));
+        Stack.Push(CurrentVal);
+        //WriteLn('Debug: Pushed Variable=', Token, ' Value=', CurrentVal.ToString, ' StackCount=', Stack.Count);
+      end
       else
       begin
         if Stack.Count < 2 then
@@ -802,16 +870,28 @@ begin
             A := Stack.Pop;
             FA := GetAsExtendedLenient(A);
             Stack.Push(TValue.From<Double>(-FA));
+            //WriteLn('Debug: After Unary Minus=', Token, ' StackCount=', Stack.Count);
             Continue;
           end;
-          raise Exception.Create('Invalid expression: insufficient operands for ' + Token);
+          raise Exception.Create('Invalid expression: insufficient operands for ' + Token + ', StackCount=' + IntToStr(Stack.Count));
         end;
         B := Stack.Pop;
         A := Stack.Pop;
+        //WriteLn('Debug: Popped A=', A.ToString, ' B=', B.ToString, ' for Operator=', Token);
+        // Convert operands to integers if possible for numeric operations
+        if (A.Kind in [tkString, tkUString]) and TryStrToInt64(A.AsString, IA) then
+          A := TValue.From<Int64>(IA)
+        else if A.IsType<Double> and (Frac(A.AsExtended) = 0) then
+          A := TValue.From<Int64>(Trunc(A.AsExtended));
+        if (B.Kind in [tkString, tkUString]) and TryStrToInt64(B.AsString, IB) then
+          B := TValue.From<Int64>(IB)
+        else if B.IsType<Double> and (Frac(B.AsExtended) = 0) then
+          B := TValue.From<Int64>(Trunc(B.AsExtended));
         if Token = 'in' then
         begin
           Condition := Contains(A, B);
           Stack.Push(TValue.From<Boolean>(Condition));
+          //WriteLn('Debug: After In=', Token, ' StackCount=', Stack.Count);
           Continue;
         end;
         if Token = 'starts with' then
@@ -819,6 +899,7 @@ begin
           Condition := (A.Kind in [tkString, tkUString]) and (B.Kind in [tkString, tkUString]) and
                       A.AsString.StartsWith(B.AsString);
           Stack.Push(TValue.From<Boolean>(Condition));
+          //WriteLn('Debug: After Starts With=', Token, ' StackCount=', Stack.Count);
           Continue;
         end;
         if Token = 'matches' then
@@ -835,11 +916,35 @@ begin
           end
           else
             Stack.Push(TValue.From<Boolean>(False));
+          //WriteLn('Debug: After Matches=', Token, ' StackCount=', Stack.Count);
+          Continue;
+        end;
+        if Token = '..' then
+        begin
+          if not (A.IsOrdinal and B.IsOrdinal) then
+            raise Exception.Create('Range operator requires integer operands: A=' + A.ToString + ', B=' + B.ToString);
+          var start: Int64 := A.AsInt64;
+          var finish: Int64 := B.AsInt64;
+          var step: Integer := 1;
+          if start > finish then
+            step := -1;
+          var count: Integer := Abs(finish - start) + 1;
+          var arr: TArray<TValue>;
+          SetLength(arr, count);
+          var cur := start;
+          for var k := 0 to count - 1 do
+          begin
+            arr[k] := TValue.From<Int64>(cur);
+            cur := cur + step;
+          end;
+          Stack.Push(TValue.From<TArray<TValue>>(arr));
+          //WriteLn('Debug: After Range=', Token, ' StackCount=', Stack.Count);
           Continue;
         end;
         if Token = '~' then
         begin
           Stack.Push(TValue.From<String>(A.ToString + B.ToString));
+          ////WriteLn('Debug: After Concat=', Token, ' StackCount=', Stack.Count);
           Continue;
         end;
         if (Token = '==') or (Token = '!=') or (Token = '<') or (Token = '>') or (Token = '<=') or (Token = '>=') then
@@ -851,23 +956,36 @@ begin
           else
             Condition := CompareValues(A, B, Token);
           Stack.Push(TValue.From<Boolean>(Condition));
+          ////WriteLn('Debug: After Comparison=', Token, ' StackCount=', Stack.Count);
           Continue;
         end;
         FA := GetAsExtendedLenient(A);
         FB := GetAsExtendedLenient(B);
         case Token[1] of
           '+': Stack.Push(TValue.From<Double>(FA + FB));
-          '-': Stack.Push(TValue.From<Double>(FA - FB));
+          '-': 
+          begin
+            if A.IsOrdinal and B.IsOrdinal then
+              Stack.Push(TValue.From<Int64>(A.AsInt64 - B.AsInt64))
+            else
+              Stack.Push(TValue.From<Double>(FA - FB));
+          end;
           '*': Stack.Push(TValue.From<Double>(FA * FB));
           '/': if FB <> 0 then Stack.Push(TValue.From<Double>(FA / FB)) else Stack.Push(TValue.From<Double>(0));
           '%': if FB <> 0 then Stack.Push(TValue.From<Double>(fmod(FA, FB))) else Stack.Push(TValue.From<Double>(0));
         end;
+        ////WriteLn('Debug: After Arithmetic=', Token, ' StackCount=', Stack.Count);
       end;
     end;
-    if Stack.Count = 1 then
-      Result := Stack.Pop
-    else
-      raise Exception.Create('Invalid expression: stack imbalance');
+    if Stack.Count <> 1 then
+    begin
+      var StackItems: String;
+      for var Item in Stack do
+        StackItems := StackItems + Item.ToString + ', ';
+      raise Exception.Create('Invalid expression: stack imbalance, StackCount=' + IntToStr(Stack.Count) + ', Items=[' + StackItems + ']');
+    end;
+    Result := Stack.Pop;
+    ////WriteLn('Debug: EvaluateRPN Result=', Result.ToString);
   finally
     Stack.Free;
   end;
@@ -964,11 +1082,11 @@ var
   Val: TValue;
 begin
   CleanExpr := NormalizeExpression(Expr);
-  //WriteLn('Debug: GetExpressionValue Expr=', CleanExpr); // Debug: Log expression
+  //////WriteLn('Debug: GetExpressionValue Expr=', CleanExpr); // Debug: Log expression
   if ((CleanExpr.StartsWith('"') and CleanExpr.EndsWith('"')) or (CleanExpr.StartsWith('''') and CleanExpr.EndsWith(''''))) and (Length(CleanExpr) >= 2) then
   begin
     Result := TValue.From<String>(Copy(CleanExpr, 2, Length(CleanExpr) - 2));
-    //WriteLn('Debug: GetExpressionValue Result (String)=', Result.ToString); // Debug: Log string result
+    //////WriteLn('Debug: GetExpressionValue Result (String)=', Result.ToString); // Debug: Log string result
     Exit;
   end;
 
@@ -976,27 +1094,27 @@ begin
   if Lower = 'true' then
   begin
     Result := TValue.From<Boolean>(True);
-    //WriteLn('Debug: GetExpressionValue Result (Boolean)=', Result.ToString); // Debug: Log boolean result
+    //////WriteLn('Debug: GetExpressionValue Result (Boolean)=', Result.ToString); // Debug: Log boolean result
     Exit;
   end
   else if Lower = 'false' then
   begin
     Result := TValue.From<Boolean>(False);
-    //WriteLn('Debug: GetExpressionValue Result (Boolean)=', Result.ToString); // Debug: Log boolean result
+    //////WriteLn('Debug: GetExpressionValue Result (Boolean)=', Result.ToString); // Debug: Log boolean result
     Exit;
   end;
 
   if TryStrToInt64(CleanExpr, IntVal) then
   begin
     Result := TValue.From<Int64>(IntVal);
-    //WriteLn('Debug: GetExpressionValue Result (Int)=', Result.ToString); // Debug: Log integer result
+    //////WriteLn('Debug: GetExpressionValue Result (Int)=', Result.ToString); // Debug: Log integer result
     Exit;
   end;
 
   if TryStrToFloat(CleanExpr, FloatVal) then
   begin
     Result := TValue.From<Double>(FloatVal);
-    //WriteLn('Debug: GetExpressionValue Result (Float)=', Result.ToString); // Debug: Log float result
+    //////WriteLn('Debug: GetExpressionValue Result (Float)=', Result.ToString); // Debug: Log float result
     Exit;
   end;
 
@@ -1006,7 +1124,7 @@ begin
     if Inner = '' then
     begin
       Result := TValue.From<TArray<TValue>>([]);
-      //WriteLn('Debug: GetExpressionValue Result (Empty Array)=', Result.ToString); // Debug: Log empty array
+      //////WriteLn('Debug: GetExpressionValue Result (Empty Array)=', Result.ToString); // Debug: Log empty array
       Exit;
     end;
     ElemStrs := SplitOnTopLevel(Inner, ',');
@@ -1049,7 +1167,7 @@ begin
           Arr.Add(EvaluateExpression(Elem, Context));
       end;
       Result := TValue.From<TArray<TValue>>(Arr.ToArray);
-      //WriteLn('Debug: GetExpressionValue Result (Array)=', Result.ToString); // Debug: Log array result
+      //////WriteLn('Debug: GetExpressionValue Result (Array)=', Result.ToString); // Debug: Log array result
     finally
       Arr.Free;
     end;
@@ -1077,7 +1195,7 @@ begin
         Dict.Add(Key, Val);
       end;
       Result := TValue.From<TDictionary<String, TValue>>(Dict);
-      //WriteLn('Debug: GetExpressionValue Result (Dict)=', Result.ToString); // Debug: Log dict result
+      //////WriteLn('Debug: GetExpressionValue Result (Dict)=', Result.ToString); // Debug: Log dict result
     except
       Dict.Free;
       raise;
@@ -1088,12 +1206,12 @@ begin
   if CleanExpr.Contains('|') then
   begin
     Result := EvaluateExpression(CleanExpr, Context);
-    //WriteLn('Debug: GetExpressionValue Result ('+CleanExpr+')=', Result.ToString); // Debug: Log filter chain result
+    //////WriteLn('Debug: GetExpressionValue Result ('+CleanExpr+')=', Result.ToString); // Debug: Log filter chain result
   end
    else
   begin
     Result := ResolveVariablePath(CleanExpr, Context);
-    //WriteLn('Debug: GetExpressionValue Result ('+CleanExpr+')=', Result.ToString); // Debug: Log variable path result
+    //////WriteLn('Debug: GetExpressionValue Result ('+CleanExpr+')=', Result.ToString); // Debug: Log variable path result
   end;
 end;
 
@@ -2761,31 +2879,30 @@ begin
 end;
 
 /// <summary>
-/// Evaluates for loops in the template.
+/// Evaluates and processes for blocks in the template.
 /// </summary>
-/// <param name="Template">The template string.</param>
-/// <param name="Context">The context dictionary.</param>
-/// <returns>
-/// The template with for blocks expanded.
-/// </returns>
+/// <param name="Template">The template string containing for blocks.</param>
+/// <param name="Context">The context dictionary for variable resolution.</param>
+/// <returns>The template with for blocks evaluated and replaced.</returns>
 /// <remarks>
-/// Supports {% for var in list %}, arrays, dictionaries, JSON arrays, with optional else.
+/// Handles for loops like {% for i in 0..1000 if current_date <= max_date %}, including range expressions and if conditions.
+/// Iterates over arrays and renders the loop body for elements satisfying the condition.
+/// Supports nested loops, else clauses, and various iterable types.
 /// </remarks>
 function TTina4Twig.EvaluateForBlocks(const Template: String; Context: TDictionary<String, TValue>): String;
 var
   ResultSB: TStringBuilder;
   LowerTemplate: String;
   CurrentPos, ForTagStart, ForTagEnd, InPos, Depth, IfDepth, TagStart, TagEnd, ElseTagStart, ElseTagEnd, EndForTagStart, EndForTagEnd: Integer;
-  ForExpr, TagContent, LowerTagContent, VarName, ListExpr, BlockContent, ElseContent, Output: String;
-  Items: TArray<TDictionary<String, TValue>>;
-  Item: TDictionary<String, TValue>;
-  MergedContext: TDictionary<String, TValue>;
-  Pair: TPair<String, TValue>;
+  ForExpr, TagContent, LowerTagContent, VarName, ListExpr, IfExpr, BlockContent, ElseContent, Output: String;
   Value: TValue;
   ValueArray: TArray<TValue>;
   JSONArray: TJSONArray;
   I: Integer;
   ProcessedBlock, Rendered: String;
+  MergedContext: TDictionary<String, TValue>;
+  Pair: TPair<String, TValue>;
+  Condition: Boolean;
 begin
   ResultSB := TStringBuilder.Create;
   LowerTemplate := LowerCase(Template);
@@ -2814,7 +2931,15 @@ begin
         Continue;
       end;
       VarName := ForExpr.Substring(0, InPos).Trim;
+      // Check for 'if' condition
       ListExpr := ForExpr.Substring(InPos + 4).Trim;
+      IfExpr := '';
+      var IfPos := ListExpr.ToLower.IndexOf(' if ');
+      if IfPos >= 0 then
+      begin
+        IfExpr := Trim(ListExpr.Substring(IfPos + 4));
+        ListExpr := Trim(ListExpr.Substring(0, IfPos));
+      end;
       Depth := 1;
       IfDepth := 0;
       CurrentPos := ForTagEnd + 2;
@@ -2875,184 +3000,119 @@ begin
         ElseContent := '';
       end;
       Output := '';
-      Items := nil;
-      if ListExpr.StartsWith('[') and ListExpr.EndsWith(']') then
-      begin
-        var ArrayContent := ListExpr.Substring(1, ListExpr.Length - 2).Trim;
-        if ArrayContent = '' then
-          SetLength(Items, 0)
-        else
-        begin
-          var ArrayItems := ArrayContent.Split([','], TStringSplitOptions.ExcludeEmpty);
-          SetLength(Items, Length(ArrayItems));
-          for I := 0 to High(ArrayItems) do
-          begin
-            var Element := Trim(ArrayItems[I]).Replace('''', '', [rfReplaceAll]).Replace('"', '', [rfReplaceAll]);
-            Item := TDictionary<String, TValue>.Create;
-            Item.Add(VarName, TValue.From(Element));
-            Items[I] := Item;
-          end;
-        end;
-      end
-      else
-      begin
-        Value := ResolveVariablePath(ListExpr, Context);
-        if Value.IsEmpty then
-        begin
-          Output := RenderInternal(ElseContent, Context);
-          ResultSB.Append(Output);
-          CurrentPos := EndForTagEnd + 2;
-          Continue;
-        end;
-        if Value.IsArray then
-        begin
-          ValueArray := Value.AsType<TArray<TValue>>;
-          SetLength(Items, Length(ValueArray));
-          for I := 0 to High(ValueArray) do
-          begin
-            Item := TDictionary<String, TValue>.Create;
-            Item.Add(VarName, ValueArray[I]);
-            Items[I] := Item;
-          end;
-        end
-        else if Value.IsType<TDictionary<String, TValue>> then
-        begin
-          var Dict := Value.AsType<TDictionary<String, TValue>>;
-          SetLength(Items, Dict.Count);
-          I := 0;
-          for Pair in Dict do
-          begin
-            Item := TDictionary<String, TValue>.Create;
-            Item.Add(VarName, Pair.Value);
-            Items[I] := Item;
-            Inc(I);
-          end;
-        end
-        else if Value.IsType<TJSONArray> then
-        begin
-          JSONArray := Value.AsType<TJSONArray>;
-          SetLength(Items, JSONArray.Count);
-          for I := 0 to JSONArray.Count - 1 do
-          begin
-            Item := TDictionary<String, TValue>.Create;
-            var JSONVal := JSONArray.Items[I];
-            if JSONVal is TJSONString then
-              Item.Add(VarName, TValue.From<String>(TJSONString(JSONVal).Value))
-            else if JSONVal is TJSONNumber then
-            begin
-              var numStr := JSONVal.Value;
-              if (Pos('.', numStr) > 0) or (Pos('e', LowerCase(numStr)) > 0) then
-                Item.Add(VarName, TValue.From<Double>(TJSONNumber(JSONVal).AsDouble))
-              else
-                Item.Add(VarName, TValue.From<Int64>(TJSONNumber(JSONVal).AsInt64));
-            end
-            else if JSONVal is TJSONBool then
-              Item.Add(VarName, TValue.From<Boolean>(TJSONBool(JSONVal).AsBoolean))
-            else if JSONVal is TJSONNull then
-              Item.Add(VarName, TValue.Empty)
-            else if JSONVal is TJSONObject then
-            begin
-              var SubDict := TDictionary<String, TValue>.Create;
-              try
-                for var JPair in TJSONObject(JSONVal) do
-                begin
-                  var SubVal: TValue;
-                  if JPair.JsonValue is TJSONNumber then
-                  begin
-                    var numStr := JPair.JsonValue.Value;
-                    if (Pos('.', numStr) > 0) or (Pos('e', LowerCase(numStr)) > 0) then
-                      SubVal := TValue.From<Double>(TJSONNumber(JPair.JsonValue).AsDouble)
-                    else
-                      SubVal := TValue.From<Int64>(TJSONNumber(JPair.JsonValue).AsInt64);
-                  end
-                  else if JPair.JsonValue is TJSONBool then
-                    SubVal := TValue.From<Boolean>(TJSONBool(JPair.JsonValue).AsBoolean)
-                  else if JPair.JsonValue is TJSONString then
-                    SubVal := TValue.From<String>(TJSONString(JPair.JsonValue).Value)
-                  else if JPair.JsonValue is TJSONNull then
-                    SubVal := TValue.Empty
-                  else
-                    SubVal := TValue.From<String>(JPair.JsonValue.ToString);
-                  SubDict.AddOrSetValue(JPair.JsonString.Value, SubVal);
-                end;
-                Item.Add(VarName, TValue.From<TDictionary<String, TValue>>(SubDict));
-              except
-                SubDict.Free;
-                raise;
-              end;
-            end
-            else if JSONVal is TJSONArray then
-              Item.Add(VarName, TValue.From<TJSONArray>(TJSONArray(JSONVal)))
-            else
-              Item.Add(VarName, TValue.From<String>(JSONVal.ToString));
-            Items[I] := Item;
-          end;
-        end
-        else
-        begin
-          SetLength(Items, 0);
-          Output := RenderInternal(ElseContent, Context); // Render else block for non-iterable
-          ResultSB.Append(Output);
-          CurrentPos := EndForTagEnd + 2;
-          Continue;
-        end;
-      end;
-      if Length(Items) = 0 then
+      // Evaluate the iterable expression
+      Value := EvaluateExpression(ListExpr, Context);
+      if Value.IsEmpty or (Value.IsArray and (Length(Value.AsType<TArray<TValue>>) = 0)) or
+         (Value.IsType<TJSONArray> and (Value.AsType<TJSONArray>.Count = 0)) or
+         (Value.IsType<TDictionary<String, TValue>> and (Value.AsType<TDictionary<String, TValue>>.Count = 0)) then
       begin
         Output := RenderInternal(ElseContent, Context);
         ResultSB.Append(Output);
         CurrentPos := EndForTagEnd + 2;
-        if ListExpr.StartsWith('[') or Value.IsArray or Value.IsType<TJSONArray> then
-          for Item in Items do
-            Item.Free;
         Continue;
       end;
-      for Item in Items do
+      ValueArray := nil;
+      if Value.IsArray then
+      begin
+        ValueArray := Value.AsType<TArray<TValue>>;
+      end
+      else if Value.IsType<TJSONArray> then
+      begin
+        JSONArray := Value.AsType<TJSONArray>;
+        SetLength(ValueArray, JSONArray.Count);
+        for I := 0 to JSONArray.Count - 1 do
+        begin
+          var JSONVal := JSONArray.Items[I];
+          if JSONVal is TJSONString then
+            ValueArray[I] := TValue.From<String>(TJSONString(JSONVal).Value)
+          else if JSONVal is TJSONNumber then
+          begin
+            var numStr := JSONVal.Value;
+            if (Pos('.', numStr) > 0) or (Pos('e', LowerCase(numStr)) > 0) then
+              ValueArray[I] := TValue.From<Double>(TJSONNumber(JSONVal).AsDouble)
+            else
+              ValueArray[I] := TValue.From<Int64>(TJSONNumber(JSONVal).AsInt64);
+          end
+          else if JSONVal is TJSONBool then
+            ValueArray[I] := TValue.From<Boolean>(TJSONBool(JSONVal).AsBoolean)
+          else if JSONVal is TJSONNull then
+            ValueArray[I] := TValue.Empty
+          else if JSONVal is TJSONObject then
+          begin
+            var SubDict := TDictionary<String, TValue>.Create;
+            try
+              for var JPair in TJSONObject(JSONVal) do
+              begin
+                var SubVal: TValue;
+                if JPair.JsonValue is TJSONNumber then
+                begin
+                  var numStr := JPair.JsonValue.Value;
+                  if (Pos('.', numStr) > 0) or (Pos('e', LowerCase(numStr)) > 0) then
+                    SubVal := TValue.From<Double>(TJSONNumber(JPair.JsonValue).AsDouble)
+                  else
+                    SubVal := TValue.From<Int64>(TJSONNumber(JPair.JsonValue).AsInt64);
+                end
+                else if JPair.JsonValue is TJSONBool then
+                  SubVal := TValue.From<Boolean>(TJSONBool(JPair.JsonValue).AsBoolean)
+                else if JPair.JsonValue is TJSONString then
+                  SubVal := TValue.From<String>(TJSONString(JPair.JsonValue).Value)
+                else if JPair.JsonValue is TJSONNull then
+                  SubVal := TValue.Empty
+                else
+                  SubVal := TValue.From<String>(JPair.JsonValue.ToString);
+                SubDict.AddOrSetValue(JPair.JsonString.Value, SubVal);
+              end;
+              ValueArray[I] := TValue.From<TDictionary<String, TValue>>(SubDict);
+            except
+              SubDict.Free;
+              raise;
+            end;
+          end
+          else if JSONVal is TJSONArray then
+            ValueArray[I] := TValue.From<TJSONArray>(TJSONArray(JSONVal))
+          else
+            ValueArray[I] := TValue.From<String>(JSONVal.ToString);
+        end;
+      end
+      else if Value.IsType<TDictionary<String, TValue>> then
+      begin
+        var Dict := Value.AsType<TDictionary<String, TValue>>;
+        SetLength(ValueArray, Dict.Count);
+        I := 0;
+        for Pair in Dict do
+        begin
+          ValueArray[I] := Pair.Value;
+          Inc(I);
+        end;
+      end
+      else
+      begin
+        Output := RenderInternal(ElseContent, Context);
+        ResultSB.Append(Output);
+        CurrentPos := EndForTagEnd + 2;
+        Continue;
+      end;
+      if Length(ValueArray) = 0 then
+      begin
+        Output := RenderInternal(ElseContent, Context);
+        ResultSB.Append(Output);
+        CurrentPos := EndForTagEnd + 2;
+        Continue;
+      end;
+      for I := 0 to High(ValueArray) do
       begin
         MergedContext := TDictionary<String, TValue>.Create;
         try
           for Pair in Context do
             MergedContext.AddOrSetValue(Pair.Key, Pair.Value);
-          for Pair in Item do
+          MergedContext.AddOrSetValue(VarName, ValueArray[I]);
+          // Evaluate if condition
+          if IfExpr <> '' then
           begin
-            if Pair.Value.IsType<TDictionary<String, TValue>> then
-            begin
-              MergedContext.AddOrSetValue(Pair.Key, Pair.Value);
-            end
-            else if Pair.Value.IsType<TJSONObject> then
-            begin
-              var jsonObj := Pair.Value.AsType<TJSONObject>;
-              var subDict := TDictionary<String, TValue>.Create;
-              try
-                for var jsonPair in jsonObj do
-                begin
-                  var val: TValue;
-                  if jsonPair.JsonValue is TJSONNumber then
-                  begin
-                    var numStr := jsonPair.JsonValue.Value;
-                    if (Pos('.', numStr) > 0) or (Pos('e', LowerCase(numStr)) > 0) then
-                      val := TValue.From<Double>(TJSONNumber(jsonPair.JsonValue).AsDouble)
-                    else
-                      val := TValue.From<Int64>(TJSONNumber(jsonPair.JsonValue).AsInt64);
-                  end
-                  else if jsonPair.JsonValue is TJSONBool then
-                    val := TValue.From<Boolean>(TJSONBool(jsonPair.JsonValue).AsBoolean)
-                  else if jsonPair.JsonValue is TJSONString then
-                    val := TValue.From<String>(TJSONString(jsonPair.JsonValue).Value)
-                  else if jsonPair.JsonValue is TJSONNull then
-                    val := TValue.Empty
-                  else
-                    val := TValue.From<String>(jsonPair.JsonValue.ToString);
-                  subDict.AddOrSetValue(jsonPair.JsonString.Value, val);
-                end;
-                MergedContext.AddOrSetValue(Pair.Key, TValue.From<TDictionary<String, TValue>>(subDict));
-              except
-                subDict.Free;
-                raise;
-              end;
-            end
-            else
-              MergedContext.AddOrSetValue(Pair.Key, Pair.Value);
+            var ConditionVal := EvaluateExpression(IfExpr, MergedContext);
+            Condition := ToBool(ConditionVal);
+            if not Condition then
+              Continue;
           end;
           ProcessedBlock := EvaluateSetBlocks(BlockContent, MergedContext);
           ProcessedBlock := EvaluateExtends(ProcessedBlock, MergedContext);
@@ -3067,9 +3127,6 @@ begin
           MergedContext.Free;
         end;
       end;
-      if (ListExpr.StartsWith('[') and ListExpr.EndsWith(']')) or Value.IsArray or Value.IsType<TJSONArray> then
-        for Item in Items do
-          Item.Free;
       ResultSB.Append(Output);
       CurrentPos := EndForTagEnd + 2;
     end;
@@ -4130,9 +4187,179 @@ begin
 
   FFilters.Add('map',
     function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
+    var
+      ArrowExpr, VarName, Expr: String;
+      Arr: TArray<TValue>;
+      JSONArray: TJSONArray;
+      Dict: TDictionary<String, TValue>;
+      ResultArr: TList<TValue>;
+      LocalContext: TDictionary<String, TValue>;
+      I: Integer;
+      Pair: TPair<String, TValue>;
+      PosArrow: Integer;
     begin
-      // Stub: map not implemented
-      Result := Input.ToString;
+      if Length(Args) = 0 then
+        Exit(Input.ToString);
+      ArrowExpr := Trim(Args[0]);
+      // Parse arrow function: e.g., "task => task.end_date"
+      PosArrow := Pos('=>', ArrowExpr);
+      if PosArrow <= 0 then
+        raise Exception.Create('Invalid map filter argument: expected arrow function, got ' + ArrowExpr);
+      VarName := Trim(Copy(ArrowExpr, 1, PosArrow - 1));
+      Expr := Trim(Copy(ArrowExpr, PosArrow + 2, MaxInt));
+      if (VarName = '') or (Expr = '') then
+        raise Exception.Create('Invalid map filter argument: empty variable or expression in ' + ArrowExpr);
+
+      ResultArr := TList<TValue>.Create;
+      try
+        // Handle input types
+        if Input.IsArray then
+        begin
+          Arr := Input.AsType<TArray<TValue>>;
+          for I := 0 to High(Arr) do
+          begin
+            LocalContext := TDictionary<String, TValue>.Create;
+            try
+              // Copy parent context
+              for Pair in Context do
+                LocalContext.AddOrSetValue(Pair.Key, Pair.Value);
+              // Set loop variable
+              LocalContext.AddOrSetValue(VarName, Arr[I]);
+              // Evaluate expression
+              ResultArr.Add(EvaluateExpression(Expr, LocalContext));
+            finally
+              LocalContext.Free;
+            end;
+          end;
+        end
+        else if Input.IsObject and (Input.AsObject is TJSONArray) then
+        begin
+          JSONArray := TJSONArray(Input.AsObject);
+          for I := 0 to JSONArray.Count - 1 do
+          begin
+            LocalContext := TDictionary<String, TValue>.Create;
+            try
+              for Pair in Context do
+                LocalContext.AddOrSetValue(Pair.Key, Pair.Value);
+              // Convert JSON value to TValue
+              var JSONVal := JSONArray.Items[I];
+              var Val: TValue;
+              if JSONVal is TJSONString then
+                Val := TValue.From<String>(TJSONString(JSONVal).Value)
+              else if JSONVal is TJSONNumber then
+              begin
+                var numStr := JSONVal.Value;
+                if (Pos('.', numStr) > 0) or (Pos('e', LowerCase(numStr)) > 0) then
+                  Val := TValue.From<Double>(TJSONNumber(JSONVal).AsDouble)
+                else
+                  Val := TValue.From<Int64>(TJSONNumber(JSONVal).AsInt64);
+              end
+              else if JSONVal is TJSONBool then
+                Val := TValue.From<Boolean>(TJSONBool(JSONVal).AsBoolean)
+              else if JSONVal is TJSONNull then
+                Val := TValue.Empty
+              else if JSONVal is TJSONObject then
+              begin
+                var SubDict := TDictionary<String, TValue>.Create;
+                try
+                  for var JPair in TJSONObject(JSONVal) do
+                  begin
+                    var SubVal: TValue;
+                    if JPair.JsonValue is TJSONNumber then
+                    begin
+                      var numStr := JPair.JsonValue.Value;
+                      if (Pos('.', numStr) > 0) or (Pos('e', LowerCase(numStr)) > 0) then
+                        SubVal := TValue.From<Double>(TJSONNumber(JPair.JsonValue).AsDouble)
+                      else
+                        SubVal := TValue.From<Int64>(TJSONNumber(JPair.JsonValue).AsInt64);
+                    end
+                    else if JPair.JsonValue is TJSONBool then
+                      SubVal := TValue.From<Boolean>(TJSONBool(JPair.JsonValue).AsBoolean)
+                    else if JPair.JsonValue is TJSONString then
+                      SubVal := TValue.From<String>(TJSONString(JPair.JsonValue).Value)
+                    else if JPair.JsonValue is TJSONNull then
+                      SubVal := TValue.Empty
+                    else
+                      SubVal := TValue.From<String>(JPair.JsonValue.ToString);
+                    SubDict.AddOrSetValue(JPair.JsonString.Value, SubVal);
+                  end;
+                  Val := TValue.From<TDictionary<String, TValue>>(SubDict);
+                except
+                  SubDict.Free;
+                  raise;
+                end;
+              end
+              else
+                Val := TValue.From<String>(JSONVal.ToString);
+              LocalContext.AddOrSetValue(VarName, Val);
+              ResultArr.Add(EvaluateExpression(Expr, LocalContext));
+            finally
+              LocalContext.Free;
+            end;
+          end;
+        end
+        else if Input.IsObject and (Input.AsObject is TDictionary<String, TValue>) then
+        begin
+          Dict := TDictionary<String, TValue>(Input.AsObject);
+          for Pair in Dict do
+          begin
+            LocalContext := TDictionary<String, TValue>.Create;
+            try
+              for var ParentPair in Context do
+                LocalContext.AddOrSetValue(ParentPair.Key, ParentPair.Value);
+              LocalContext.AddOrSetValue(VarName, Pair.Value);
+              ResultArr.Add(EvaluateExpression(Expr, LocalContext));
+            finally
+              LocalContext.Free;
+            end;
+          end;
+        end
+        else
+        begin
+          ResultArr.Free;
+          Exit(Input.ToString); // Return input if not iterable
+        end;
+
+        // Convert result to string representation for filter chaining
+        var ResultArray := ResultArr.ToArray;
+        var SB := TStringBuilder.Create;
+        try
+          SB.Append('[');
+          for I := 0 to High(ResultArray) do
+          begin
+            if I > 0 then
+              SB.Append(',');
+            if ResultArray[I].Kind in [tkString, tkUString] then
+              SB.Append('"' + StringReplace(ResultArray[I].AsString, '"', '\"', [rfReplaceAll]) + '"')
+            else if ResultArray[I].IsType<TDictionary<String, TValue>> then
+            begin
+              SB.Append('{');
+              var SubDict := ResultArray[I].AsType<TDictionary<String, TValue>>;
+              var Keys := SubDict.Keys.ToArray;
+              for var J := 0 to High(Keys) do
+              begin
+                if J > 0 then
+                  SB.Append(',');
+                SB.Append('"' + Keys[J] + '":');
+                var Val := SubDict[Keys[J]];
+                if Val.Kind in [tkString, tkUString] then
+                  SB.Append('"' + StringReplace(Val.AsString, '"', '\"', [rfReplaceAll]) + '"')
+                else
+                  SB.Append(Val.ToString);
+              end;
+              SB.Append('}');
+            end
+            else
+              SB.Append(ResultArray[I].ToString);
+          end;
+          SB.Append(']');
+          Result := SB.ToString;
+        finally
+          SB.Free;
+        end;
+      finally
+        ResultArr.Free;
+      end;
     end);
 
   FFilters.Add('markdown_to_html',

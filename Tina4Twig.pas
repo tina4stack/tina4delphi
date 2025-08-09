@@ -3998,27 +3998,6 @@ begin
       Result := FFilters['date'](Input, ['hh:nn:ss'], Context);
     end);
 
-  FFilters.Add('html_to_markdown',
-    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
-    begin
-      // Stub: html-to-markdown not implemented
-      Result := Input.ToString;
-    end);
-
-  FFilters.Add('inky_to_html',
-    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
-    begin
-      // Stub: inky-to-html not implemented
-      Result := Input.ToString;
-    end);
-
-  FFilters.Add('inline_css',
-    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
-    begin
-      // Stub: inline CSS not implemented
-      Result := Input.ToString;
-    end);
-
   FFilters.Add('join',
     function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
     var
@@ -4362,12 +4341,296 @@ begin
       end;
     end);
 
-  FFilters.Add('markdown_to_html',
+      FFilters.Add('min',
     function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
+    var
+      Arr: TArray<TValue>;
+      JSONArray: TJSONArray;
+      Dict: TDictionary<String, TValue>;
+      MinVal: TValue;
+      I: Integer;
+      Val, Min: Extended;
+      StrVal, MinStr: String;
+      IsNumeric: Boolean;
     begin
-      // Stub: markdown-to-html not implemented
-      Result := Input.ToString;
+      MinVal := TValue.Empty;
+      Min := MaxDouble; // Initialize to maximum possible value
+      MinStr := '';
+      if Input.IsArray then
+      begin
+        Arr := Input.AsType<TArray<TValue>>;
+        if Length(Arr) = 0 then
+          Exit('');
+        for I := 0 to High(Arr) do
+        begin
+          IsNumeric := False;
+          if Arr[I].IsOrdinal then
+          begin
+            Val := Arr[I].AsInt64;
+            IsNumeric := True;
+          end
+          else if Arr[I].IsType<Double> then
+          begin
+            Val := Arr[I].AsExtended;
+            IsNumeric := True;
+          end
+          else if (Arr[I].Kind in [tkString, tkUString]) and TryStrToFloat(Arr[I].AsString, Val) then
+          begin
+            IsNumeric := True;
+          end
+          else if Arr[I].Kind in [tkString, tkUString] then
+          begin
+            StrVal := Arr[I].AsString;
+            if (MinStr = '') or (StrVal < MinStr) then
+            begin
+              MinStr := StrVal;
+              MinVal := Arr[I];
+            end;
+          end;
+          if IsNumeric and (Val < Min) then
+          begin
+            Min := Val;
+            MinVal := Arr[I];
+          end;
+        end;
+      end
+      else if Input.IsObject and (Input.AsObject is TJSONArray) then
+      begin
+        JSONArray := TJSONArray(Input.AsObject);
+        if JSONArray.Count = 0 then
+          Exit('');
+        for I := 0 to JSONArray.Count - 1 do
+        begin
+          IsNumeric := False;
+          var JSONVal := JSONArray.Items[I];
+          if JSONVal is TJSONNumber then
+          begin
+            Val := TJSONNumber(JSONVal).AsDouble;
+            IsNumeric := True;
+          end
+          else if JSONVal is TJSONString then
+          begin
+            StrVal := TJSONString(JSONVal).Value;
+            if TryStrToFloat(StrVal, Val) then
+            begin
+              IsNumeric := True;
+            end
+            else if (MinStr = '') or (StrVal < MinStr) then
+            begin
+              MinStr := StrVal;
+              MinVal := TValue.From<String>(StrVal);
+            end;
+          end;
+          if IsNumeric and (Val < Min) then
+          begin
+            Min := Val;
+            MinVal := TValue.From<Double>(Val);
+          end;
+        end;
+      end
+      else if Input.IsObject and (Input.AsObject is TDictionary<String, TValue>) then
+      begin
+        Dict := TDictionary<String, TValue>(Input.AsObject);
+        if Dict.Count = 0 then
+          Exit('');
+        for var Pair in Dict do
+        begin
+          IsNumeric := False;
+          if Pair.Value.IsOrdinal then
+          begin
+            Val := Pair.Value.AsInt64;
+            IsNumeric := True;
+          end
+          else if Pair.Value.IsType<Double> then
+          begin
+            Val := Pair.Value.AsExtended;
+            IsNumeric := True;
+          end
+          else if (Pair.Value.Kind in [tkString, tkUString]) and TryStrToFloat(Pair.Value.AsString, Val) then
+          begin
+            IsNumeric := True;
+          end
+          else if Pair.Value.Kind in [tkString, tkUString] then
+          begin
+            StrVal := Pair.Value.AsString;
+            if (MinStr = '') or (StrVal < MinStr) then
+            begin
+              MinStr := StrVal;
+              MinVal := Pair.Value;
+            end;
+          end;
+          if IsNumeric and (Val < Min) then
+          begin
+            Min := Val;
+            MinVal := Pair.Value;
+          end;
+        end;
+      end
+      else if Input.Kind in [tkString, tkUString] then
+      begin
+        var Str := Input.AsString;
+        if Str = '' then
+          Exit('');
+        MinVal := TValue.From<String>(Str[1]);
+        for I := 1 to Length(Str) do
+        begin
+          StrVal := Str[I];
+          if StrVal < MinVal.AsString then
+            MinVal := TValue.From<String>(StrVal);
+        end;
+      end
+      else
+      begin
+        Exit(Input.ToString); // Non-iterable input returns as-is
+      end;
+      Result := MinVal.ToString;
     end);
+
+  FFilters.Add('max',
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
+    var
+      Arr: TArray<TValue>;
+      JSONArray: TJSONArray;
+      Dict: TDictionary<String, TValue>;
+      MaxVal: TValue;
+      I: Integer;
+      Val, Max: Extended;
+      StrVal, MaxStr: String;
+      IsNumeric: Boolean;
+    begin
+      MaxVal := TValue.Empty;
+      Max := -MaxDouble; // Initialize to minimum possible value
+      MaxStr := '';
+      if Input.IsArray then
+      begin
+        Arr := Input.AsType<TArray<TValue>>;
+        if Length(Arr) = 0 then
+          Exit('');
+        for I := 0 to High(Arr) do
+        begin
+          IsNumeric := False;
+          if Arr[I].IsOrdinal then
+          begin
+            Val := Arr[I].AsInt64;
+            IsNumeric := True;
+          end
+          else if Arr[I].IsType<Double> then
+          begin
+            Val := Arr[I].AsExtended;
+            IsNumeric := True;
+          end
+          else if (Arr[I].Kind in [tkString, tkUString]) and TryStrToFloat(Arr[I].AsString, Val) then
+          begin
+            IsNumeric := True;
+          end
+          else if Arr[I].Kind in [tkString, tkUString] then
+          begin
+            StrVal := Arr[I].AsString;
+            if (MaxStr = '') or (StrVal > MaxStr) then
+            begin
+              MaxStr := StrVal;
+              MaxVal := Arr[I];
+            end;
+          end;
+          if IsNumeric and (Val > Max) then
+          begin
+            Max := Val;
+            MaxVal := Arr[I];
+          end;
+        end;
+      end
+      else if Input.IsObject and (Input.AsObject is TJSONArray) then
+      begin
+        JSONArray := TJSONArray(Input.AsObject);
+        if JSONArray.Count = 0 then
+          Exit('');
+        for I := 0 to JSONArray.Count - 1 do
+        begin
+          IsNumeric := False;
+          var JSONVal := JSONArray.Items[I];
+          if JSONVal is TJSONNumber then
+          begin
+            Val := TJSONNumber(JSONVal).AsDouble;
+            IsNumeric := True;
+          end
+          else if JSONVal is TJSONString then
+          begin
+            StrVal := TJSONString(JSONVal).Value;
+            if TryStrToFloat(StrVal, Val) then
+            begin
+              IsNumeric := True;
+            end
+            else if (MaxStr = '') or (StrVal > MaxStr) then
+            begin
+              MaxStr := StrVal;
+              MaxVal := TValue.From<String>(StrVal);
+            end;
+          end;
+          if IsNumeric and (Val > Max) then
+          begin
+            Max := Val;
+            MaxVal := TValue.From<Double>(Val);
+          end;
+        end;
+      end
+      else if Input.IsObject and (Input.AsObject is TDictionary<String, TValue>) then
+      begin
+        Dict := TDictionary<String, TValue>(Input.AsObject);
+        if Dict.Count = 0 then
+          Exit('');
+        for var Pair in Dict do
+        begin
+          IsNumeric := False;
+          if Pair.Value.IsOrdinal then
+          begin
+            Val := Pair.Value.AsInt64;
+            IsNumeric := True;
+          end
+          else if Pair.Value.IsType<Double> then
+          begin
+            Val := Pair.Value.AsExtended;
+            IsNumeric := True;
+          end
+          else if (Pair.Value.Kind in [tkString, tkUString]) and TryStrToFloat(Pair.Value.AsString, Val) then
+          begin
+            IsNumeric := True;
+          end
+          else if Pair.Value.Kind in [tkString, tkUString] then
+          begin
+            StrVal := Pair.Value.AsString;
+            if (MaxStr = '') or (StrVal > MaxStr) then
+            begin
+              MaxStr := StrVal;
+              MaxVal := Pair.Value;
+            end;
+          end;
+          if IsNumeric and (Val > Max) then
+          begin
+            Max := Val;
+            MaxVal := Pair.Value;
+          end;
+        end;
+      end
+      else if Input.Kind in [tkString, tkUString] then
+      begin
+        var Str := Input.AsString;
+        if Str = '' then
+          Exit('');
+        MaxVal := TValue.From<String>(Str[1]);
+        for I := 1 to Length(Str) do
+        begin
+          StrVal := Str[I];
+          if StrVal > MaxVal.AsString then
+            MaxVal := TValue.From<String>(StrVal);
+        end;
+      end
+      else
+      begin
+        Exit(Input.ToString); // Non-iterable input returns as-is
+      end;
+      Result := MaxVal.ToString;
+    end);
+
 
   FFilters.Add('merge',
     function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String

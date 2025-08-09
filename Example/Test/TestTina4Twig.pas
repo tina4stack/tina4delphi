@@ -40,6 +40,7 @@ type
     procedure TestDateFormat;
     procedure TestRound;
     procedure TestForLoops;
+    procedure TestMinMax;
   end;
 
 implementation
@@ -374,8 +375,8 @@ begin
   Check(ReturnValue = 'OKOKOK', TemplateOrContent + ' - Should be OKOKOK, got ' + ReturnValue);
 
   TemplateOrContent := '{% set current_date = "2023-01-01" %}{% set max_date = "2023-12-31" %}{% for i in 0..1000 if current_date <= max_date %}OK{% endfor %}';
-ReturnValue := FTina4Twig.Render(TemplateOrContent);
-Check(Length(ReturnValue) = 1001 * Length('OK'), TemplateOrContent + ' - Should be OK repeated 1001 times, got length ' + IntToStr(Length(ReturnValue)));
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(Length(ReturnValue) = 1001 * Length('OK'), TemplateOrContent + ' - Should be OK repeated 1001 times, got length ' + IntToStr(Length(ReturnValue)));
 end;
 
 procedure TestTTina4Twig.TestFormat;
@@ -612,6 +613,31 @@ begin
   Check(ReturnValue = 'A<input type="text" name="Test" value="" size="20"/>', TemplateOrContent+'- Should be A<input type="text" name="Test" value="" size="20"/>, got '+ReturnValue);
 
 
+end;
+
+procedure TestTTina4Twig.TestMinMax;
+var
+  ReturnValue: string;
+  TemplateOrContent: string;
+begin
+  // Test max filter
+  TemplateOrContent := '{% set tasks = [{"end_date": "2023-01-01"}, {"end_date": "2023-02-01"}] %}{% set max_date = tasks|map(task => task.end_date)|max %}{{max_date}}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = '2023-02-01', TemplateOrContent + ' - Should be 2023-02-01, got ' + ReturnValue);
+
+  // Test min filter
+  TemplateOrContent := '{% set tasks = [{"end_date": "2023-01-01"}, {"end_date": "2023-02-01"}] %}{% set min_date = tasks|map(task => task.end_date)|min %}{{min_date}}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = '2023-01-01', TemplateOrContent + ' - Should be 2023-01-01, got ' + ReturnValue);
+
+  // Test numeric array
+  TemplateOrContent := '{% set numbers = [5, 2, 8, 1] %}{{ numbers|min }}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = '1', TemplateOrContent + ' - Should be 1, got ' + ReturnValue);
+
+  TemplateOrContent := '{% set numbers = [5, 2, 8, 1] %}{{ numbers|max }}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = '8', TemplateOrContent + ' - Should be 8, got ' + ReturnValue);
 end;
 
 procedure TestTTina4Twig.TestRemoveComments;

@@ -198,6 +198,15 @@ begin
 end;
 
 
+/// <summary>
+/// Tokenizes an expression into an array of tokens.
+/// </summary>
+/// <param name="Expr">The expression to tokenize.</param>
+/// <returns>An array of tokens representing the expression.</returns>
+/// <remarks>
+/// Handles numbers, quoted strings, identifiers with dotted paths and subscripts, operators, and array/dictionary literals.
+/// Updated to robustly recognize 'in', 'starts with', and 'matches' operators with flexible spacing and case.
+/// </remarks>
 function TTina4Twig.Tokenize(const Expr: String): TArray<String>;
 var
   Tokens: TList<String>;
@@ -208,9 +217,11 @@ var
   Depth: Integer;
   InQuote: Boolean;
   QuoteChar: Char;
+  LowerExpr: String;
 begin
   Tokens := TList<String>.Create;
   try
+    LowerExpr := LowerCase(Expr); // Precompute lowercase for case-insensitive checks
     I := 1;
     while I <= Length(Expr) do
     begin
@@ -221,7 +232,34 @@ begin
         Continue;
       end;
 
-      // Handle multi-character operators (<=, >=, ==, !=, etc.)
+      // Handle 'in' operator
+      if (I <= Length(Expr) - 1) and (LowerExpr[I] = 'i') and (LowerExpr[I + 1] = 'n') and
+         ((I + 1 = Length(Expr)) or CharInSet(Expr[I + 2], [' ', #9, #10, #13, ')', '}', ']', '''', '"'])) then
+      begin
+        Tokens.Add('in');
+        Inc(I, 2);
+        Continue;
+      end;
+
+      // Handle 'starts with' operator
+      if (I <= Length(Expr) - 10) and (Copy(LowerExpr, I, 11) = 'starts with') and
+         ((I + 10 = Length(Expr)) or CharInSet(Expr[I + 11], [' ', #9, #10, #13, '''', '"', ')', '}', ']'])) then
+      begin
+        Tokens.Add('starts with');
+        Inc(I, 11);
+        Continue;
+      end;
+
+      // Handle 'matches' operator
+      if (I <= Length(Expr) - 6) and (Copy(LowerExpr, I, 7) = 'matches') and
+         ((I + 6 = Length(Expr)) or CharInSet(Expr[I + 7], [' ', #9, #10, #13, '''', '"', ')', '}', ']'])) then
+      begin
+        Tokens.Add('matches');
+        Inc(I, 7);
+        Continue;
+      end;
+
+      // Handle multi-character operators (<=, >=, ==, !=, =>)
       if (I < Length(Expr)) then
       begin
         if (Expr[I] = '<') and (Expr[I + 1] = '=') then
@@ -256,29 +294,15 @@ begin
         end;
       end;
 
-      // Handle single < and >
-      if Expr[I] = '<' then
-      begin
-        Tokens.Add('<');
-        Inc(I);
-        Continue;
-      end;
-      if Expr[I] = '>' then
-      begin
-        Tokens.Add('>');
-        Inc(I);
-        Continue;
-      end;
-
       // Handle single-character operators
-      if CharInSet(Expr[I], ['+', '-', '*', '/', '%', '(', ')', '|', ',', '~']) then
+      if CharInSet(Expr[I], ['+', '-', '*', '/', '%', '(', ')', '|', ',', '~', '<', '>']) then
       begin
         Tokens.Add(Expr[I]);
         Inc(I);
         Continue;
       end;
 
-      // Handle quoted strings (improved to handle filter arguments like 'U')
+      // Handle quoted strings
       if Expr[I] in ['''', '"'] then
       begin
         Quote := Expr[I];
@@ -306,7 +330,7 @@ begin
       end;
 
       // Handle numbers
-      if CharInSet(Expr[I], ['0'..'9']) then
+      if CharInSet(Expr[I], ['0'..'9', '-']) then
       begin
         Token := Expr[I];
         Inc(I);
@@ -334,13 +358,7 @@ begin
       begin
         Token := Expr[I];
         Inc(I);
-        while (I <= Length(Expr)) and CharInSet(Expr[I], ['a'..'z', 'A'..'Z', '0'..'9', '_']) do
-        begin
-          Token := Token + Expr[I];
-          Inc(I);
-        end;
-        // Handle chained .prop [index]
-        while (I <= Length(Expr)) and (Expr[I] in ['.', '[']) do
+        while (I <= Length(Expr)) and CharInSet(Expr[I], ['a'..'z', 'A'..'Z', '0'..'9', '_', '.', '[']) do
         begin
           if Expr[I] = '.' then
           begin
@@ -390,8 +408,16 @@ begin
             end;
             if Depth > 0 then
               raise Exception.Create('Unmatched [ in expression');
+          end
+          else
+          begin
+            Token := Token + Expr[I];
+            Inc(I);
           end;
         end;
+        // Avoid adding partial operator tokens
+        if (Token = 'matches') or (Token = 'starts') or (Token = 'with') then
+          raise Exception.Create('Invalid partial operator: ' + Token);
         Tokens.Add(Token);
         Continue;
       end;
@@ -494,27 +520,36 @@ begin
   end;
 end;
 
+/// <summary>
+/// Converts an infix expression to Reverse Polish Notation (RPN).
+/// </summary>
+/// <param name="Tokens">Array of tokens in infix notation.</param>
+/// <returns>Array of tokens in RPN.</returns>
+/// <remarks>
+/// Uses the Shunting Yard algorithm to handle operator precedence and parentheses.
+/// Updated to correctly order operands for 'in', 'starts with', and 'matches' operators.
+/// </remarks>
 function InfixToRPN(const Tokens: TArray<String>): TArray<String>;
 var
   Output: TList<String>;
   OpStack: TStack<String>;
   Token, Top: String;
   Precedence: TDictionary<String, Integer>;
-  Dummy: Double;
   TopPrec: Integer;
   FilterChain: String;
   I: Integer;
   InFilter: Boolean;
   ParenDepth: Integer;
   LastAppended: String;
+  Dummy: Double;
 begin
   Precedence := TDictionary<String, Integer>.Create;
   try
-    Precedence.Add('+', 1);
-    Precedence.Add('-', 1);
-    Precedence.Add('*', 2);
-    Precedence.Add('/', 2);
-    Precedence.Add('%', 2);
+    Precedence.Add('+', 2);
+    Precedence.Add('-', 2);
+    Precedence.Add('*', 3);
+    Precedence.Add('/', 3);
+    Precedence.Add('%', 3);
     Precedence.Add('~', 1);
     Precedence.Add('==', 0);
     Precedence.Add('!=', 0);
@@ -522,6 +557,9 @@ begin
     Precedence.Add('>', 0);
     Precedence.Add('<=', 0);
     Precedence.Add('>=', 0);
+    Precedence.Add('in', 0);
+    Precedence.Add('starts with', 0);
+    Precedence.Add('matches', 0);
     Output := TList<String>.Create;
     OpStack := TStack<String>.Create;
     try
@@ -570,7 +608,6 @@ begin
               Dec(ParenDepth);
           end;
           Inc(I);
-          // Continue collecting filter tokens until the filter chain ends
           if (ParenDepth = 0) and (I <= High(Tokens)) and (Tokens[I] = '(') then
             Continue;
           if (ParenDepth = 0) and (LastAppended <> '|') and
@@ -582,11 +619,14 @@ begin
           end;
           Continue;
         end;
-        // Check if token is a number, quoted string, identifier
+        // Check if token is a number, quoted string, identifier, or array/dictionary literal
         if (TryStrToFloat(Token, Dummy) or
             (Token.StartsWith('''') and Token.EndsWith('''')) or
             (Token.StartsWith('"') and Token.EndsWith('"')) or
-            ((Length(Token) > 0) and not CharInSet(Token[1], ['+', '-', '*', '/', '%', '(', ')', ',', '~', '|']))) then
+            (Token.StartsWith('[') and Token.EndsWith(']')) or
+            (Token.StartsWith('{') and Token.EndsWith('}')) or
+            ((Length(Token) > 0) and not Precedence.ContainsKey(Token) and
+             (Token <> '(') and (Token <> ')') and (Token <> ','))) then
         begin
           Output.Add(Token);
           Inc(I);
@@ -612,6 +652,8 @@ begin
         // Handle comma (used in filter arguments, e.g., date('U'))
         if Token = ',' then
         begin
+          while (OpStack.Count > 0) and (OpStack.Peek <> '(') do
+            Output.Add(OpStack.Pop);
           Output.Add(Token);
           Inc(I);
           Continue;
@@ -621,18 +663,17 @@ begin
           raise Exception.Create('Unknown operator: ' + Token);
         while (OpStack.Count > 0) and (OpStack.Peek <> '(') do
         begin
-          if Precedence.TryGetValue(OpStack.Peek, TopPrec) then
-          begin
-            if Precedence[Token] > TopPrec then Break;
-            Output.Add(OpStack.Pop);
-          end
-          else
+          Top := OpStack.Peek;
+          if not Precedence.TryGetValue(Top, TopPrec) then
             Break;
+          if Precedence[Token] >= TopPrec then // Changed to >= for correct operator precedence
+            Break;
+          Output.Add(OpStack.Pop);
         end;
         OpStack.Push(Token);
         Inc(I);
       end;
-      // Pop remaining operators, checking for mismatched parentheses
+      // Pop remaining operators
       while OpStack.Count > 0 do
       begin
         Top := OpStack.Pop;
@@ -657,9 +698,8 @@ end;
 /// <param name="Context">The context dictionary for variable resolution.</param>
 /// <returns>The evaluated result as a TValue.</returns>
 /// <remarks>
-/// Processes arithmetic operations, filter chains, and variable resolutions.
-/// Includes debug logging for filter inputs and outputs.
-/// Converts filter outputs to numeric if they represent simple integers without signs or leading zeros.
+/// Processes arithmetic operations, filter chains, comparisons, and 'in', 'starts with', 'matches' operators.
+/// Updated to safely handle regex evaluation for 'matches' operator.
 /// </remarks>
 function TTina4Twig.EvaluateRPN(const RPN: TArray<String>; const Context: TDictionary<String, TValue>): TValue;
 var
@@ -685,7 +725,6 @@ begin
   try
     for Token in RPN do
     begin
-     // WriteLn('Debug: RPN Token=', Token); // Debug: Log each token
       if Token.Contains('|') then
       begin
         Parts := SplitOnTopLevel(Token, '|');
@@ -693,7 +732,6 @@ begin
           CurrentVal := Stack.Pop
         else
           CurrentVal := GetExpressionValue(Parts[0], Context);
-        //WriteLn('Debug: Filter Chain Initial Value=', CurrentVal.ToString); // Debug: Log initial value
         for J := 1 to High(Parts) do
         begin
           FilterExpr := Trim(Parts[J]);
@@ -716,11 +754,9 @@ begin
             FuncName := Trim(FilterExpr);
             SetLength(Args, 0);
           end;
-          //WriteLn('Debug: Applying Filter=', FuncName, ', Args=', String.Join(',', Args)); // Debug: Log filter and args
           if FFilters.TryGetValue(FuncName, Filter) then
           begin
             CurrentVal := TValue.From<String>(Filter(CurrentVal, Args, Context));
-            //WriteLn('Debug: Filter Output=', CurrentVal.ToString); // Debug: Log filter output
             IsSimpleInteger := TryStrToInt64(CurrentVal.AsString, IA);
             if IsSimpleInteger then
             begin
@@ -734,10 +770,7 @@ begin
               end;
             end;
             if IsSimpleInteger then
-            begin
               CurrentVal := TValue.From<Int64>(IA);
-              //WriteLn('Debug: Converted to Numeric=', CurrentVal.ToString); // Debug: Log numeric conversion
-            end;
           end
           else
             CurrentVal := TValue.From<String>('(filter ' + FuncName + ' not found)');
@@ -751,15 +784,44 @@ begin
         Stack.Push(TValue.From<Double>(FA))
       else if (Token.StartsWith('''') or Token.StartsWith('"')) and (Token.EndsWith(Token[1])) then
         Stack.Push(TValue.From<String>(Copy(Token, 2, Length(Token) - 2)))
-      else if not CharInSet(Token[1], ['+', '-', '*', '/', '%', '~']) then
+      else if not CharInSet(Token[1], ['+', '-', '*', '/', '%', '~', '<', '>', '=', '!']) and
+              (Token <> 'in') and (Token <> 'starts with') and (Token <> 'matches') then
         Stack.Push(GetExpressionValue(Token, Context))
       else
       begin
         if Stack.Count < 2 then
-          raise Exception.Create('Invalid expression');
+          raise Exception.Create('Invalid expression: insufficient operands for ' + Token);
         B := Stack.Pop;
         A := Stack.Pop;
-        //WriteLn('Debug: Operation=', Token, ', A=', A.ToString, ', B=', B.ToString); // Debug: Log operation
+        if Token = 'in' then
+        begin
+          Condition := Contains(A, B);
+          Stack.Push(TValue.From<Boolean>(Condition));
+          Continue;
+        end;
+        if Token = 'starts with' then
+        begin
+          Condition := (A.Kind in [tkString, tkUString]) and (B.Kind in [tkString, tkUString]) and
+                      A.AsString.StartsWith(B.AsString);
+          Stack.Push(TValue.From<Boolean>(Condition));
+          Continue;
+        end;
+        if Token = 'matches' then
+        begin
+          if (A.Kind in [tkString, tkUString]) and (B.Kind in [tkString, tkUString]) then
+          begin
+            try
+              Condition := TRegEx.IsMatch(A.AsString, B.AsString);
+            except
+              on E: Exception do
+                Condition := False; // Handle invalid regex patterns gracefully
+            end;
+            Stack.Push(TValue.From<Boolean>(Condition));
+          end
+          else
+            Stack.Push(TValue.From<Boolean>(False));
+          Continue;
+        end;
         if Token = '~' then
         begin
           Stack.Push(TValue.From<String>(A.ToString + B.ToString));
@@ -790,14 +852,23 @@ begin
     if Stack.Count = 1 then
       Result := Stack.Pop
     else
-      Result := TValue.Empty;
+      raise Exception.Create('Invalid expression: stack imbalance');
   finally
     Stack.Free;
   end;
 end;
 
 
-
+/// <summary>
+/// Evaluates an expression and returns its value.
+/// </summary>
+/// <param name="Expr">The expression to evaluate.</param>
+/// <param name="Context">The context dictionary for variable resolution.</param>
+/// <returns>The evaluated result as a TValue.</returns>
+/// <remarks>
+/// Uses tokenization and RPN to handle complex expressions including arithmetic, comparisons, and variable paths.
+/// Updated to handle single-token expressions more robustly.
+/// </remarks>
 function TTina4Twig.EvaluateExpression(const Expr: String; Context: TDictionary<String, TValue>): TValue;
 var
   Tokens: TArray<String>;
@@ -807,9 +878,17 @@ begin
   if Length(Tokens) = 0 then
     Exit(TValue.Empty);
   if Length(Tokens) = 1 then
-    Exit(GetExpressionValue(Tokens[0], Context));
+  begin
+    // Handle single-token expressions (e.g., a variable or literal)
+    Result := GetExpressionValue(Tokens[0], Context);
+    if Result.IsEmpty then
+      Result := TValue.From<Boolean>(False); // Fallback to False for undefined variables
+    Exit;
+  end;
   RPN := InfixToRPN(Tokens);
   Result := EvaluateRPN(RPN, Context);
+  if Result.IsEmpty then
+    Result := TValue.From<Boolean>(False); // Fallback to False for invalid expressions
 end;
 
 
@@ -995,12 +1074,12 @@ begin
   if CleanExpr.Contains('|') then
   begin
     Result := EvaluateExpression(CleanExpr, Context);
-    WriteLn('Debug: GetExpressionValue Result ('+CleanExpr+')=', Result.ToString); // Debug: Log filter chain result
+    //WriteLn('Debug: GetExpressionValue Result ('+CleanExpr+')=', Result.ToString); // Debug: Log filter chain result
   end
    else
   begin
     Result := ResolveVariablePath(CleanExpr, Context);
-    WriteLn('Debug: GetExpressionValue Result ('+CleanExpr+')=', Result.ToString); // Debug: Log variable path result
+    //WriteLn('Debug: GetExpressionValue Result ('+CleanExpr+')=', Result.ToString); // Debug: Log variable path result
   end;
 end;
 
@@ -1449,24 +1528,11 @@ var
   ResultSB: TStringBuilder;
   LowerTemplate: String;
   CurrentPos, IfTagStart, IfTagEnd, Depth, TagStart, TagEnd, ElseTagStart, ElseTagEnd, EndIfTagStart, EndIfTagEnd: Integer;
-  IfExpr, TagContent, LowerTagContent, VarName, Op, ValueRaw, BlockContent, ElseContent: String;
-  VarValue, CompareValue: TValue;
+  IfExpr, TagContent, LowerTagContent, BlockContent: String;
   Condition: Boolean;
   Blocks: TList<String>;
   Conditions: TList<Boolean>;
   SelectedBlock: String;
-  Regex: TRegEx;
-  Match: TMatch;
-
-  function TrimQuotes(const S: String): String;
-  begin
-    Result := S;
-    if ((Result.StartsWith('"') and Result.EndsWith('"')) or
-        (Result.StartsWith('''') and Result.EndsWith(''''))) and
-       (Result.Length >= 2) then
-      Result := Result.Substring(1, Result.Length - 2);
-  end;
-
 begin
   ResultSB := TStringBuilder.Create;
   LowerTemplate := LowerCase(Template);
@@ -1484,7 +1550,6 @@ begin
       IfTagEnd := LowerTemplate.IndexOf('%}', IfTagStart + 2);
       if IfTagEnd < 0 then Break;
       IfExpr := Trim(Template.Substring(IfTagStart + 2, IfTagEnd - IfTagStart - 2));
-      WriteLn('Debug: IfBlocks IfExpr=', IfExpr); // Debug: Log if expression
       if not IfExpr.ToLower.StartsWith('if') then
       begin
         CurrentPos := IfTagEnd + 2;
@@ -1502,60 +1567,8 @@ begin
       Blocks.Add('');
       Conditions.Add(False);
 
-      // Updated regex to handle arithmetic expressions
-      Regex := TRegEx.Create('^(.+?)\s*(==|!=|<=|>=|<|>|in|not in|starts with|ends with|matches)\s*(''[^'']*''|"[^"]*"|[^\s|%}]+)?$', [roIgnoreCase]);
-      Match := Regex.Match(IfExpr);
-      if Match.Success and (Match.Groups.Count > 1) then
-      begin
-        VarName := Trim(Match.Groups[1].Value); // e.g., 'value - task.duration'
-        if Match.Groups.Count > 2 then
-          Op := Trim(Match.Groups[2].Value) // e.g., '>'
-        else
-          Op := '';
-        if Match.Groups.Count > 3 then
-          ValueRaw := Trim(Match.Groups[3].Value) // e.g., '10'
-        else
-          ValueRaw := '';
-      end
-      else
-      begin
-        VarName := Trim(IfExpr);
-        Op := '';
-        ValueRaw := '';
-      end;
-      WriteLn('Debug: IfBlocks VarName=', VarName, ', Op=', Op, ', ValueRaw=', ValueRaw); // Debug: Log parsed condition
-
-      VarValue := GetExpressionValue(VarName, Context);
-      CompareValue := GetExpressionValue(ValueRaw, Context);
-      WriteLn('Debug: IfBlocks VarValue=', VarValue.ToString, ', CompareValue=', CompareValue.ToString); // Debug: Log condition values
-
-      if Op = '' then
-        Condition := ToBool(VarValue)
-      else if Op = '==' then
-        Condition := ValuesAreEqual(VarValue, CompareValue)
-      else if Op = '!=' then
-        Condition := not ValuesAreEqual(VarValue, CompareValue)
-      else if Op = '<' then
-        Condition := CompareValues(VarValue, CompareValue, '<')
-      else if Op = '>' then
-        Condition := CompareValues(VarValue, CompareValue, '>')
-      else if Op = '<=' then
-        Condition := CompareValues(VarValue, CompareValue, '<=')
-      else if Op = '>=' then
-        Condition := CompareValues(VarValue, CompareValue, '>=')
-      else if Op = 'in' then
-        Condition := Contains(VarValue, CompareValue)
-      else if Op = 'not in' then
-        Condition := not Contains(VarValue, CompareValue)
-      else if Op = 'starts with' then
-        Condition := (VarValue.Kind in [tkString, tkUString]) and (CompareValue.Kind in [tkString, tkUString]) and VarValue.AsString.StartsWith(CompareValue.AsString)
-      else if Op = 'ends with' then
-        Condition := (VarValue.Kind in [tkString, tkUString]) and (CompareValue.Kind in [tkString, tkUString]) and VarValue.AsString.EndsWith(CompareValue.AsString)
-      else if Op = 'matches' then
-        Condition := (VarValue.Kind in [tkString, tkUString]) and (CompareValue.Kind in [tkString, tkUString]) and TRegEx.IsMatch(VarValue.AsString, CompareValue.AsString)
-      else
-        Condition := False;
-      WriteLn('Debug: IfBlocks Condition=', Condition); // Debug: Log condition result
+      // Evaluate the condition using EvaluateExpression
+      Condition := ToBool(EvaluateExpression(IfExpr, Context));
       Conditions[0] := Condition;
 
       while True do
@@ -1578,55 +1591,7 @@ begin
             Blocks[Blocks.Count - 1] := Blocks[Blocks.Count - 1] + Template.Substring(CurrentPos, TagStart - CurrentPos);
             Blocks.Add('');
             IfExpr := Trim(TagContent.Substring(TagContent.ToLower.IndexOf('elseif') + 6));
-            Match := Regex.Match(IfExpr);
-            if Match.Success and (Match.Groups.Count > 1) then
-            begin
-              VarName := Trim(Match.Groups[1].Value);
-              if Match.Groups.Count > 2 then
-                Op := Trim(Match.Groups[2].Value)
-              else
-                Op := '';
-              if Match.Groups.Count > 3 then
-                ValueRaw := Trim(Match.Groups[3].Value)
-              else
-                ValueRaw := '';
-            end
-            else
-            begin
-              VarName := Trim(IfExpr);
-              Op := '';
-              ValueRaw := '';
-            end;
-            VarValue := GetExpressionValue(VarName, Context);
-            CompareValue := GetExpressionValue(ValueRaw, Context);
-            WriteLn('Debug: IfBlocks VarName=', VarName, ', VarValue=', VarValue.ToString, ', CompareValue=', ValueRaw); // Debug: Log elseif condition
-            if Op = '' then
-              Condition := ToBool(VarValue)
-            else if Op = '==' then
-              Condition := ValuesAreEqual(VarValue, CompareValue)
-            else if Op = '!=' then
-              Condition := not ValuesAreEqual(VarValue, CompareValue)
-            else if Op = '<' then
-              Condition := CompareValues(VarValue, CompareValue, '<')
-            else if Op = '>' then
-              Condition := CompareValues(VarValue, CompareValue, '>')
-            else if Op = '<=' then
-              Condition := CompareValues(VarValue, CompareValue, '<=')
-            else if Op = '>=' then
-              Condition := CompareValues(VarValue, CompareValue, '>=')
-            else if Op = 'in' then
-              Condition := Contains(VarValue, CompareValue)
-            else if Op = 'not in' then
-              Condition := not Contains(VarValue, CompareValue)
-            else if Op = 'starts with' then
-              Condition := (VarValue.Kind in [tkString, tkUString]) and (CompareValue.Kind in [tkString, tkUString]) and VarValue.AsString.StartsWith(CompareValue.AsString)
-            else if Op = 'ends with' then
-              Condition := (VarValue.Kind in [tkString, tkUString]) and (CompareValue.Kind in [tkString, tkUString]) and VarValue.AsString.EndsWith(CompareValue.AsString)
-            else if Op = 'matches' then
-              Condition := (VarValue.Kind in [tkString, tkUString]) and (CompareValue.Kind in [tkString, tkUString]) and TRegEx.IsMatch(VarValue.AsString, CompareValue.AsString)
-            else
-              Condition := False;
-            WriteLn('Debug: IfBlocks Condition=', Condition); // Debug: Log condition result
+            Condition := ToBool(EvaluateExpression(IfExpr, Context));
             Conditions.Add(Condition);
           end
           else
@@ -1662,7 +1627,6 @@ begin
           Blocks[Blocks.Count - 1] := Blocks[Blocks.Count - 1] + Template.Substring(CurrentPos, TagEnd + 2 - CurrentPos);
         CurrentPos := TagEnd + 2;
       end;
-
       if EndIfTagStart < 0 then
       begin
         Blocks[Blocks.Count - 1] := Blocks[Blocks.Count - 1] + Template.Substring(CurrentPos);
@@ -1670,18 +1634,15 @@ begin
       end
       else
         CurrentPos := EndIfTagEnd + 2;
-
       SelectedBlock := '';
-      for var I  := 0 to Conditions.Count - 1 do
+      for var I := 0 to Conditions.Count - 1 do
         if Conditions[I] then
         begin
           SelectedBlock := Blocks[I];
           Break;
         end;
-
       ResultSB.Append(RenderInternal(SelectedBlock, Context));
     end;
-
     ResultSB.Append(Template.Substring(CurrentPos));
     Result := ResultSB.ToString;
   finally
@@ -3404,23 +3365,45 @@ begin
     var
       dt: TDateTime;
       fmt: String;
+      S: String;
+      UnixTime: Int64;
     begin
+      var SavedFormatSettings := FormatSettings;
       if Length(Args) > 0 then
-        fmt := Args[0]
+      begin
+        fmt := Args[0];
+        if fmt.StartsWith('''') or fmt.StartsWith('"') then
+          fmt := Copy(fmt, 2, Length(fmt) - 2); // Remove quotes
+      end
       else
         fmt := FDateFormat;
 
       if Input.IsType<TDateTime> then
         dt := Input.AsType<TDateTime>
-      else if (Input.Kind in [tkString, tkUString]) and TryStrToDateTime(Input.AsString, dt) then
-        // Success
+      else if Input.Kind in [tkString, tkUString] then
+      begin
+        S := Input.AsString;
+        FormatSettings.LongDateFormat := 'yyyy-mm-dd hh:nn:ss'; // Set format for ISO 8601 parsing
+        FormatSettings.ShortDateFormat := 'yyyy-mm-dd';
+        if not TryStrToDateTime(S, dt) then
+        begin
+          FormatSettings := SavedFormatSettings; // Restore original settings
+          Exit('0'); // Return 0 for invalid dates
+        end;
+        FormatSettings := SavedFormatSettings; // Restore after parsing
+      end
       else
-        Exit('0');  // Return 0 for invalid to avoid arithmetic failure
+        Exit('0'); // Return 0 for invalid input types
+
       if UpperCase(fmt) = 'U' then
-        Result := IntToStr(DateTimeToUnix(dt))
+      begin
+        UnixTime := DateTimeToUnix(dt); // Explicitly convert to Int64
+        Result := IntToStr(UnixTime);
+      end
       else
         Result := FormatDateTime(fmt, dt);
     end);
+
 
    FFilters.Add('date_modify',
     function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
@@ -3890,50 +3873,53 @@ begin
   FFilters.Add('join',
     function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
     var
-      Delim: String;
       Arr: TArray<TValue>;
-      JSONArray: TJSONArray;
+      SB: TStringBuilder;
       I: Integer;
-      Output: TStringBuilder;
+      Delimiter: String;
     begin
-      Delim := ',';
       if Length(Args) > 0 then
-        Delim := Args[0];
+      begin
+        Delimiter := Args[0];
+        if Delimiter.StartsWith('''') or Delimiter.StartsWith('"') then
+          Delimiter := Copy(Delimiter, 2, Length(Delimiter) - 2); // Remove quotes
+      end
+      else
+        Delimiter := '';
 
-      Output := TStringBuilder.Create;
-      try
-        if Input.IsArray then
-        begin
-          Arr := Input.AsType<TArray<TValue>>;
+      if Input.IsType<TArray<TValue>> then
+      begin
+        Arr := Input.AsType<TArray<TValue>>;
+        SB := TStringBuilder.Create;
+        try
           for I := 0 to High(Arr) do
           begin
             if I > 0 then
-              Output.Append(Delim);
-            Output.Append(Arr[I].ToString);
+              SB.Append(Delimiter);
+            SB.Append(Arr[I].ToString);
           end;
-        end
-        else if Input.IsObject and (Input.AsObject is TJSONArray) then
-        begin
-          JSONArray := TJSONArray(Input.AsObject);
-          for I := 0 to JSONArray.Count - 1 do
+          Result := SB.ToString;
+        finally
+          SB.Free;
+        end;
+      end
+      else if Input.IsType<TJSONArray> then
+      begin
+        SB := TStringBuilder.Create;
+        try
+          for I := 0 to Input.AsType<TJSONArray>.Count - 1 do
           begin
             if I > 0 then
-              Output.Append(Delim);
-            Output.Append(JSONArray.Items[I].ToString);
+              SB.Append(Delimiter);
+            SB.Append(Input.AsType<TJSONArray>.Items[I]);
           end;
-        end
-        else if Input.Kind in [tkString, tkUString] then
-        begin
-          var Items := Input.AsString.Split([',']);
-          Result := String.Join(Delim, Items);
-          Exit;
-        end
-        else
-          Output.Append(Input.ToString);
-        Result := Output.ToString;
-      finally
-        Output.Free;
-      end;
+          Result := SB.ToString;
+        finally
+          SB.Free;
+        end;
+      end
+      else
+        Result := Input.ToString;
     end);
 
   FFilters.Add('json_encode',

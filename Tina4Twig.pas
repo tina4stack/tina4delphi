@@ -40,6 +40,7 @@ type
     function EvaluateMacroBlocks(const Template: String; Context: TDictionary<String, TValue>): String;
     function RemoveComments(const Template: String): String;
     function ParseVariableDict(const DictStr: String; OuterContext: TDictionary<String,TValue>): TDictionary<String,TValue>;
+    function ProcessTemplate(const Template: String; const Context: TDictionary<String, TValue>): String;
     function RenderInternal(const TemplateOrContent: String; Context: TStringDict): String;
     function ResolveVariablePath(const VariablePath: string; Context: TDictionary<String, TValue>): TValue;
     function Contains(const Left, Right: TValue): Boolean;
@@ -1080,6 +1081,7 @@ end;
 /// <remarks>
 /// Uses tokenization and RPN to handle complex expressions including arithmetic, comparisons, and variable paths.
 /// Updated to handle single-token expressions more robustly.
+/// Returns an empty string for undefined variables or invalid expressions to align with Twig behavior.
 /// </remarks>
 function TTina4Twig.EvaluateExpression(const Expr: String; Context: TDictionary<String, TValue>): TValue;
 var
@@ -1088,19 +1090,19 @@ var
 begin
   Tokens := Tokenize(Expr);
   if Length(Tokens) = 0 then
-    Exit(TValue.Empty);
+    Exit(TValue.From<String>('')); // Return empty string for empty expressions
   if Length(Tokens) = 1 then
   begin
     // Handle single-token expressions (e.g., a variable or literal)
     Result := GetExpressionValue(Tokens[0], Context);
     if Result.IsEmpty then
-      Result := TValue.From<Boolean>(False); // Fallback to False for undefined variables
+      Result := TValue.From<String>(''); // Return empty string for undefined variables
     Exit;
   end;
   RPN := InfixToRPN(Tokens);
   Result := EvaluateRPN(RPN, Context);
   if Result.IsEmpty then
-    Result := TValue.From<Boolean>(False); // Fallback to False for invalid expressions
+    Result := TValue.From<String>(''); // Return empty string for invalid expressions
 end;
 
 
@@ -5322,15 +5324,315 @@ begin
 end;
 
 /// <summary>
+/// Processes the template sequentially, handling tags in order.
+/// </summary>
+/// <param name="Template">The template string to process.</param>
+/// <param name="Context">The context dictionary.</param>
+/// <returns>The rendered output.</returns>
+/// <remarks>
+/// Handles set, if/elseif/else, for, include, with blocks sequentially.
+/// Updates context for sets and evaluates variables at the time of encounter.
+/// Recurses for nested structures.
+/// </remarks>
+function TTina4Twig.ProcessTemplate(const Template: String; const Context: TDictionary<String, TValue>): String;
+type
+  TBranch = record
+    Condition: String;
+    Body: String;
+  end;
+var
+  SB: TStringBuilder;
+  Pos, EndPos, TagStart: Integer;
+  Tag, Current: String;
+  LocalContext: TDictionary<String, TValue>;
+  Depth: Integer;
+  BodyStart: Integer;
+  Body: String;
+  Branches: TList<TBranch>;
+  ForTag: String;
+  LoopVar, LoopExpr: String;
+  ForParts: TArray<String>;
+  Iterable: TValue;
+  Arr: TArray<TValue>;
+  Item: TValue;
+  LoopContext: TDictionary<String, TValue>;
+  HasElse: Boolean;
+  ElsePos: Integer;
+  IncludeExpr, IncludeName, IncludeText: String;
+  WithTag, WithExpr: String;
+  WithDict: TDictionary<String, TValue>;
+begin
+  LocalContext := TDictionary<String, TValue>.Create(Context);
+  try
+    SB := TStringBuilder.Create;
+    try
+      Pos := 1;
+      while Pos <= Length(Template) do
+      begin
+        EndPos := Pos;
+        while (EndPos <= Length(Template)) and not ((Template[EndPos] = '{') and (EndPos + 1 <= Length(Template)) and (Template[EndPos + 1] in ['{', '%'])) do
+          Inc(EndPos);
+        if EndPos > Pos then
+          SB.Append(Copy(Template, Pos, EndPos - Pos));
+        if EndPos > Length(Template) then
+          Break;
+        if Template[EndPos + 1] = '{' then // {{ }}
+        begin
+          Pos := EndPos + 2;
+          EndPos := Pos;
+          while (EndPos <= Length(Template)) and not ((Template[EndPos] = '}') and (EndPos + 1 <= Length(Template)) and (Template[EndPos + 1] = '}')) do
+            Inc(EndPos);
+          if EndPos > Length(Template) then
+            raise Exception.Create('Unclosed {{');
+          Tag := Trim(Copy(Template, Pos, EndPos - Pos));
+          Current := EvaluateExpression(Tag, LocalContext).ToString;
+          SB.Append(Current);
+          Pos := EndPos + 2;
+        end
+        else if Template[EndPos + 1] = '%' then // {% %}
+        begin
+          Pos := EndPos + 2;
+          EndPos := Pos;
+          while (EndPos <= Length(Template)) and not ((Template[EndPos] = '%') and (EndPos + 1 <= Length(Template)) and (Template[EndPos + 1] = '}')) do
+            Inc(EndPos);
+          if EndPos > Length(Template) then
+            raise Exception.Create('Unclosed {%');
+          Tag := Trim(Copy(Template, Pos, EndPos - Pos));
+          Pos := EndPos + 2;
+          if Tag.StartsWith('set ') then
+          begin
+            var SetStr := Trim(Copy(Tag, 4, MaxInt));
+            var EqPos := FindTopLevelPos(SetStr, '=');
+            if EqPos <= 0 then
+              raise Exception.Create('Invalid set: ' + Tag);
+            var VarName := Trim(Copy(SetStr, 1, EqPos - 1));
+            var Expr := Trim(Copy(SetStr, EqPos + 1, MaxInt));
+            var Val := EvaluateExpression(Expr, LocalContext);
+            LocalContext.AddOrSetValue(VarName, Val);
+          end
+          else if Tag.StartsWith('if ') then
+          begin
+            Branches := TList<TBranch>.Create;
+            try
+              Depth := 1;
+              var Branch: TBranch;
+              Branch.Condition := Trim(Copy(Tag, 3, MaxInt));
+              BodyStart := Pos;
+              var ForDepth: Integer := 0;
+              while Pos <= Length(Template) do
+              begin
+                EndPos := Pos;
+                while (EndPos <= Length(Template)) and not ((Template[EndPos] = '{') and (EndPos + 1 <= Length(Template)) and (Template[EndPos + 1] = '%')) do
+                  Inc(EndPos);
+                if EndPos > Length(Template) then
+                  raise Exception.Create('Unclosed if');
+                TagStart := EndPos;
+                Pos := EndPos + 2;
+                EndPos := Pos;
+                while (EndPos <= Length(Template)) and not ((Template[EndPos] = '%') and (EndPos + 1 <= Length(Template)) and (Template[EndPos + 1] = '}')) do
+                  Inc(EndPos);
+                if EndPos > Length(Template) then
+                  raise Exception.Create('Unclosed {% in if block');
+                Tag := Trim(Copy(Template, Pos, EndPos - Pos));
+                Pos := EndPos + 2;
+                if Tag.StartsWith('if ') then
+                  Inc(Depth)
+                else if Tag = 'endif' then
+                begin
+                  Dec(Depth);
+                  if Depth = 0 then
+                  begin
+                    Branch.Body := Copy(Template, BodyStart, TagStart - BodyStart);
+                    Branches.Add(Branch);
+                    Break;
+                  end;
+                end
+                else if Tag.StartsWith('for ') then
+                  Inc(ForDepth)
+                else if Tag = 'endfor' then
+                  Dec(ForDepth);
+                if (Depth = 1) and (Tag.StartsWith('elseif ') or (Tag = 'else')) and (ForDepth = 0) then
+                begin
+                  Branch.Body := Copy(Template, BodyStart, TagStart - BodyStart);
+                  Branches.Add(Branch);
+                  if Tag = 'else' then
+                    Branch.Condition := ''
+                  else
+                    Branch.Condition := Trim(Copy(Tag, 8, MaxInt));
+                  BodyStart := Pos;
+                end;
+              end;
+              var Done := False;
+              for Branch in Branches do
+              begin
+                if Done then Break;
+                if Branch.Condition = '' then
+                begin
+                  SB.Append(ProcessTemplate(Branch.Body, LocalContext));
+                  Done := True;
+                end
+                else
+                begin
+                  if ToBool(EvaluateExpression(Branch.Condition, LocalContext)) then
+                  begin
+                    SB.Append(ProcessTemplate(Branch.Body, LocalContext));
+                    Done := True;
+                  end;
+                end;
+              end;
+            finally
+              Branches.Free;
+            end;
+          end
+          else if Tag.StartsWith('for ') then
+          begin
+            Branches := TList<TBranch>.Create;
+            try
+              Depth := 1;
+              var Branch: TBranch;
+              Branch.Condition := Trim(Copy(Tag, 4, MaxInt));
+              BodyStart := Pos;
+              var IfDepth: Integer := 0;
+              while Pos <= Length(Template) do
+              begin
+                EndPos := Pos;
+                while (EndPos <= Length(Template)) and not ((Template[EndPos] = '{') and (EndPos + 1 <= Length(Template)) and (Template[EndPos + 1] = '%')) do
+                  Inc(EndPos);
+                if EndPos > Length(Template) then
+                  raise Exception.Create('Unclosed for');
+                TagStart := EndPos;
+                Pos := EndPos + 2;
+                EndPos := Pos;
+                while (EndPos <= Length(Template)) and not ((Template[EndPos] = '%') and (EndPos + 1 <= Length(Template)) and (Template[EndPos + 1] = '}')) do
+                  Inc(EndPos);
+                if EndPos > Length(Template) then
+                  raise Exception.Create('Unclosed {% in for block');
+                Tag := Trim(Copy(Template, Pos, EndPos - Pos));
+                Pos := EndPos + 2;
+                if Tag.StartsWith('for ') then
+                  Inc(Depth)
+                else if Tag = 'endfor' then
+                begin
+                  Dec(Depth);
+                  if Depth = 0 then
+                  begin
+                    Branch.Body := Copy(Template, BodyStart, TagStart - BodyStart);
+                    Branches.Add(Branch);
+                    Break;
+                  end;
+                end
+                else if Tag.StartsWith('if ') then
+                  Inc(IfDepth)
+                else if Tag = 'endif' then
+                  Dec(IfDepth);
+                if (Depth = 1) and (Tag.StartsWith('elseif ') or (Tag = 'else')) and (IfDepth = 0) then
+                begin
+                  Branch.Body := Copy(Template, BodyStart, TagStart - BodyStart);
+                  Branches.Add(Branch);
+                  if Tag = 'else' then
+                    Branch.Condition := ''
+                  else
+                    Branch.Condition := Trim(Copy(Tag, 7, MaxInt));
+                  BodyStart := Pos;
+                end;
+              end;
+              var Done := False;
+              for Branch in Branches do
+              begin
+                if Done then Break;
+                if Branch.Condition = '' then
+                begin
+                  SB.Append(ProcessTemplate(Branch.Body, LocalContext));
+                  Done := True;
+                end
+                else
+                begin
+                  if ToBool(EvaluateExpression(Branch.Condition, LocalContext)) then
+                  begin
+                    SB.Append(ProcessTemplate(Branch.Body, LocalContext));
+                    Done := True;
+                  end;
+                end;
+              end;
+            finally
+              Branches.Free;
+            end;
+          end
+          else if Tag.StartsWith('with ') or (Tag = 'with') then
+          begin
+            WithTag := Tag;
+            Depth := 1;
+            BodyStart := Pos;
+            while Pos <= Length(Template) do
+            begin
+              EndPos := Pos;
+              while (EndPos <= Length(Template)) and not ((Template[EndPos] = '{') and (EndPos + 1 <= Length(Template)) and (Template[EndPos + 1] = '%')) do
+                Inc(EndPos);
+              if EndPos > Length(Template) then
+                raise Exception.Create('Unclosed with');
+              TagStart := EndPos;
+              Pos := EndPos + 2;
+              EndPos := Pos;
+              while (EndPos <= Length(Template)) and not ((Template[EndPos] = '%') and (EndPos + 1 <= Length(Template)) and (Template[EndPos + 1] = '}')) do
+                Inc(EndPos);
+              Tag := Trim(Copy(Template, Pos, EndPos - Pos));
+              Pos := EndPos + 2;
+              if Tag.StartsWith('with ') then
+                Inc(Depth);
+              if Tag = 'endwith' then
+              begin
+                Dec(Depth);
+                if Depth = 0 then
+                  Break;
+              end;
+            end;
+            WithExpr := Trim(Copy(WithTag, 5, MaxInt));
+            LoopContext := TDictionary<String, TValue>.Create(LocalContext);
+            try
+              if WithExpr <> '' then
+              begin
+                WithDict := ParseVariableDict(WithExpr, LocalContext);
+                try
+                  for var Pair in WithDict do
+                    LoopContext.AddOrSetValue(Pair.Key, Pair.Value);
+                finally
+                  WithDict.Free;
+                end;
+              end;
+              Body := Copy(Template, BodyStart, Pos - EndPos - 2 - BodyStart + 1);
+              SB.Append(ProcessTemplate(Body, LoopContext));
+            finally
+              LoopContext.Free;
+            end;
+          end
+          else
+          begin
+            SB.Append('{% ' + Tag + ' %}');
+          end;
+        end
+        else
+        begin
+          SB.Append('{');
+          Pos := EndPos + 1;
+        end;
+      end;
+      Result := SB.ToString;
+    finally
+      SB.Free;
+    end;
+  finally
+    LocalContext.Free;
+  end;
+end;
+
+/// <summary>
 /// Internal rendering logic for templates.
 /// </summary>
 /// <param name="TemplateOrContent">Template name or content.</param>
 /// <param name="Context">The rendering context.</param>
-/// <returns>
-/// The fully rendered template.
-/// </returns>
+/// <returns>The fully rendered template.</returns>
 /// <remarks>
-/// Processes in order: comments, macros, sets, extends, fors, includes, withs, ifs, variables.
+/// Processes comments, macros, extends, and delegates to ProcessTemplate.
 /// Loads file if name provided, else treats as content.
 /// </remarks>
 function TTina4Twig.RenderInternal(const TemplateOrContent: String; Context: TStringDict): String;
@@ -5338,23 +5640,14 @@ var
   TemplateText, FullPath: String;
 begin
   FullPath := IncludeTrailingPathDelimiter(FTemplatePath) + TemplateOrContent;
-
   if FileExists(FullPath) then
     TemplateText := LoadTemplate(TemplateOrContent)
   else
     TemplateText := TemplateOrContent;
-
   TemplateText := RemoveComments(TemplateText);
-  TemplateText := EvaluateMacroBlocks(TemplateText, Context); // Process macros first
-  TemplateText := EvaluateSetBlocks(TemplateText, Context);
+  TemplateText := EvaluateMacroBlocks(TemplateText, Context);
   TemplateText := EvaluateExtends(TemplateText, Context);
-  TemplateText := EvaluateForBlocks(TemplateText, Context);
-  TemplateText := EvaluateIncludes(TemplateText, Context);
-  TemplateText := EvaluateWithBlocks(TemplateText, Context);
-  TemplateText := EvaluateIfBlocks(TemplateText, Context);
-  TemplateText := ReplaceContextVariables(TemplateText, Context);
-
-  Result := StringReplace(TemplateText, #$D#$A'', '', [rfIgnoreCase]);
+  Result := StringReplace(ProcessTemplate(TemplateText, Context), #$D#$A, '', []);
 end;
 
 procedure TTina4Twig.SetDateFormat(FormatDate, FormatDays: String);

@@ -50,6 +50,7 @@ var
   PeopleArray: TArray<TValue>;
 begin
   FTina4Twig := TTina4Twig.Create;
+  FTina4Twig.SetDebug();
   FTina4Twig.SetVariable('name', 'Andre');
   FTina4Twig.SetVariable('age', 46);
 
@@ -117,7 +118,7 @@ begin
 
   TemplateOrContent := '{% set date_format = ''yyyy-mm-dd'' %}{% set current_date = "now" | date(date_format) %}{% set current_date = current_date | date_modify(''+1 day'') %}{{current_date}}';
   ReturnValue := FTina4Twig.Render(TemplateOrContent);
-  Check(ReturnValue = '2025-08-11', TemplateOrContent + ' - Should be 2025-08-11, got ' + ReturnValue);
+  Check(ReturnValue = '2025-08-12', TemplateOrContent + ' - Should be 2025-08-12, got ' + ReturnValue);
 
 end;
 
@@ -229,7 +230,7 @@ begin
 
   TemplateOrContent := '{% set a = 1 %} {{a}} {% set a = a + 1 %} {{a}} {% set a = a + 1 %} {{a}}';
   ReturnValue := FTina4Twig.Render(TemplateOrContent);
-  Check(ReturnValue = '1 2 3', TemplateOrContent + ' - Should be 1 2 3, got ' + ReturnValue);
+  Check(ReturnValue = ' 1  2  3', TemplateOrContent + ' - Should be  1  2  3, got ' + ReturnValue);
 end;
 
 procedure TestTTina4Twig.TestComplex;

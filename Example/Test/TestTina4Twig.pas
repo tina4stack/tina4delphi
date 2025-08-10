@@ -226,6 +226,10 @@ begin
   TemplateOrContent := '{% set tasks = [{''id'': 1, ''name'': ''Test''},{''id'': 2, ''name'': ''Test 2''}] %}{{dump(tasks)}}';
   ReturnValue := FTina4Twig.Render(TemplateOrContent);
   Check(ReturnValue = '<pre>tasks =  array(2) {'#$D#$A'    [0]=>'#$D#$A'      array(2) {'#$D#$A'        ["id"]=>'#$D#$A'          int(1)'#$D#$A'        ["name"]=>'#$D#$A'          string(4) "Test"'#$D#$A'      }'#$D#$A'    [1]=>'#$D#$A'      array(2) {'#$D#$A'        ["id"]=>'#$D#$A'          int(2)'#$D#$A'        ["name"]=>'#$D#$A'          string(6) "Test 2"'#$D#$A'      }'#$D#$A'  }'#$D#$A'</pre>', TemplateOrContent + ' - Should be <pre>tasks ='#$D#$A'  array(2) {'#$D#$A'    [0]=>'#$D#$A'      array(2) {'#$D#$A'        ["id"]=>'#$D#$A'          int(1)'#$D#$A'        ["name"]=>'#$D#$A'          string(4) "Test"'#$D#$A'      }'#$D#$A'    [1]=>'#$D#$A'      array(2) {'#$D#$A'        ["id"]=>'#$D#$A'          int(2)'#$D#$A'        ["name"]=>'#$D#$A'          string(6) "Test 2"'#$D#$A'      }'#$D#$A'  }'#$D#$A'</pre>, got ' + ReturnValue);
+
+  TemplateOrContent := '{% set a = 1 %} {{a}} {% set a = a + 1 %} {{a}} {% set a = a + 1 %} {{a}}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = '1 2 3', TemplateOrContent + ' - Should be 1 2 3, got ' + ReturnValue);
 end;
 
 procedure TestTTina4Twig.TestComplex;

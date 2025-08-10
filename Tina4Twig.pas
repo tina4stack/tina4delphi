@@ -2904,6 +2904,7 @@ begin
   ResultSB.Free;
 end;
 
+
 /// <summary>
 /// Evaluates and processes for blocks in the template.
 /// </summary>
@@ -2914,6 +2915,7 @@ end;
 /// Handles for loops like {% for i in 0..1000 if current_date <= max_date %}, including range expressions and if conditions.
 /// Iterates over arrays and renders the loop body for elements satisfying the condition.
 /// Supports nested loops, else clauses, and various iterable types.
+/// Updates to variables within the loop now persist in the parent context.
 /// </remarks>
 function TTina4Twig.EvaluateForBlocks(const Template: String; Context: TDictionary<String, TValue>): String;
 var
@@ -3132,6 +3134,11 @@ begin
           for Pair in Context do
             MergedContext.AddOrSetValue(Pair.Key, Pair.Value);
           MergedContext.AddOrSetValue(VarName, ValueArray[I]);
+          MergedContext.AddOrSetValue('loop.index0', TValue.From<Int64>(I));
+          MergedContext.AddOrSetValue('loop.index', TValue.From<Int64>(I + 1));
+          MergedContext.AddOrSetValue('loop.first', TValue.From<Boolean>(I = 0));
+          MergedContext.AddOrSetValue('loop.last', TValue.From<Boolean>(I = High(ValueArray)));
+          MergedContext.AddOrSetValue('loop.length', TValue.From<Int64>(Length(ValueArray)));
           // Evaluate if condition
           if IfExpr <> '' then
           begin
@@ -3140,15 +3147,12 @@ begin
             if not Condition then
               Continue;
           end;
-          ProcessedBlock := EvaluateSetBlocks(BlockContent, MergedContext);
-          ProcessedBlock := EvaluateExtends(ProcessedBlock, MergedContext);
-          ProcessedBlock := EvaluateForBlocks(ProcessedBlock, MergedContext);
-          ProcessedBlock := EvaluateIncludes(ProcessedBlock, MergedContext);
-          ProcessedBlock := EvaluateWithBlocks(ProcessedBlock, MergedContext);
-          ProcessedBlock := EvaluateIfBlocks(ProcessedBlock, MergedContext);
-          ProcessedBlock := ReplaceContextVariables(ProcessedBlock, MergedContext);
-          Rendered := ProcessedBlock;
-          Output := Output + Rendered;
+          ProcessedBlock := RenderInternal(BlockContent, MergedContext);
+          // Update parent context with changes from MergedContext, excluding loop variables
+          for Pair in MergedContext do
+            if not Pair.Key.StartsWith('loop.') then
+              Context.AddOrSetValue(Pair.Key, Pair.Value);
+          Output := Output + ProcessedBlock;
         finally
           MergedContext.Free;
         end;
@@ -3162,6 +3166,7 @@ begin
     ResultSB.Free;
   end;
 end;
+
 
 
 /// <summary>
@@ -5300,8 +5305,20 @@ end;
 /// Delegates to RenderInternal with global context.
 /// </remarks>
 function TTina4Twig.Render(const TemplateOrContent: String; Variables: TStringDict = nil): String;
+var
+  LocalContext: TDictionary<String, TValue>;
 begin
-  Result := RenderInternal(TemplateOrContent, FContext);
+  LocalContext := TDictionary<String, TValue>.Create;
+  try
+    for var Pair in FContext do
+      LocalContext.AddOrSetValue(Pair.Key, Pair.Value);
+    if Assigned(Variables) then
+      for var Pair in Variables do
+        LocalContext.AddOrSetValue(Pair.Key, Pair.Value);
+    Result := RenderInternal(TemplateOrContent, LocalContext);
+  finally
+    LocalContext.Free;
+  end;
 end;
 
 /// <summary>
@@ -5319,35 +5336,25 @@ end;
 function TTina4Twig.RenderInternal(const TemplateOrContent: String; Context: TStringDict): String;
 var
   TemplateText, FullPath: String;
-  LocalContext: TDictionary<String, TValue>;
 begin
-  LocalContext := TDictionary<String, TValue>.Create;
-  try
-    // Copy the provided context to LocalContext
-    for var Pair in Context do
-      LocalContext.AddOrSetValue(Pair.Key, Pair.Value);
+  FullPath := IncludeTrailingPathDelimiter(FTemplatePath) + TemplateOrContent;
 
-    FullPath := IncludeTrailingPathDelimiter(FTemplatePath) + TemplateOrContent;
+  if FileExists(FullPath) then
+    TemplateText := LoadTemplate(TemplateOrContent)
+  else
+    TemplateText := TemplateOrContent;
 
-    if FileExists(FullPath) then
-      TemplateText := LoadTemplate(TemplateOrContent)
-    else
-      TemplateText := TemplateOrContent;
+  TemplateText := RemoveComments(TemplateText);
+  TemplateText := EvaluateMacroBlocks(TemplateText, Context); // Process macros first
+  TemplateText := EvaluateSetBlocks(TemplateText, Context);
+  TemplateText := EvaluateExtends(TemplateText, Context);
+  TemplateText := EvaluateForBlocks(TemplateText, Context);
+  TemplateText := EvaluateIncludes(TemplateText, Context);
+  TemplateText := EvaluateWithBlocks(TemplateText, Context);
+  TemplateText := EvaluateIfBlocks(TemplateText, Context);
+  TemplateText := ReplaceContextVariables(TemplateText, Context);
 
-    TemplateText := RemoveComments(TemplateText);
-    TemplateText := EvaluateMacroBlocks(TemplateText, LocalContext); // Process macros first
-    TemplateText := EvaluateSetBlocks(TemplateText, LocalContext);
-    TemplateText := EvaluateExtends(TemplateText, LocalContext);
-    TemplateText := EvaluateForBlocks(TemplateText, LocalContext);
-    TemplateText := EvaluateIncludes(TemplateText, LocalContext);
-    TemplateText := EvaluateWithBlocks(TemplateText, LocalContext);
-    TemplateText := EvaluateIfBlocks(TemplateText, LocalContext);
-    TemplateText := ReplaceContextVariables(TemplateText, LocalContext);
-
-    Result := StringReplace(TemplateText, #$D#$A'', '', [rfIgnoreCase]);
-  finally
-    LocalContext.Free;
-  end;
+  Result := StringReplace(TemplateText, #$D#$A'', '', [rfIgnoreCase]);
 end;
 
 procedure TTina4Twig.SetDateFormat(FormatDate, FormatDays: String);

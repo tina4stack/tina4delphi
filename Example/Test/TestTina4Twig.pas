@@ -111,6 +111,14 @@ begin
   TemplateOrContent := '{{name}}';
   ReturnValue := FTina4Twig.Render(TemplateOrContent);
   WriteLn(ReturnValue);
+
+  FTina4Twig.SetDebug();
+  //TemplateOrContent := '{% set my_date = date(1) %}{{ date(1) }}{{ my_date }}';
+  //ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  //WriteLn(ReturnValue);
+
+
+
 end;
 
 procedure TestTTina4Twig.TestTags;
@@ -595,6 +603,25 @@ begin
   ReturnValue := FTina4Twig.Render(TemplateOrContent);
   Check(ReturnValue = '36Older than 35AliceOlder than 35', TemplateOrContent + ' - Should be 36Older than 35AliceOlder than 35, got ' + ReturnValue);
 
+  TemplateOrContent := '{%set i = 7%} {%set start_days = 5 %} {%set duration_days = 4%} {% if (i >= start_days) and (i < (start_days + duration_days)) %} OK {%else%} NO {%endif%}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = '    OK ', TemplateOrContent + ' - Should be " OK", got ' + ReturnValue);
+
+  TemplateOrContent := '{%set i = 9%} {%set start_days = 5 %} {%set duration_days = 4%} {% if (i >= start_days) and (i < (start_days + duration_days)) %} OK {%endif%}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = '   ', TemplateOrContent + ' - Should be "", got ' + ReturnValue);
+
+  TemplateOrContent := '{%set i = 5%} {%set start_days = 5 %} {%set duration_days = 4%} {% if (i >= start_days) and (i < (start_days + duration_days)) %} OK {%endif%}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = '    OK ', TemplateOrContent + ' - Should be " OK", got ' + ReturnValue);
+
+  TemplateOrContent := '{%set i = 8%} {%set start_days = 5 %} {%set duration_days = 4%} {% if (i >= start_days) and (i < (start_days + duration_days)) %} OK {%endif%}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = '    OK ', TemplateOrContent + ' - Should be " OK", got ' + ReturnValue);
+
+  TemplateOrContent := '{%set i = 9%} {%set start_days = 5 %} {%set duration_days = 4%} {% if (i >= start_days) and (i < (start_days + duration_days)) %} OK {%else%} NOT OK {%endif%}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = '    NOT OK ', TemplateOrContent + ' - Should be " NOT OK", got ' + ReturnValue);
 end;
 
 procedure TestTTina4Twig.TestMacros;

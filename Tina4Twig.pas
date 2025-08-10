@@ -14,6 +14,7 @@ type
 
   TTina4Twig = class(TObject)
   private
+    FDebug: Boolean;
     FContext: TDictionary<String, TValue>;
     FFilters: TDictionary<String, TFilterFunc>;
     FFunctions: TDictionary<String, TFunctionFunc>;
@@ -46,15 +47,18 @@ type
     function ToBool(const Value: TValue): Boolean;
     function GetExpressionValue(const Expr: String; Context: TDictionary<String, TValue>): TValue;
     function EvaluateExpression(const Expr: String; Context: TDictionary<String, TValue>): TValue;
+    function InfixToRPN(const Tokens: TArray<String>): TArray<String>;
     function EvaluateRPN(const RPN: TArray<String>; const Context: TDictionary<String, TValue>): TValue;
     function Tokenize(const Expr: String): TArray<String>;
     procedure DumpValue(const Value: TValue; List: TStringList; const Indent: String);
     procedure RegisterDefaultFilters;
+    procedure RegisterDefaultFunctions;
   public
     constructor Create(const TemplatePath: String = '');
     destructor Destroy; override;
     function Render(const TemplateOrContent: String; Variables: TStringDict = nil): String;
     procedure SetVariable(AName: string; AValue: TValue);
+    procedure SetDebug(Value: Boolean=True);
   end;
 
 implementation
@@ -205,16 +209,7 @@ end;
 /// <returns>An array of tokens representing the expression.</returns>
 /// <remarks>
 /// Handles numbers, quoted strings, identifiers with dotted paths and subscripts, operators, and array/dictionary literals.
-/// Updated to robustly recognize 'in', 'starts with', and 'matches' operators with flexible spacing and case.
-/// </remarks>
-/// <summary>
-/// Tokenizes an expression into an array of tokens.
-/// </summary>
-/// <param name="Expr">The expression to tokenize.</param>
-/// <returns>An array of tokens representing the expression.</returns>
-/// <remarks>
-/// Handles numbers, quoted strings, identifiers with dotted paths and subscripts, operators, and array/dictionary literals.
-/// Updated to robustly recognize 'in', 'starts with', 'matches', and '..' operators with flexible spacing and case.
+/// Updated to robustly recognize 'in', 'starts with', 'matches', 'ends with', 'and', 'or', 'not', 'not in', and '..' operators with flexible spacing and case.
 /// </remarks>
 function TTina4Twig.Tokenize(const Expr: String): TArray<String>;
 var
@@ -267,12 +262,57 @@ begin
         Continue;
       end;
 
+      // Handle 'ends with' operator
+      if (I <= Length(Expr) - 8) and (Copy(LowerExpr, I, 9) = 'ends with') and
+         ((I + 8 = Length(Expr)) or CharInSet(Expr[I + 9], [' ', #9, #10, #13, '''', '"', ')', '}', ']'])) then
+      begin
+        Tokens.Add('ends with');
+        Inc(I, 9);
+        Continue;
+      end;
+
       // Handle 'matches' operator
       if (I <= Length(Expr) - 6) and (Copy(LowerExpr, I, 7) = 'matches') and
          ((I + 6 = Length(Expr)) or CharInSet(Expr[I + 7], [' ', #9, #10, #13, '''', '"', ')', '}', ']'])) then
       begin
         Tokens.Add('matches');
         Inc(I, 7);
+        Continue;
+      end;
+
+      // Handle 'and' operator
+      if (I <= Length(Expr) - 2) and (Copy(LowerExpr, I, 3) = 'and') and
+         ((I + 2 = Length(Expr)) or CharInSet(Expr[I + 3], [' ', #9, #10, #13, ')', '}', ']', '''', '"'])) then
+      begin
+        Tokens.Add('and');
+        Inc(I, 3);
+        Continue;
+      end;
+
+      // Handle 'or' operator
+      if (I <= Length(Expr) - 1) and (Copy(LowerExpr, I, 2) = 'or') and
+         ((I + 1 = Length(Expr)) or CharInSet(Expr[I + 2], [' ', #9, #10, #13, ')', '}', ']', '''', '"'])) then
+      begin
+        Tokens.Add('or');
+        Inc(I, 2);
+        Continue;
+      end;
+
+      // Handle 'not in' operator before 'not'
+      if (I <= Length(Expr) - 5) and (Copy(LowerExpr, I, 6) = 'not in') and
+         ((I + 5 = Length(Expr)) or CharInSet(Expr[I + 6], [' ', #9, #10, #13, ')', '}', ']', '''', '"'])) then
+      begin
+        Tokens.Add('not in');
+        Inc(I, 6);
+        Continue;
+      end;
+
+      // Handle 'not' operator
+      if (I <= Length(Expr) - 2) and (Copy(LowerExpr, I, 3) = 'not') and
+         ((I + 2 = Length(Expr)) or CharInSet(Expr[I + 3], [' ', #9, #10, #13, ')', '}', ']', '''', '"'])) then
+      begin
+        Tokens.Add('not');
+        Inc(I, 3);
         Continue;
       end;
 
@@ -439,7 +479,7 @@ begin
           end;
         end;
         // Avoid adding partial operator tokens
-        if (Token = 'matches') or (Token = 'starts') or (Token = 'with') then
+        if (Token = 'matches') or (Token = 'starts') or (Token = 'ends') or (Token = 'with') or (Token = 'and') or (Token = 'or') or (Token = 'not') or (Token = 'in') then
           raise Exception.Create('Invalid partial operator: ' + Token);
         Tokens.Add(Token);
         Continue;
@@ -554,7 +594,7 @@ end;
 /// Uses the Shunting Yard algorithm to handle operator precedence and parentheses.
 /// Correctly orders operands for 'in', 'starts with', 'matches', and '..' operators.
 /// </remarks>
-function InfixToRPN(const Tokens: TArray<String>): TArray<String>;
+function TTina4Twig.InfixToRPN(const Tokens: TArray<String>): TArray<String>;
 var
   Output: TList<String>;
   OpStack: TStack<String>;
@@ -583,9 +623,14 @@ begin
     Precedence.Add('<=', 0);
     Precedence.Add('>=', 0);
     Precedence.Add('in', 0);
+    Precedence.Add('not in', 0);
     Precedence.Add('starts with', 0);
+    Precedence.Add('ends with', 0);
     Precedence.Add('matches', 0);
     Precedence.Add('..', 0);
+    Precedence.Add('and', 1);
+    Precedence.Add('or', 0);
+    Precedence.Add('not', 4);
 
     Output := TList<String>.Create;
     OpStack := TStack<String>.Create;
@@ -596,7 +641,7 @@ begin
       FilterChain := '';
       LastAppended := '';
       // Debug: Log input tokens
-      //WriteLn('Debug: InfixToRPN Input=', String.Join(' ', Tokens));
+      if FDebug then WriteLn('Debug: InfixToRPN Input=', String.Join(' ', Tokens));
       while I <= High(Tokens) do
       begin
         Token := Tokens[I];
@@ -645,7 +690,7 @@ begin
             Output.Add(FilterChain);
             InFilter := False;
             // Debug: Log filter chain
-            //WriteLn('Debug: Added FilterChain=', FilterChain, ' Output=', String.Join(' ', Output.ToArray));
+            if FDebug then WriteLn('Debug: Added FilterChain=', FilterChain, ' Output=', String.Join(' ', Output.ToArray));
             Continue;
           end;
           Continue;
@@ -662,7 +707,7 @@ begin
           Output.Add(Token);
           Inc(I);
           // Debug: Log operand
-          //WriteLn('Debug: Added Operand=', Token, ' Output=', String.Join(' ', Output.ToArray));
+          if FDebug then WriteLn('Debug: Added Operand=', Token, ' Output=', String.Join(' ', Output.ToArray));
           Continue;
         end;
         // Handle parentheses
@@ -671,7 +716,7 @@ begin
           OpStack.Push(Token);
           Inc(I);
           // Debug: Log push to stack
-          //WriteLn('Debug: Pushed to OpStack=', Token, ' OpStack=', String.Join(' ', OpStack.ToArray));
+          if FDebug then WriteLn('Debug: Pushed to OpStack=', Token, ' OpStack=', String.Join(' ', OpStack.ToArray));
           Continue;
         end;
         if Token = ')' then
@@ -683,7 +728,7 @@ begin
           OpStack.Pop; // Remove '('
           Inc(I);
           // Debug: Log after parentheses
-          //WriteLn('Debug: Processed ) Output=', String.Join(' ', Output.ToArray), ' OpStack=', String.Join(' ', OpStack.ToArray));
+          if FDebug then WriteLn('Debug: Processed ) Output=', String.Join(' ', Output.ToArray), ' OpStack=', String.Join(' ', OpStack.ToArray));
           Continue;
         end;
         // Handle comma (used in filter arguments, e.g., date('U'))
@@ -693,7 +738,7 @@ begin
             Output.Add(OpStack.Pop);
           Inc(I);
           // Debug: Log after comma
-          //WriteLn('Debug: Processed , Output=', String.Join(' ', Output.ToArray), ' OpStack=', String.Join(' ', OpStack.ToArray));
+          if FDebug then WriteLn('Debug: Processed , Output=', String.Join(' ', Output.ToArray), ' OpStack=', String.Join(' ', OpStack.ToArray));
           Continue;
         end;
         // Handle operators
@@ -704,16 +749,16 @@ begin
           Top := OpStack.Peek;
           if not Precedence.TryGetValue(Top, TopPrec) then
             Break;
-          if Precedence[Token] >= TopPrec then // Use >= for standard precedence
+          if Precedence[Token] > TopPrec then
             Break;
           Output.Add(OpStack.Pop);
           // Debug: Log operator pop
-          //WriteLn('Debug: Popped Operator=', Top, ' Output=', String.Join(' ', Output.ToArray));
+          if FDebug then WriteLn('Debug: Popped Operator=', Top, ' Output=', String.Join(' ', Output.ToArray));
         end;
         OpStack.Push(Token);
         Inc(I);
         // Debug: Log operator push
-        //WriteLn('Debug: Pushed Operator=', Token, ' OpStack=', String.Join(' ', OpStack.ToArray));
+        if FDebug then WriteLn('Debug: Pushed Operator=', Token, ' OpStack=', String.Join(' ', OpStack.ToArray));
       end;
       // Pop remaining operators
       while OpStack.Count > 0 do
@@ -723,11 +768,11 @@ begin
           raise Exception.Create('Mismatched parentheses');
         Output.Add(Top);
         // Debug: Log final operator pop
-        //WriteLn('Debug: Final Pop Operator=', Top, ' Output=', String.Join(' ', Output.ToArray));
+        if FDebug then WriteLn('Debug: Final Pop Operator=', Top, ' Output=', String.Join(' ', Output.ToArray));
       end;
       Result := Output.ToArray;
       // Debug: Log final RPN output
-      //WriteLn('Debug: InfixToRPN Final Output=', String.Join(' ', Result));
+      if FDebug then WriteLn('Debug: InfixToRPN Final Output=', String.Join(' ', Result));
     finally
       Output.Free;
       OpStack.Free;
@@ -767,20 +812,22 @@ var
   Condition: Boolean;
   IsSimpleInteger: Boolean;
   I: Integer;
+  Regex: TRegEx;
+  Arr: TArray<TValue>;
 begin
   Stack := TStack<TValue>.Create;
   try
-    //WriteLn('Debug: EvaluateRPN Input=', String.Join(' ', RPN));
+    if FDebug then WriteLn('Debug: EvaluateRPN Input=', String.Join(' ', RPN));
     for Token in RPN do
     begin
-      //WriteLn('Debug: Processing Token=', Token, ' StackCount=', Stack.Count);
+      if FDebug then WriteLn('Debug: Processing Token=', Token, ' StackCount=', Stack.Count);
       if Token.Contains('|') then
       begin
         Parts := SplitOnTopLevel(Token, '|');
         if Trim(Parts[0]) = '' then
           CurrentVal := Stack.Pop
         else
-          CurrentVal := GetExpressionValue(Parts[0], Context);
+          CurrentVal := ResolveVariablePath(Parts[0], Context); // Use ResolveVariablePath for consistency
         for J := 1 to High(Parts) do
         begin
           FilterExpr := Trim(Parts[J]);
@@ -831,53 +878,52 @@ begin
             CurrentVal := TValue.From<String>('(filter ' + FuncName + ' not found)');
         end;
         Stack.Push(CurrentVal);
-        //WriteLn('Debug: After Filter=', Token, ' StackCount=', Stack.Count);
+        if FDebug then WriteLn('Debug: After Filter=', Token, ' StackCount=', Stack.Count);
         Continue;
       end;
       if TryStrToInt64(Token, IA) then
       begin
         Stack.Push(TValue.From<Int64>(IA));
-        //WriteLn('Debug: Pushed Int=', Token, ' StackCount=', Stack.Count);
+        if FDebug then WriteLn('Debug: Pushed Int=', Token, ' StackCount=', Stack.Count);
       end
       else if TryStrToFloat(Token, FA) then
       begin
         Stack.Push(TValue.From<Double>(FA));
-        //WriteLn('Debug: Pushed Float=', Token, ' StackCount=', Stack.Count);
+        if FDebug then WriteLn('Debug: Pushed Float=', Token, ' StackCount=', Stack.Count);
       end
       else if (Token.StartsWith('''') or Token.StartsWith('"')) and (Token.EndsWith(Token[1])) then
       begin
         Stack.Push(TValue.From<String>(Copy(Token, 2, Length(Token) - 2)));
-        //WriteLn('Debug: Pushed String=', Token, ' StackCount=', Stack.Count);
+        if FDebug then WriteLn('Debug: Pushed String=', Token, ' StackCount=', Stack.Count);
       end
       else if not CharInSet(Token[1], ['+', '-', '*', '/', '%', '~', '<', '>', '=', '!']) and
-              (Token <> 'in') and (Token <> 'starts with') and (Token <> 'matches') and (Token <> '..') then
+              (Token <> 'in') and (Token <> 'starts with') and (Token <> 'matches') and (Token <> '..') and
+              (Token <> 'and') and (Token <> 'or') and (Token <> 'not') then
       begin
-        CurrentVal := GetExpressionValue(Token, Context);
+        CurrentVal := ResolveVariablePath(Token, Context); // Use ResolveVariablePath for consistency
         // Convert string or float to integer if possible for numeric operations
         if (CurrentVal.Kind in [tkString, tkUString]) and TryStrToInt64(CurrentVal.AsString, IA) then
           CurrentVal := TValue.From<Int64>(IA)
         else if CurrentVal.IsType<Double> and (Frac(CurrentVal.AsExtended) = 0) then
           CurrentVal := TValue.From<Int64>(Trunc(CurrentVal.AsExtended));
         Stack.Push(CurrentVal);
-        //WriteLn('Debug: Pushed Variable=', Token, ' Value=', CurrentVal.ToString, ' StackCount=', Stack.Count);
+        if FDebug then WriteLn('Debug: Pushed Variable=', Token, ' Value=', CurrentVal.ToString, ' StackCount=', Stack.Count);
       end
       else
       begin
-        if Stack.Count < 2 then
+        if (Token = '-') and (Stack.Count = 1) then // Handle unary minus
         begin
-          if (Token = '-') and (Stack.Count = 1) then // Handle unary minus
-          begin
-            A := Stack.Pop;
-            FA := GetAsExtendedLenient(A);
-            Stack.Push(TValue.From<Double>(-FA));
-            //WriteLn('Debug: After Unary Minus=', Token, ' StackCount=', Stack.Count);
-            Continue;
-          end;
-          raise Exception.Create('Invalid expression: insufficient operands for ' + Token + ', StackCount=' + IntToStr(Stack.Count));
+          A := Stack.Pop;
+          FA := GetAsExtendedLenient(A);
+          Stack.Push(TValue.From<Double>(-FA));
+          if FDebug then WriteLn('Debug: After Unary Minus=', Token, ' StackCount=', Stack.Count);
+          Continue;
         end;
+        if Stack.Count < 2 then
+          raise Exception.Create('Invalid expression: insufficient operands for ' + Token + ', StackCount=' + IntToStr(Stack.Count));
         B := Stack.Pop;
         A := Stack.Pop;
-        //WriteLn('Debug: Popped A=', A.ToString, ' B=', B.ToString, ' for Operator=', Token);
+        if FDebug then WriteLn('Debug: Popped A=', A.ToString, ' B=', B.ToString, ' for Operator=', Token);
         // Convert operands to integers if possible for numeric operations
         if (A.Kind in [tkString, tkUString]) and TryStrToInt64(A.AsString, IA) then
           A := TValue.From<Int64>(IA)
@@ -887,27 +933,58 @@ begin
           B := TValue.From<Int64>(IB)
         else if B.IsType<Double> and (Frac(B.AsExtended) = 0) then
           B := TValue.From<Int64>(Trunc(B.AsExtended));
-        if Token = 'in' then
+        FA := GetAsExtendedLenient(A);
+        FB := GetAsExtendedLenient(B);
+        if Token = '+' then
+          Stack.Push(TValue.From<Double>(FA + FB))
+        else if Token = '-' then
         begin
-          Condition := Contains(A, B);
-          Stack.Push(TValue.From<Boolean>(Condition));
-          //WriteLn('Debug: After In=', Token, ' StackCount=', Stack.Count);
-          Continue;
-        end;
-        if Token = 'starts with' then
+          if A.IsOrdinal and B.IsOrdinal then
+            Stack.Push(TValue.From<Int64>(A.AsInt64 - B.AsInt64))
+          else
+            Stack.Push(TValue.From<Double>(FA - FB));
+        end
+        else if Token = '*' then
+          Stack.Push(TValue.From<Double>(FA * FB))
+        else if Token = '/' then
         begin
-          Condition := (A.Kind in [tkString, tkUString]) and (B.Kind in [tkString, tkUString]) and
-                      A.AsString.StartsWith(B.AsString);
-          Stack.Push(TValue.From<Boolean>(Condition));
-          //WriteLn('Debug: After Starts With=', Token, ' StackCount=', Stack.Count);
-          Continue;
-        end;
-        if Token = 'matches' then
+          if FB <> 0 then
+            Stack.Push(TValue.From<Double>(FA / FB))
+          else
+            Stack.Push(TValue.From<Double>(0));
+        end
+        else if Token = '%' then
+        begin
+          if FB <> 0 then
+            Stack.Push(TValue.From<Double>(fmod(FA, FB)))
+          else
+            Stack.Push(TValue.From<Double>(0));
+        end
+        else if Token = '~' then
+          Stack.Push(TValue.From<String>(A.ToString + B.ToString))
+        else if Token = '==' then
+          Stack.Push(TValue.From<Boolean>(ValuesAreEqual(A, B)))
+        else if Token = '!=' then
+          Stack.Push(TValue.From<Boolean>(not ValuesAreEqual(A, B)))
+        else if Token = '<' then
+          Stack.Push(TValue.From<Boolean>(CompareValues(A, B, '<')))
+        else if Token = '>' then
+          Stack.Push(TValue.From<Boolean>(CompareValues(A, B, '>')))
+        else if Token = '<=' then
+          Stack.Push(TValue.From<Boolean>(CompareValues(A, B, '<=')))
+        else if Token = '>=' then
+          Stack.Push(TValue.From<Boolean>(CompareValues(A, B, '>=')))
+        else if Token = 'in' then
+          Stack.Push(TValue.From<Boolean>(Contains(A, B)))
+        else if Token = 'starts with' then
+          Stack.Push(TValue.From<Boolean>((A.Kind in [tkString, tkUString]) and (B.Kind in [tkString, tkUString]) and A.AsString.StartsWith(B.AsString)))
+        else if Token = 'matches' then
         begin
           if (A.Kind in [tkString, tkUString]) and (B.Kind in [tkString, tkUString]) then
           begin
             try
-              Condition := TRegEx.IsMatch(A.AsString, B.AsString);
+              Regex := TRegEx.Create(B.AsString);
+              Condition := Regex.IsMatch(A.AsString);
             except
               on E: Exception do
                 Condition := False;
@@ -916,65 +993,38 @@ begin
           end
           else
             Stack.Push(TValue.From<Boolean>(False));
-          //WriteLn('Debug: After Matches=', Token, ' StackCount=', Stack.Count);
-          Continue;
-        end;
-        if Token = '..' then
+        end
+        else if Token = '..' then
         begin
           if not (A.IsOrdinal and B.IsOrdinal) then
             raise Exception.Create('Range operator requires integer operands: A=' + A.ToString + ', B=' + B.ToString);
-          var start: Int64 := A.AsInt64;
-          var finish: Int64 := B.AsInt64;
-          var step: Integer := 1;
-          if start > finish then
-            step := -1;
-          var count: Integer := Abs(finish - start) + 1;
-          var arr: TArray<TValue>;
-          SetLength(arr, count);
-          var cur := start;
-          for var k := 0 to count - 1 do
+          var Start: Int64 := A.AsInt64;
+          var Finish: Int64 := B.AsInt64;
+          var Step: Integer := 1;
+          if Start > Finish then
+            Step := -1;
+          var Count: Integer := Abs(Finish - Start) + 1;
+          SetLength(Arr, Count);
+          var Cur := Start;
+          for I := 0 to Count - 1 do
           begin
-            arr[k] := TValue.From<Int64>(cur);
-            cur := cur + step;
+            Arr[I] := TValue.From<Int64>(Cur);
+            Cur := Cur + Step;
           end;
-          Stack.Push(TValue.From<TArray<TValue>>(arr));
-          //WriteLn('Debug: After Range=', Token, ' StackCount=', Stack.Count);
-          Continue;
-        end;
-        if Token = '~' then
+          Stack.Push(TValue.From<TArray<TValue>>(Arr));
+        end
+        else if Token = 'and' then
+          Stack.Push(TValue.From<Boolean>(ToBool(A) and ToBool(B)))
+        else if Token = 'or' then
+          Stack.Push(TValue.From<Boolean>(ToBool(A) or ToBool(B)))
+        else if Token = 'not' then
         begin
-          Stack.Push(TValue.From<String>(A.ToString + B.ToString));
-          //WriteLn('Debug: After Concat=', Token, ' StackCount=', Stack.Count);
-          Continue;
+          if Stack.Count < 1 then
+            raise Exception.Create('Invalid expression: insufficient operands for not');
+          A := Stack.Pop;
+          Stack.Push(TValue.From<Boolean>(not ToBool(A)));
         end;
-        if (Token = '==') or (Token = '!=') or (Token = '<') or (Token = '>') or (Token = '<=') or (Token = '>=') then
-        begin
-          if Token = '==' then
-            Condition := ValuesAreEqual(A, B)
-          else if Token = '!=' then
-            Condition := not ValuesAreEqual(A, B)
-          else
-            Condition := CompareValues(A, B, Token);
-          Stack.Push(TValue.From<Boolean>(Condition));
-          //WriteLn('Debug: After Comparison=', Token, ' StackCount=', Stack.Count);
-          Continue;
-        end;
-        FA := GetAsExtendedLenient(A);
-        FB := GetAsExtendedLenient(B);
-        case Token[1] of
-          '+': Stack.Push(TValue.From<Double>(FA + FB));
-          '-': 
-          begin
-            if A.IsOrdinal and B.IsOrdinal then
-              Stack.Push(TValue.From<Int64>(A.AsInt64 - B.AsInt64))
-            else
-              Stack.Push(TValue.From<Double>(FA - FB));
-          end;
-          '*': Stack.Push(TValue.From<Double>(FA * FB));
-          '/': if FB <> 0 then Stack.Push(TValue.From<Double>(FA / FB)) else Stack.Push(TValue.From<Double>(0));
-          '%': if FB <> 0 then Stack.Push(TValue.From<Double>(fmod(FA, FB))) else Stack.Push(TValue.From<Double>(0));
-        end;
-        //WriteLn('Debug: After Arithmetic=', Token, ' StackCount=', Stack.Count);
+        if FDebug then WriteLn('Debug: After Operation=', Token, ' StackCount=', Stack.Count);
       end;
     end;
     if Stack.Count <> 1 then
@@ -985,7 +1035,7 @@ begin
       raise Exception.Create('Invalid expression: stack imbalance, StackCount=' + IntToStr(Stack.Count) + ', Items=[' + StackItems + ']');
     end;
     Result := Stack.Pop;
-    //WriteLn('Debug: EvaluateRPN Result=', Result.ToString);
+    if FDebug then WriteLn('Debug: EvaluateRPN Result=', Result.ToString);
   finally
     Stack.Free;
   end;
@@ -1225,6 +1275,7 @@ end;
 constructor TTina4Twig.Create(const TemplatePath: String);
 begin
   inherited Create;
+  FDebug := False;
   FContext := TDictionary<String, TValue>.Create;
 
   //Set the date format for the system to be used in date_format and date
@@ -1245,69 +1296,14 @@ begin
   RegisterDefaultFilters;
 
   FFunctions := TDictionary<String, TFunctionFunc>.Create;
+  RegisterDefaultFunctions;
+  
   FMacros := TDictionary<String, TMacroFunc>.Create;
   FMacroParams := TDictionary<String, TArray<String>>.Create;
   FMacroDefaults := TDictionary<String, TDictionary<String, String>>.Create;
   FMacroBodies := TDictionary<String, String>.Create;
 
-  FFunctions.Add('dump',
-    function(const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
-    var
-      I: Integer;
-      DumpResult: TStringList;
-      Value: TValue;
-    begin
-      DumpResult := TStringList.Create;
-      try
-        if Length(Args) = 0 then
-          Exit('(no arguments)');
-
-        for I := 0 to High(Args) do
-        begin
-          if Context.TryGetValue(Args[I], Value) then
-          begin
-            DumpResult.Add(Args[I] + ' =');
-            DumpValue(Value, DumpResult, '  ');
-          end
-          else
-          begin
-            DumpResult.Add(Args[I] + ' = (not found)');
-          end;
-        end;
-
-        Result := '<pre>' + DumpResult.Text + '</pre>';
-      finally
-        DumpResult.Free;
-      end;
-    end);
-
-  FFunctions.Add('range',
-  function(const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
-  var
-    i, startNum, endNum: Integer;
-    Output: TStringBuilder;
-  begin
-    if Length(Args) < 2 then
-      Exit('[]');
-
-    startNum := StrToIntDef(Args[0], 0);
-    endNum := StrToIntDef(Args[1], 0);
-
-    Output := TStringBuilder.Create;
-    try
-      Output.Append('[');
-      for i := startNum to endNum do
-      begin
-        if i > startNum then
-          Output.Append(',');
-        Output.Append(IntToStr(i));
-      end;
-      Output.Append(']');
-      Result := Output.ToString;
-    finally
-      Output.Free;
-    end;
-  end);
+  
 
 end;
 
@@ -5165,6 +5161,103 @@ begin
     end);
 end;
 
+procedure TTina4Twig.RegisterDefaultFunctions;
+begin
+  FFunctions.Add('dump',
+    function(const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
+    var
+      I: Integer;
+      DumpResult: TStringList;
+      Value: TValue;
+    begin
+      DumpResult := TStringList.Create;
+      try
+        if Length(Args) = 0 then
+          Exit('(no arguments)');
+
+        for I := 0 to High(Args) do
+        begin
+          if Context.TryGetValue(Args[I], Value) then
+          begin
+            DumpResult.Add(Args[I] + ' =');
+            DumpValue(Value, DumpResult, '  ');
+          end
+          else
+          begin
+            DumpResult.Add(Args[I] + ' = (not found)');
+          end;
+        end;
+
+        Result := '<pre>' + DumpResult.Text + '</pre>';
+      finally
+        DumpResult.Free;
+      end;
+    end);
+
+  FFunctions.Add('range',
+  function(const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
+  var
+    i, startNum, endNum: Integer;
+    Output: TStringBuilder;
+  begin
+    if Length(Args) < 2 then
+      Exit('[]');
+
+    startNum := StrToIntDef(Args[0], 0);
+    endNum := StrToIntDef(Args[1], 0);
+
+    Output := TStringBuilder.Create;
+    try
+      Output.Append('[');
+      for i := startNum to endNum do
+      begin
+        if i > startNum then
+          Output.Append(',');
+        Output.Append(IntToStr(i));
+      end;
+      Output.Append(']');
+      Result := Output.ToString;
+    finally
+      Output.Free;
+    end;
+  end);
+
+  FFunctions.Add('date',
+      function(const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
+      var
+        Input: TValue;
+        DateTimeValue: TDateTime;
+        FormatStr: String;
+      begin
+        if Length(Args) = 0 then
+         Input := Now()
+          else
+        Input := ResolveVariablePath(Args[0], Context);
+        
+        if Length(Args) > 1 then
+          FormatStr := Args[1]
+        else
+          FormatStr := FDateFormat; // Default format as per Twig
+
+        if Input.IsType<Int64> then
+          DateTimeValue := UnixToDateTime(Input.AsInt64)
+        else if Input.Kind in [tkString, tkUString] then
+        begin
+          try
+            DateTimeValue := StrToDateTime(Input.AsString);
+          except
+            DateTimeValue := Now; // Fallback to current date/time on parse failure
+          end;
+        end
+        else if Input.IsType<TDateTime> then
+          DateTimeValue := Input.AsType<TDateTime>
+        else
+          DateTimeValue := Now; // Fallback for unsupported types
+
+        Result := FormatDateTime(FormatStr, DateTimeValue);
+      end);
+end;
+
 /// <summary>
 /// Renders a template or content string with variables.
 /// </summary>
@@ -5231,6 +5324,11 @@ procedure TTina4Twig.SetDateFormat(FormatDate, FormatDays: String);
 begin
   FDateFormat := FormatDate;
   FDaysFormat := FormatDays;
+end;
+
+procedure TTina4Twig.SetDebug(Value: Boolean);
+begin
+  FDebug := Value;
 end;
 
 /// <summary>

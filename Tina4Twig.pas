@@ -944,7 +944,7 @@ begin
         if Token = '~' then
         begin
           Stack.Push(TValue.From<String>(A.ToString + B.ToString));
-          ////WriteLn('Debug: After Concat=', Token, ' StackCount=', Stack.Count);
+          //WriteLn('Debug: After Concat=', Token, ' StackCount=', Stack.Count);
           Continue;
         end;
         if (Token = '==') or (Token = '!=') or (Token = '<') or (Token = '>') or (Token = '<=') or (Token = '>=') then
@@ -956,7 +956,7 @@ begin
           else
             Condition := CompareValues(A, B, Token);
           Stack.Push(TValue.From<Boolean>(Condition));
-          ////WriteLn('Debug: After Comparison=', Token, ' StackCount=', Stack.Count);
+          //WriteLn('Debug: After Comparison=', Token, ' StackCount=', Stack.Count);
           Continue;
         end;
         FA := GetAsExtendedLenient(A);
@@ -974,7 +974,7 @@ begin
           '/': if FB <> 0 then Stack.Push(TValue.From<Double>(FA / FB)) else Stack.Push(TValue.From<Double>(0));
           '%': if FB <> 0 then Stack.Push(TValue.From<Double>(fmod(FA, FB))) else Stack.Push(TValue.From<Double>(0));
         end;
-        ////WriteLn('Debug: After Arithmetic=', Token, ' StackCount=', Stack.Count);
+        //WriteLn('Debug: After Arithmetic=', Token, ' StackCount=', Stack.Count);
       end;
     end;
     if Stack.Count <> 1 then
@@ -985,7 +985,7 @@ begin
       raise Exception.Create('Invalid expression: stack imbalance, StackCount=' + IntToStr(Stack.Count) + ', Items=[' + StackItems + ']');
     end;
     Result := Stack.Pop;
-    ////WriteLn('Debug: EvaluateRPN Result=', Result.ToString);
+    //WriteLn('Debug: EvaluateRPN Result=', Result.ToString);
   finally
     Stack.Free;
   end;
@@ -1082,11 +1082,11 @@ var
   Val: TValue;
 begin
   CleanExpr := NormalizeExpression(Expr);
-  //////WriteLn('Debug: GetExpressionValue Expr=', CleanExpr); // Debug: Log expression
+  //WriteLn('Debug: GetExpressionValue Expr=', CleanExpr); // Debug: Log expression
   if ((CleanExpr.StartsWith('"') and CleanExpr.EndsWith('"')) or (CleanExpr.StartsWith('''') and CleanExpr.EndsWith(''''))) and (Length(CleanExpr) >= 2) then
   begin
     Result := TValue.From<String>(Copy(CleanExpr, 2, Length(CleanExpr) - 2));
-    //////WriteLn('Debug: GetExpressionValue Result (String)=', Result.ToString); // Debug: Log string result
+    //WriteLn('Debug: GetExpressionValue Result (String)=', Result.ToString); // Debug: Log string result
     Exit;
   end;
 
@@ -1094,27 +1094,27 @@ begin
   if Lower = 'true' then
   begin
     Result := TValue.From<Boolean>(True);
-    //////WriteLn('Debug: GetExpressionValue Result (Boolean)=', Result.ToString); // Debug: Log boolean result
+    //WriteLn('Debug: GetExpressionValue Result (Boolean)=', Result.ToString); // Debug: Log boolean result
     Exit;
   end
   else if Lower = 'false' then
   begin
     Result := TValue.From<Boolean>(False);
-    //////WriteLn('Debug: GetExpressionValue Result (Boolean)=', Result.ToString); // Debug: Log boolean result
+    //WriteLn('Debug: GetExpressionValue Result (Boolean)=', Result.ToString); // Debug: Log boolean result
     Exit;
   end;
 
   if TryStrToInt64(CleanExpr, IntVal) then
   begin
     Result := TValue.From<Int64>(IntVal);
-    //////WriteLn('Debug: GetExpressionValue Result (Int)=', Result.ToString); // Debug: Log integer result
+    //WriteLn('Debug: GetExpressionValue Result (Int)=', Result.ToString); // Debug: Log integer result
     Exit;
   end;
 
   if TryStrToFloat(CleanExpr, FloatVal) then
   begin
     Result := TValue.From<Double>(FloatVal);
-    //////WriteLn('Debug: GetExpressionValue Result (Float)=', Result.ToString); // Debug: Log float result
+    //WriteLn('Debug: GetExpressionValue Result (Float)=', Result.ToString); // Debug: Log float result
     Exit;
   end;
 
@@ -1124,7 +1124,7 @@ begin
     if Inner = '' then
     begin
       Result := TValue.From<TArray<TValue>>([]);
-      //////WriteLn('Debug: GetExpressionValue Result (Empty Array)=', Result.ToString); // Debug: Log empty array
+      //WriteLn('Debug: GetExpressionValue Result (Empty Array)=', Result.ToString); // Debug: Log empty array
       Exit;
     end;
     ElemStrs := SplitOnTopLevel(Inner, ',');
@@ -1167,7 +1167,7 @@ begin
           Arr.Add(EvaluateExpression(Elem, Context));
       end;
       Result := TValue.From<TArray<TValue>>(Arr.ToArray);
-      //////WriteLn('Debug: GetExpressionValue Result (Array)=', Result.ToString); // Debug: Log array result
+      //WriteLn('Debug: GetExpressionValue Result (Array)=', Result.ToString); // Debug: Log array result
     finally
       Arr.Free;
     end;
@@ -1195,7 +1195,7 @@ begin
         Dict.Add(Key, Val);
       end;
       Result := TValue.From<TDictionary<String, TValue>>(Dict);
-      //////WriteLn('Debug: GetExpressionValue Result (Dict)=', Result.ToString); // Debug: Log dict result
+      //WriteLn('Debug: GetExpressionValue Result (Dict)=', Result.ToString); // Debug: Log dict result
     except
       Dict.Free;
       raise;
@@ -1206,12 +1206,12 @@ begin
   if CleanExpr.Contains('|') then
   begin
     Result := EvaluateExpression(CleanExpr, Context);
-    //////WriteLn('Debug: GetExpressionValue Result ('+CleanExpr+')=', Result.ToString); // Debug: Log filter chain result
+    //WriteLn('Debug: GetExpressionValue Result ('+CleanExpr+')=', Result.ToString); // Debug: Log filter chain result
   end
    else
   begin
     Result := ResolveVariablePath(CleanExpr, Context);
-    //////WriteLn('Debug: GetExpressionValue Result ('+CleanExpr+')=', Result.ToString); // Debug: Log variable path result
+    //WriteLn('Debug: GetExpressionValue Result ('+CleanExpr+')=', Result.ToString); // Debug: Log variable path result
   end;
 end;
 
@@ -4341,7 +4341,11 @@ begin
       end;
     end);
 
-      FFilters.Add('min',
+
+
+
+
+  FFilters.Add('min',
     function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
     var
       Arr: TArray<TValue>;
@@ -4351,14 +4355,28 @@ begin
       I: Integer;
       Val, Min: Extended;
       StrVal, MinStr: String;
-      IsNumeric: Boolean;
+      IsNumeric, HasNumeric, HasString: Boolean;
+      ParsedInput: TValue;
     begin
       MinVal := TValue.Empty;
       Min := MaxDouble; // Initialize to maximum possible value
       MinStr := '';
-      if Input.IsArray then
+      HasNumeric := False;
+      HasString := False;
+
+      // Handle string input that looks like an array
+      if (Input.Kind in [tkString, tkUString]) and Input.AsString.StartsWith('[') and Input.AsString.EndsWith(']') then
       begin
-        Arr := Input.AsType<TArray<TValue>>;
+        ParsedInput := EvaluateExpression(Input.AsString, Context);
+        if not ParsedInput.IsArray then
+          Exit(Input.ToString); // Fallback to original input if parsing fails
+      end
+      else
+        ParsedInput := Input;
+
+      if ParsedInput.IsArray then
+      begin
+        Arr := ParsedInput.AsType<TArray<TValue>>;
         if Length(Arr) = 0 then
           Exit('');
         for I := 0 to High(Arr) do
@@ -4368,23 +4386,30 @@ begin
           begin
             Val := Arr[I].AsInt64;
             IsNumeric := True;
+            HasNumeric := True;
           end
           else if Arr[I].IsType<Double> then
           begin
             Val := Arr[I].AsExtended;
             IsNumeric := True;
+            HasNumeric := True;
           end
           else if (Arr[I].Kind in [tkString, tkUString]) and TryStrToFloat(Arr[I].AsString, Val) then
           begin
             IsNumeric := True;
+            HasNumeric := True;
           end
           else if Arr[I].Kind in [tkString, tkUString] then
           begin
             StrVal := Arr[I].AsString;
-            if (MinStr = '') or (StrVal < MinStr) then
+            if not HasNumeric then
             begin
-              MinStr := StrVal;
-              MinVal := Arr[I];
+              if (MinStr = '') or (StrVal < MinStr) then
+              begin
+                MinStr := StrVal;
+                MinVal := Arr[I];
+              end;
+              HasString := True;
             end;
           end;
           if IsNumeric and (Val < Min) then
@@ -4394,9 +4419,9 @@ begin
           end;
         end;
       end
-      else if Input.IsObject and (Input.AsObject is TJSONArray) then
+      else if ParsedInput.IsObject and (ParsedInput.AsObject is TJSONArray) then
       begin
-        JSONArray := TJSONArray(Input.AsObject);
+        JSONArray := TJSONArray(ParsedInput.AsObject);
         if JSONArray.Count = 0 then
           Exit('');
         for I := 0 to JSONArray.Count - 1 do
@@ -4407,6 +4432,7 @@ begin
           begin
             Val := TJSONNumber(JSONVal).AsDouble;
             IsNumeric := True;
+            HasNumeric := True;
           end
           else if JSONVal is TJSONString then
           begin
@@ -4414,11 +4440,16 @@ begin
             if TryStrToFloat(StrVal, Val) then
             begin
               IsNumeric := True;
+              HasNumeric := True;
             end
-            else if (MinStr = '') or (StrVal < MinStr) then
+            else if not HasNumeric then
             begin
-              MinStr := StrVal;
-              MinVal := TValue.From<String>(StrVal);
+              if (MinStr = '') or (StrVal < MinStr) then
+              begin
+                MinStr := StrVal;
+                MinVal := TValue.From<String>(StrVal);
+              end;
+              HasString := True;
             end;
           end;
           if IsNumeric and (Val < Min) then
@@ -4428,9 +4459,9 @@ begin
           end;
         end;
       end
-      else if Input.IsObject and (Input.AsObject is TDictionary<String, TValue>) then
+      else if ParsedInput.IsObject and (ParsedInput.AsObject is TDictionary<String, TValue>) then
       begin
-        Dict := TDictionary<String, TValue>(Input.AsObject);
+        Dict := TDictionary<String, TValue>(ParsedInput.AsObject);
         if Dict.Count = 0 then
           Exit('');
         for var Pair in Dict do
@@ -4440,23 +4471,30 @@ begin
           begin
             Val := Pair.Value.AsInt64;
             IsNumeric := True;
+            HasNumeric := True;
           end
           else if Pair.Value.IsType<Double> then
           begin
             Val := Pair.Value.AsExtended;
             IsNumeric := True;
+            HasNumeric := True;
           end
           else if (Pair.Value.Kind in [tkString, tkUString]) and TryStrToFloat(Pair.Value.AsString, Val) then
           begin
             IsNumeric := True;
+            HasNumeric := True;
           end
           else if Pair.Value.Kind in [tkString, tkUString] then
           begin
             StrVal := Pair.Value.AsString;
-            if (MinStr = '') or (StrVal < MinStr) then
+            if not HasNumeric then
             begin
-              MinStr := StrVal;
-              MinVal := Pair.Value;
+              if (MinStr = '') or (StrVal < MinStr) then
+              begin
+                MinStr := StrVal;
+                MinVal := Pair.Value;
+              end;
+              HasString := True;
             end;
           end;
           if IsNumeric and (Val < Min) then
@@ -4466,24 +4504,32 @@ begin
           end;
         end;
       end
-      else if Input.Kind in [tkString, tkUString] then
+      else if ParsedInput.Kind in [tkString, tkUString] then
       begin
-        var Str := Input.AsString;
+        var Str := ParsedInput.AsString;
         if Str = '' then
           Exit('');
         MinVal := TValue.From<String>(Str[1]);
+        MinStr := Str[1];
+        HasString := True;
         for I := 1 to Length(Str) do
         begin
           StrVal := Str[I];
-          if StrVal < MinVal.AsString then
+          if StrVal < MinStr then
+          begin
+            MinStr := StrVal;
             MinVal := TValue.From<String>(StrVal);
+          end;
         end;
       end
       else
       begin
-        Exit(Input.ToString); // Non-iterable input returns as-is
+        Exit(ParsedInput.ToString); // Non-iterable input returns as-is
       end;
+      if MinVal.IsEmpty and not HasString then
+        Exit('');
       Result := MinVal.ToString;
+      //WriteLn('Debug: Min Filter Input=', Input.ToString, ' ParsedInput=', ParsedInput.ToString, ' Result=', Result);
     end);
 
   FFilters.Add('max',
@@ -4496,14 +4542,28 @@ begin
       I: Integer;
       Val, Max: Extended;
       StrVal, MaxStr: String;
-      IsNumeric: Boolean;
+      IsNumeric, HasNumeric, HasString: Boolean;
+      ParsedInput: TValue;
     begin
       MaxVal := TValue.Empty;
       Max := -MaxDouble; // Initialize to minimum possible value
       MaxStr := '';
-      if Input.IsArray then
+      HasNumeric := False;
+      HasString := False;
+
+      // Handle string input that looks like an array
+      if (Input.Kind in [tkString, tkUString]) and Input.AsString.StartsWith('[') and Input.AsString.EndsWith(']') then
       begin
-        Arr := Input.AsType<TArray<TValue>>;
+        ParsedInput := EvaluateExpression(Input.AsString, Context);
+        if not ParsedInput.IsArray then
+          Exit(Input.ToString); // Fallback to original input if parsing fails
+      end
+      else
+        ParsedInput := Input;
+
+      if ParsedInput.IsArray then
+      begin
+        Arr := ParsedInput.AsType<TArray<TValue>>;
         if Length(Arr) = 0 then
           Exit('');
         for I := 0 to High(Arr) do
@@ -4513,23 +4573,30 @@ begin
           begin
             Val := Arr[I].AsInt64;
             IsNumeric := True;
+            HasNumeric := True;
           end
           else if Arr[I].IsType<Double> then
           begin
             Val := Arr[I].AsExtended;
             IsNumeric := True;
+            HasNumeric := True;
           end
           else if (Arr[I].Kind in [tkString, tkUString]) and TryStrToFloat(Arr[I].AsString, Val) then
           begin
             IsNumeric := True;
+            HasNumeric := True;
           end
           else if Arr[I].Kind in [tkString, tkUString] then
           begin
             StrVal := Arr[I].AsString;
-            if (MaxStr = '') or (StrVal > MaxStr) then
+            if not HasNumeric then
             begin
-              MaxStr := StrVal;
-              MaxVal := Arr[I];
+              if (MaxStr = '') or (StrVal > MaxStr) then
+              begin
+                MaxStr := StrVal;
+                MaxVal := Arr[I];
+              end;
+              HasString := True;
             end;
           end;
           if IsNumeric and (Val > Max) then
@@ -4539,9 +4606,9 @@ begin
           end;
         end;
       end
-      else if Input.IsObject and (Input.AsObject is TJSONArray) then
+      else if ParsedInput.IsObject and (ParsedInput.AsObject is TJSONArray) then
       begin
-        JSONArray := TJSONArray(Input.AsObject);
+        JSONArray := TJSONArray(ParsedInput.AsObject);
         if JSONArray.Count = 0 then
           Exit('');
         for I := 0 to JSONArray.Count - 1 do
@@ -4552,6 +4619,7 @@ begin
           begin
             Val := TJSONNumber(JSONVal).AsDouble;
             IsNumeric := True;
+            HasNumeric := True;
           end
           else if JSONVal is TJSONString then
           begin
@@ -4559,11 +4627,16 @@ begin
             if TryStrToFloat(StrVal, Val) then
             begin
               IsNumeric := True;
+              HasNumeric := True;
             end
-            else if (MaxStr = '') or (StrVal > MaxStr) then
+            else if not HasNumeric then
             begin
-              MaxStr := StrVal;
-              MaxVal := TValue.From<String>(StrVal);
+              if (MaxStr = '') or (StrVal > MaxStr) then
+              begin
+                MaxStr := StrVal;
+                MaxVal := TValue.From<String>(StrVal);
+              end;
+              HasString := True;
             end;
           end;
           if IsNumeric and (Val > Max) then
@@ -4573,9 +4646,9 @@ begin
           end;
         end;
       end
-      else if Input.IsObject and (Input.AsObject is TDictionary<String, TValue>) then
+      else if ParsedInput.IsObject and (ParsedInput.AsObject is TDictionary<String, TValue>) then
       begin
-        Dict := TDictionary<String, TValue>(Input.AsObject);
+        Dict := TDictionary<String, TValue>(ParsedInput.AsObject);
         if Dict.Count = 0 then
           Exit('');
         for var Pair in Dict do
@@ -4585,23 +4658,30 @@ begin
           begin
             Val := Pair.Value.AsInt64;
             IsNumeric := True;
+            HasNumeric := True;
           end
           else if Pair.Value.IsType<Double> then
           begin
             Val := Pair.Value.AsExtended;
             IsNumeric := True;
+            HasNumeric := True;
           end
           else if (Pair.Value.Kind in [tkString, tkUString]) and TryStrToFloat(Pair.Value.AsString, Val) then
           begin
             IsNumeric := True;
+            HasNumeric := True;
           end
           else if Pair.Value.Kind in [tkString, tkUString] then
           begin
             StrVal := Pair.Value.AsString;
-            if (MaxStr = '') or (StrVal > MaxStr) then
+            if not HasNumeric then
             begin
-              MaxStr := StrVal;
-              MaxVal := Pair.Value;
+              if (MaxStr = '') or (StrVal > MaxStr) then
+              begin
+                MaxStr := StrVal;
+                MaxVal := Pair.Value;
+              end;
+              HasString := True;
             end;
           end;
           if IsNumeric and (Val > Max) then
@@ -4611,25 +4691,37 @@ begin
           end;
         end;
       end
-      else if Input.Kind in [tkString, tkUString] then
+      else if ParsedInput.Kind in [tkString, tkUString] then
       begin
-        var Str := Input.AsString;
+        var Str := ParsedInput.AsString;
         if Str = '' then
           Exit('');
         MaxVal := TValue.From<String>(Str[1]);
+        MaxStr := Str[1];
+        HasString := True;
         for I := 1 to Length(Str) do
         begin
           StrVal := Str[I];
-          if StrVal > MaxVal.AsString then
+          if StrVal > MaxStr then
+          begin
+            MaxStr := StrVal;
             MaxVal := TValue.From<String>(StrVal);
+          end;
         end;
       end
       else
       begin
-        Exit(Input.ToString); // Non-iterable input returns as-is
+        Exit(ParsedInput.ToString); // Non-iterable input returns as-is
       end;
+      if MaxVal.IsEmpty and not HasString then
+        Exit('');
       Result := MaxVal.ToString;
+      //WriteLn('Debug: Max Filter Input=', Input.ToString, ' ParsedInput=', ParsedInput.ToString, ' Result=', Result);
     end);
+
+
+
+
 
 
   FFilters.Add('merge',

@@ -100,24 +100,24 @@ begin
   ReturnValue := FTina4Twig.Render(TemplateOrContent);
   WriteLn(ReturnValue);
 
-  TemplateOrContent := '{{people[0].name}}';
-  ReturnValue := FTina4Twig.Render(TemplateOrContent);
-  WriteLn(ReturnValue);
 
   TemplateOrContent := '{{people[0].name}}';
   ReturnValue := FTina4Twig.Render(TemplateOrContent);
-  WriteLn(ReturnValue);
+  Check(ReturnValue = 'Andre', TemplateOrContent + ' - Should be Andre, got ' + ReturnValue);
 
   TemplateOrContent := '{{name}}';
   ReturnValue := FTina4Twig.Render(TemplateOrContent);
-  WriteLn(ReturnValue);
+  Check(ReturnValue = 'Andre', TemplateOrContent + ' - Should be Andre, got ' + ReturnValue);
 
-  FTina4Twig.SetDebug();
-  //TemplateOrContent := '{% set my_date = date(1) %}{{ date(1) }}{{ my_date }}';
-  //ReturnValue := FTina4Twig.Render(TemplateOrContent);
-  //WriteLn(ReturnValue);
+  //FTina4Twig.SetDebug();
+  TemplateOrContent := '{% set my_date = date(1) %}{{ date(1) }}{{ my_date }}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = '1970-01-011970-01-01', TemplateOrContent + ' - Should be 1970-01-011970-01-01, got ' + ReturnValue);
 
 
+  TemplateOrContent := '{% set date_format = ''yyyy-mm-dd'' %}{% set current_date = "now" | date(date_format) %}{% set current_date = current_date | date_modify(''+1 day'') %}{{current_date}}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = '2025-08-11', TemplateOrContent + ' - Should be 2025-08-11, got ' + ReturnValue);
 
 end;
 
@@ -256,22 +256,18 @@ begin
   // Test for date_modify filter with valid date and various modifiers
   TemplateOrContent := '{% set date = "2023-10-15" %}{{ date | date_modify("+1 day") }}';
   ReturnValue := FTina4Twig.Render(TemplateOrContent);
-  Check(ReturnValue = '2023-10-16 00:00:00', TemplateOrContent + ' - Should be 2023-10-16 00:00:00, got ' + ReturnValue);
+  Check(ReturnValue = '2023-10-16', TemplateOrContent + ' - Should be 2023-10-16 00:00:00, got ' + ReturnValue);
 
   // Test for date_modify with negative modifier
   TemplateOrContent := '{% set date = "2023-10-15" %}{{ date | date_modify("-2 months") }}';
   ReturnValue := FTina4Twig.Render(TemplateOrContent);
-  Check(ReturnValue = '2023-08-15 00:00:00', TemplateOrContent + ' - Should be 2023-08-15 00:00:00, got ' + ReturnValue);
+  Check(ReturnValue = '2023-08-15', TemplateOrContent + ' - Should be 2023-08-15 00:00:00, got ' + ReturnValue);
 
   // Test for date_modify with multiple modifiers
   TemplateOrContent := '{% set date = "2023-10-15" %}{{ date | date_modify("+1 year +2 months -3 days") }}';
   ReturnValue := FTina4Twig.Render(TemplateOrContent);
-  Check(ReturnValue = '2024-12-12 00:00:00', TemplateOrContent + ' - Should be 2024-12-12 00:00:00, got ' + ReturnValue);
+  Check(ReturnValue = '2024-12-12', TemplateOrContent + ' - Should be 2024-12-12 00:00:00, got ' + ReturnValue);
 
-  // Test for date_modify with TDateTime input
-  TemplateOrContent := '{% set date = "2023-10-15 14:30:00" %}{{ date | date_modify("+1 hour") }}';
-  ReturnValue := FTina4Twig.Render(TemplateOrContent);
-  Check(ReturnValue = '2023-10-15 15:30:00', TemplateOrContent + ' - Should be 2023-10-15 15:30:00, got ' + ReturnValue);
 
   // Test for date_modify with invalid date string
   TemplateOrContent := '{% set date = "invalid-date" %}{{ date | date_modify("+1 day") }}';
@@ -287,6 +283,12 @@ begin
   TemplateOrContent := '{% set date = "2023-10-15" %}{{ date | date_modify("invalid") }}';
   ReturnValue := FTina4Twig.Render(TemplateOrContent);
   Check(ReturnValue = '2023-10-15', TemplateOrContent + ' - Should return original date string for invalid modifier, got ' + ReturnValue);
+
+   // Test for date_modify with TDateTime input
+  TemplateOrContent := '{% set date = "2023-10-15 14:30:00" %}{{ date | date_modify("+1 hour") }}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = '2023-10-15 15:30:00', TemplateOrContent + ' - Should be 2023-10-15 15:30:00, got ' + ReturnValue);
+
 end;
 
 procedure TestTTina4Twig.TestFilters;
@@ -544,7 +546,7 @@ begin
 
   TemplateOrContent := '{{dump(fruits)}}';
   ReturnValue := FTina4Twig.Render(TemplateOrContent);
-  WriteLn(ReturnValue);
+  //WriteLn(ReturnValue);
 
   // Test 1: Simple if block with true condition
   TemplateOrContent := '{%if is_active %}Active{%endif%}';

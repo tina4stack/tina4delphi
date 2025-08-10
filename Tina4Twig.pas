@@ -792,6 +792,7 @@ end;
 /// Processes arithmetic operations, filter chains, comparisons, 'in', 'starts with', 'matches', and range '..' operators.
 /// Updated to safely handle regex evaluation for 'matches' operator and range operator for array creation.
 /// Ensures integer operands for '..' by converting strings and floats to integers where possible.
+/// Now handles function calls by accumulating arguments from subsequent tokens.
 /// </remarks>
 function TTina4Twig.EvaluateRPN(const RPN: TArray<String>; const Context: TDictionary<String, TValue>): TValue;
 var
@@ -801,7 +802,7 @@ var
   FA, FB: Double;
   IA, IB: Int64;
   Parts: TArray<String>;
-  J: Integer;
+  J, I: Integer;
   CurrentVal: TValue;
   FilterExpr, FuncName, ArgsStr: String;
   ArgTokens: TArray<String>;
@@ -809,17 +810,19 @@ var
   ArgToken, AArgToken: String;
   Args: TArray<String>;
   Filter: TFilterFunc;
+  Func: TFunctionFunc;
   Condition: Boolean;
   IsSimpleInteger: Boolean;
-  I: Integer;
   Regex: TRegEx;
   Arr: TArray<TValue>;
 begin
   Stack := TStack<TValue>.Create;
   try
     if FDebug then WriteLn('Debug: EvaluateRPN Input=', String.Join(' ', RPN));
-    for Token in RPN do
+    I := 0;
+    while I < Length(RPN) do
     begin
+      Token := RPN[I];
       if FDebug then WriteLn('Debug: Processing Token=', Token, ' StackCount=', Stack.Count);
       if Token.Contains('|') then
       begin
@@ -827,7 +830,7 @@ begin
         if Trim(Parts[0]) = '' then
           CurrentVal := Stack.Pop
         else
-          CurrentVal := ResolveVariablePath(Parts[0], Context); // Use ResolveVariablePath for consistency
+          CurrentVal := ResolveVariablePath(Parts[0], Context);
         for J := 1 to High(Parts) do
         begin
           FilterExpr := Trim(Parts[J]);
@@ -862,9 +865,9 @@ begin
             IsSimpleInteger := TryStrToInt64(CurrentVal.AsString, IA);
             if IsSimpleInteger then
             begin
-              for I := 1 to Length(CurrentVal.AsString) do
+              for var K := 1 to Length(CurrentVal.AsString) do
               begin
-                if (CurrentVal.AsString[I] in ['0', '+', '-']) and (I < Length(CurrentVal.AsString)) then
+                if (CurrentVal.AsString[K] in ['0', '+', '-']) and (K < Length(CurrentVal.AsString)) then
                 begin
                   IsSimpleInteger := False;
                   Break;
@@ -879,6 +882,33 @@ begin
         end;
         Stack.Push(CurrentVal);
         if FDebug then WriteLn('Debug: After Filter=', Token, ' StackCount=', Stack.Count);
+        Inc(I);
+        Continue;
+      end;
+      // Check if token is a function call
+      if FFunctions.ContainsKey(Token) then
+      begin
+        ArgList := TList<String>.Create;
+        try
+          // Collect arguments from subsequent tokens
+          Inc(I);
+          if I >= Length(RPN) then
+            raise Exception.Create('Invalid function call: no arguments for ' + Token);
+          // For simplicity, assume one argument (extend for multi-arg functions as needed)
+          ArgList.Add(RPN[I]); // Use the next token as the argument
+          Args := ArgList.ToArray;
+          if FFunctions.TryGetValue(Token, Func) then
+          begin
+            CurrentVal := TValue.From<String>(Func(Args, Context));
+            Stack.Push(CurrentVal);
+            if FDebug then WriteLn('Debug: After Function=', Token, ' Args=', String.Join(',', Args), ' Result=', CurrentVal.ToString, ' StackCount=', Stack.Count);
+          end
+          else
+            raise Exception.Create('Function ' + Token + ' not found');
+        finally
+          ArgList.Free;
+        end;
+        Inc(I);
         Continue;
       end;
       if TryStrToInt64(Token, IA) then
@@ -900,8 +930,7 @@ begin
               (Token <> 'in') and (Token <> 'starts with') and (Token <> 'matches') and (Token <> '..') and
               (Token <> 'and') and (Token <> 'or') and (Token <> 'not') then
       begin
-        CurrentVal := ResolveVariablePath(Token, Context); // Use ResolveVariablePath for consistency
-        // Convert string or float to integer if possible for numeric operations
+        CurrentVal := ResolveVariablePath(Token, Context);
         if (CurrentVal.Kind in [tkString, tkUString]) and TryStrToInt64(CurrentVal.AsString, IA) then
           CurrentVal := TValue.From<Int64>(IA)
         else if CurrentVal.IsType<Double> and (Frac(CurrentVal.AsExtended) = 0) then
@@ -911,12 +940,13 @@ begin
       end
       else
       begin
-        if (Token = '-') and (Stack.Count = 1) then // Handle unary minus
+        if (Token = '-') and (Stack.Count = 1) then
         begin
           A := Stack.Pop;
           FA := GetAsExtendedLenient(A);
           Stack.Push(TValue.From<Double>(-FA));
           if FDebug then WriteLn('Debug: After Unary Minus=', Token, ' StackCount=', Stack.Count);
+          Inc(I);
           Continue;
         end;
         if Stack.Count < 2 then
@@ -924,7 +954,6 @@ begin
         B := Stack.Pop;
         A := Stack.Pop;
         if FDebug then WriteLn('Debug: Popped A=', A.ToString, ' B=', B.ToString, ' for Operator=', Token);
-        // Convert operands to integers if possible for numeric operations
         if (A.Kind in [tkString, tkUString]) and TryStrToInt64(A.AsString, IA) then
           A := TValue.From<Int64>(IA)
         else if A.IsType<Double> and (Frac(A.AsExtended) = 0) then
@@ -1006,9 +1035,9 @@ begin
           var Count: Integer := Abs(Finish - Start) + 1;
           SetLength(Arr, Count);
           var Cur := Start;
-          for I := 0 to Count - 1 do
+          for J := 0 to Count - 1 do
           begin
-            Arr[I] := TValue.From<Int64>(Cur);
+            Arr[J] := TValue.From<Int64>(Cur);
             Cur := Cur + Step;
           end;
           Stack.Push(TValue.From<TArray<TValue>>(Arr));
@@ -1026,6 +1055,7 @@ begin
         end;
         if FDebug then WriteLn('Debug: After Operation=', Token, ' StackCount=', Stack.Count);
       end;
+      Inc(I);
     end;
     if Stack.Count <> 1 then
     begin
@@ -3441,6 +3471,9 @@ begin
         fmt := Args[0];
         if fmt.StartsWith('''') or fmt.StartsWith('"') then
           fmt := Copy(fmt, 2, Length(fmt) - 2); // Remove quotes
+
+        if UpperCase(fmt) <> 'U' then
+          fmt := ResolveVariablePath(fmt, Context).ToString;
       end
       else
         fmt := FDateFormat;
@@ -3450,8 +3483,13 @@ begin
       else if Input.Kind in [tkString, tkUString] then
       begin
         S := Input.AsString;
-        FormatSettings.LongDateFormat := 'yyyy-mm-dd hh:nn:ss'; // Set format for ISO 8601 parsing
-        FormatSettings.ShortDateFormat := 'yyyy-mm-dd';
+        FormatSettings.LongDateFormat := FDateFormat; // Set format for ISO 8601 parsing
+        FormatSettings.ShortDateFormat := FDateFormat;
+        if S = 'now' then
+        begin
+          S := DateTimeToStr(Now);
+        end;
+        
         if not TryStrToDateTime(S, dt) then
         begin
           FormatSettings := SavedFormatSettings; // Restore original settings
@@ -3495,8 +3533,8 @@ begin
       else if Input.Kind in [tkString, tkUString] then
       begin
         SavedFormatSettings := FormatSettings;
-        FormatSettings.LongDateFormat := 'yyyy-mm-dd hh:nn:ss';
-        FormatSettings.ShortDateFormat := 'yyyy-mm-dd';
+        FormatSettings.LongDateFormat := FDateFormat;
+        FormatSettings.ShortDateFormat := FDateFormat;
         if not TryStrToDateTime(Input.AsString, dt) then
         begin
           FormatSettings := SavedFormatSettings;
@@ -3553,7 +3591,7 @@ begin
       if not hasValidModifier then
         Exit(Input.ToString); // Return original input string if no valid modifiers
 
-      Result := FormatDateTime('yyyy-mm-dd hh:nn:ss', dt);
+      Result := StringReplace(FormatDateTime(FDateFormat+' hh:nn:ss', dt), ' 00:00:00', '', []);
     end);
 
 
@@ -4337,11 +4375,7 @@ begin
       end;
     end);
 
-
-
-
-
-  FFilters.Add('min',
+    FFilters.Add('min',
     function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
     var
       Arr: TArray<TValue>;
@@ -4716,11 +4750,7 @@ begin
     end);
 
 
-
-
-
-
-  FFilters.Add('merge',
+    FFilters.Add('merge',
     function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
     var
       Dict: TDictionary<String, TValue>;

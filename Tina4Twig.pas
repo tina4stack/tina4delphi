@@ -31,16 +31,12 @@ type
     function GetAsExtendedLenient(const Value: TValue): Extended;
     function CompareValues(const Left, Right: TValue; const Op: String): Boolean;
     function ReplaceContextVariables(const Template: String; Context: TDictionary<String, TValue>): String;
-    function EvaluateIfBlocks(const Template: String; Context: TDictionary<String, TValue>): String;
     function EvaluateIncludes(const Template: String; Context: TDictionary<String, TValue>): String;
-    function EvaluateForBlocks(const Template: String; Context: TDictionary<String, TValue>): String;
     function EvaluateExtends(const Template: String; Context: TDictionary<String, TValue>): String;
-    function EvaluateSetBlocks(const Template: String; Context: TDictionary<String, TValue>): String;
-    function EvaluateWithBlocks(const Template: String; Context: TDictionary<String, TValue>): String;
     function EvaluateMacroBlocks(const Template: String; Context: TDictionary<String, TValue>): String;
     function RemoveComments(const Template: String): String;
     function ParseVariableDict(const DictStr: String; OuterContext: TDictionary<String,TValue>): TDictionary<String,TValue>;
-    function ProcessTemplate(const Template: String; const Context: TDictionary<String, TValue>): String;
+    function ProcessTemplate(const Template: String; var Context: TDictionary<String, TValue>): String;
     function RenderInternal(const TemplateOrContent: String; Context: TStringDict): String;
     function ResolveVariablePath(const VariablePath: string; Context: TDictionary<String, TValue>): TValue;
     function Contains(const Left, Right: TValue): Boolean;
@@ -1680,143 +1676,7 @@ begin
   end;
 end;
 
-/// <summary>
-/// Evaluates and replaces if blocks in the template.
-/// </summary>
-/// <param name="Template">The template string.</param>
-/// <param name="Context">The context dictionary.</param>
-/// <returns>The template with if blocks evaluated.</returns>
-/// <remarks>
-/// Supports conditions with arithmetic expressions, filters, and operators, with debug logging.
-/// </remarks>
-function TTina4Twig.EvaluateIfBlocks(const Template: String; Context: TDictionary<String, TValue>): String;
-var
-  ResultSB: TStringBuilder;
-  LowerTemplate: String;
-  CurrentPos, IfTagStart, IfTagEnd, Depth, TagStart, TagEnd, ElseTagStart, ElseTagEnd, EndIfTagStart, EndIfTagEnd: Integer;
-  IfExpr, TagContent, LowerTagContent, BlockContent: String;
-  Condition: Boolean;
-  Blocks: TList<String>;
-  Conditions: TList<Boolean>;
-  SelectedBlock: String;
-begin
-  ResultSB := TStringBuilder.Create;
-  LowerTemplate := LowerCase(Template);
-  CurrentPos := 0;
-  Blocks := TList<String>.Create;
-  Conditions := TList<Boolean>.Create;
-  try
-    while True do
-    begin
-      IfTagStart := LowerTemplate.IndexOf('{%if', CurrentPos);
-      if IfTagStart < 0 then
-        IfTagStart := LowerTemplate.IndexOf('{% if', CurrentPos);
-      if IfTagStart < 0 then Break;
-      ResultSB.Append(Template.Substring(CurrentPos, IfTagStart - CurrentPos));
-      IfTagEnd := LowerTemplate.IndexOf('%}', IfTagStart + 2);
-      if IfTagEnd < 0 then Break;
-      IfExpr := Trim(Template.Substring(IfTagStart + 2, IfTagEnd - IfTagStart - 2));
-      if not IfExpr.ToLower.StartsWith('if') then
-      begin
-        CurrentPos := IfTagEnd + 2;
-        Continue;
-      end;
-      IfExpr := Trim(IfExpr.Substring(IfExpr.ToLower.IndexOf('if') + 2));
-      Depth := 1;
-      CurrentPos := IfTagEnd + 2;
-      ElseTagStart := -1;
-      ElseTagEnd := -1;
-      EndIfTagStart := -1;
-      EndIfTagEnd := -1;
-      Blocks.Clear;
-      Conditions.Clear;
-      Blocks.Add('');
-      Conditions.Add(False);
 
-      // Evaluate the condition using EvaluateExpression
-      Condition := ToBool(EvaluateExpression(IfExpr, Context));
-      Conditions[0] := Condition;
-
-      while True do
-      begin
-        TagStart := LowerTemplate.IndexOf('{%', CurrentPos);
-        if TagStart < 0 then Break;
-        TagEnd := LowerTemplate.IndexOf('%}', TagStart + 2);
-        if TagEnd < 0 then Break;
-        TagContent := Trim(Template.Substring(TagStart + 2, TagEnd - TagStart - 2));
-        LowerTagContent := LowerCase(TagContent);
-        if LowerTagContent.StartsWith('if') then
-        begin
-          Inc(Depth);
-          Blocks[Blocks.Count - 1] := Blocks[Blocks.Count - 1] + Template.Substring(CurrentPos, TagEnd + 2 - CurrentPos);
-        end
-        else if LowerTagContent.StartsWith('elseif') then
-        begin
-          if Depth = 1 then
-          begin
-            Blocks[Blocks.Count - 1] := Blocks[Blocks.Count - 1] + Template.Substring(CurrentPos, TagStart - CurrentPos);
-            Blocks.Add('');
-            IfExpr := Trim(TagContent.Substring(TagContent.ToLower.IndexOf('elseif') + 6));
-            Condition := ToBool(EvaluateExpression(IfExpr, Context));
-            Conditions.Add(Condition);
-          end
-          else
-            Blocks[Blocks.Count - 1] := Blocks[Blocks.Count - 1] + Template.Substring(CurrentPos, TagEnd + 2 - CurrentPos);
-        end
-        else if LowerTagContent.StartsWith('else') then
-        begin
-          if Depth = 1 then
-          begin
-            Blocks[Blocks.Count - 1] := Blocks[Blocks.Count - 1] + Template.Substring(CurrentPos, TagStart - CurrentPos);
-            Blocks.Add('');
-            Conditions.Add(True);
-            ElseTagStart := TagStart;
-            ElseTagEnd := TagEnd;
-          end
-          else
-            Blocks[Blocks.Count - 1] := Blocks[Blocks.Count - 1] + Template.Substring(CurrentPos, TagEnd + 2 - CurrentPos);
-        end
-        else if LowerTagContent.StartsWith('endif') then
-        begin
-          Dec(Depth);
-          if Depth = 0 then
-          begin
-            Blocks[Blocks.Count - 1] := Blocks[Blocks.Count - 1] + Template.Substring(CurrentPos, TagStart - CurrentPos);
-            EndIfTagStart := TagStart;
-            EndIfTagEnd := TagEnd;
-            Break;
-          end
-          else
-            Blocks[Blocks.Count - 1] := Blocks[Blocks.Count - 1] + Template.Substring(CurrentPos, TagEnd + 2 - CurrentPos);
-        end
-        else
-          Blocks[Blocks.Count - 1] := Blocks[Blocks.Count - 1] + Template.Substring(CurrentPos, TagEnd + 2 - CurrentPos);
-        CurrentPos := TagEnd + 2;
-      end;
-      if EndIfTagStart < 0 then
-      begin
-        Blocks[Blocks.Count - 1] := Blocks[Blocks.Count - 1] + Template.Substring(CurrentPos);
-        CurrentPos := Length(Template);
-      end
-      else
-        CurrentPos := EndIfTagEnd + 2;
-      SelectedBlock := '';
-      for var I := 0 to Conditions.Count - 1 do
-        if Conditions[I] then
-        begin
-          SelectedBlock := Blocks[I];
-          Break;
-        end;
-      ResultSB.Append(RenderInternal(SelectedBlock, Context));
-    end;
-    ResultSB.Append(Template.Substring(CurrentPos));
-    Result := ResultSB.ToString;
-  finally
-    Blocks.Free;
-    Conditions.Free;
-    ResultSB.Free;
-  end;
-end;
 
 /// <summary>
 /// Evaluates and registers macro blocks in the template.
@@ -2719,461 +2579,6 @@ begin
   end;
 end;
 
-/// <summary>
-/// Evaluates set statements to add variables to context.
-/// </summary>
-/// <param name="Template">The template string.</param>
-/// <param name="Context">The context dictionary.</param>
-/// <returns>
-/// The template without set statements.
-/// </returns>
-/// <remarks>
-/// Supports setting simple values, arrays, objects via JSON-like syntax.
-/// </remarks>
-function TTina4Twig.EvaluateSetBlocks(const Template: String; Context: TDictionary<String, TValue>): String;
-var
-  ResultSB: TStringBuilder;
-  LowerTemplate: String;
-  CurrentPos, SetTagStart, SetTagEnd, PosColon: Integer;
-  SetContent, VarName, ValueStr: String;
-begin
-  ResultSB := TStringBuilder.Create;
-  LowerTemplate := LowerCase(Template);
-  CurrentPos := 0;
-  try
-    while True do
-    begin
-      SetTagStart := LowerTemplate.IndexOf('{%set', CurrentPos);
-      if SetTagStart < 0 then
-        SetTagStart := LowerTemplate.IndexOf('{% set', CurrentPos);
-      if SetTagStart < 0 then Break;
-      ResultSB.Append(Template.Substring(CurrentPos, SetTagStart - CurrentPos));
-      SetTagEnd := LowerTemplate.IndexOf('%}', SetTagStart + 2);
-      if SetTagEnd < 0 then Break;
-      SetContent := Trim(Template.Substring(SetTagStart + 2, SetTagEnd - SetTagStart - 2));
-      if not SetContent.ToLower.StartsWith('set') then
-      begin
-        CurrentPos := SetTagEnd + 2;
-        Continue;
-      end;
-      SetContent := Trim(SetContent.Substring(3));  // Remove 'set'
-      PosColon := FindTopLevelPos(SetContent, '=');
-      if PosColon <= 0 then
-      begin
-        CurrentPos := SetTagEnd + 2;
-        Continue;
-      end;
-      VarName := Trim(Copy(SetContent, 1, PosColon - 1));
-      ValueStr := Trim(Copy(SetContent, PosColon + 1, MaxInt));
-      Context.AddOrSetValue(VarName, EvaluateExpression(ValueStr, Context));
-      CurrentPos := SetTagEnd + 2;
-    end;
-    ResultSB.Append(Template.Substring(CurrentPos));
-    Result := ResultSB.ToString;
-  finally
-    ResultSB.Free;
-  end;
-end;
-
-/// <summary>
-/// Evaluates with blocks to create scoped contexts.
-/// </summary>
-/// <param name="Template">The template string.</param>
-/// <param name="Context">The context dictionary.</param>
-/// <returns>
-/// The template with with blocks evaluated.
-/// </returns>
-/// <remarks>
-/// Supports {% with vars only %}, isolating or merging contexts.
-/// </remarks>
-function TTina4Twig.EvaluateWithBlocks(const Template: String; Context: TDictionary<String, TValue>): String;
-var
-  ResultSB: TStringBuilder;
-  LowerTemplate: String;
-  CurrentPos, WithTagStart, WithTagEnd, Depth, TagStart, TagEnd, EndWithTagStart, EndWithTagEnd: Integer;
-  WithExpr, TagContent, LowerTagContent, DictStr, BlockContent, Evaluated: String;
-  ParsedDict, MergedContext: TDictionary<String, TValue>;
-  Pair: TPair<String, TValue>;
-  VarValue: TValue;
-  SubDict: TDictionary<String, TValue>;
-  UseOnly: Boolean;
-begin
-  ResultSB := TStringBuilder.Create;
-  LowerTemplate := LowerCase(Template);
-  CurrentPos := 0;
-  while True do
-  begin
-    WithTagStart := LowerTemplate.IndexOf('{%with', CurrentPos);
-    if WithTagStart < 0 then
-      WithTagStart := LowerTemplate.IndexOf('{% with', CurrentPos);
-    if WithTagStart < 0 then Break;
-    ResultSB.Append(Template.Substring(CurrentPos, WithTagStart - CurrentPos));
-    WithTagEnd := LowerTemplate.IndexOf('%}', WithTagStart + 2);
-    if WithTagEnd < 0 then Break;
-    WithExpr := Trim(Template.Substring(WithTagStart + 2, WithTagEnd - WithTagStart - 2));
-    if not WithExpr.ToLower.StartsWith('with') then
-    begin
-      CurrentPos := WithTagEnd + 2;
-      Continue;
-    end;
-    WithExpr := Trim(WithExpr.Substring(WithExpr.ToLower.IndexOf('with') + 4));
-    // Check for 'only' keyword
-    UseOnly := WithExpr.ToLower.EndsWith(' only');
-    if UseOnly then
-      DictStr := Trim(WithExpr.Substring(0, WithExpr.Length - Length('only')))
-    else
-      DictStr := WithExpr;
-    Depth := 1;
-    CurrentPos := WithTagEnd + 2;
-    EndWithTagStart := -1;
-    EndWithTagEnd := -1;
-    while True do
-    begin
-      TagStart := LowerTemplate.IndexOf('{%', CurrentPos);
-      if TagStart < 0 then Break;
-      TagEnd := LowerTemplate.IndexOf('%}', TagStart + 2);
-      if TagEnd < 0 then Break;
-      TagContent := Trim(Template.Substring(TagStart + 2, TagEnd - TagStart - 2));
-      LowerTagContent := LowerCase(TagContent);
-      if LowerTagContent.StartsWith('with') then
-        Inc(Depth)
-      else if LowerTagContent = 'endwith' then
-      begin
-        Dec(Depth);
-        if Depth = 0 then
-        begin
-          BlockContent := Template.Substring(WithTagEnd + 2, TagStart - WithTagEnd - 2);
-          EndWithTagStart := TagStart;
-          EndWithTagEnd := TagEnd;
-          Break;
-        end;
-      end;
-      CurrentPos := TagEnd + 2;
-    end;
-    if EndWithTagStart < 0 then Break;
-    ParsedDict := ParseVariableDict(DictStr, Context);
-    MergedContext := TDictionary<String, TValue>.Create;
-    try
-      // Only include parent context if 'only' is not specified
-      if not UseOnly then
-        for Pair in Context do
-          MergedContext.AddOrSetValue(Pair.Key, Pair.Value);
-      for Pair in ParsedDict do
-      begin
-        VarValue := Pair.Value;
-        if VarValue.IsType<TJSONObject> then
-        begin
-          SubDict := TDictionary<String, TValue>.Create;
-          try
-            for var JPair in TJSONObject(VarValue.AsObject) do
-            begin
-              var PVal: TValue;
-              if JPair.JsonValue is TJSONNumber then
-              begin
-                var numStr := JPair.JsonValue.Value;
-                if (Pos('.', numStr) > 0) or (Pos('e', LowerCase(numStr)) > 0) then
-                  PVal := TValue.From<Double>(TJSONNumber(JPair.JsonValue).AsDouble)
-                else
-                  PVal := TValue.From<Int64>(TJSONNumber(JPair.JsonValue).AsInt64);
-              end
-              else if JPair.JsonValue is TJSONBool then
-                PVal := TValue.From<Boolean>(TJSONBool(JPair.JsonValue).AsBoolean)
-              else if JPair.JsonValue is TJSONString then
-                PVal := TValue.From<String>(TJSONString(JPair.JsonValue).Value)
-              else if JPair.JsonValue is TJSONNull then
-                PVal := TValue.Empty
-              else
-                PVal := TValue.From<String>(JPair.JsonValue.ToString);
-              SubDict.AddOrSetValue(JPair.JsonString.Value, PVal);
-            end;
-            MergedContext.AddOrSetValue(Pair.Key, TValue.From<TDictionary<String, TValue>>(SubDict));
-          except
-            SubDict.Free;
-            raise;
-          end;
-        end
-        else
-          MergedContext.AddOrSetValue(Pair.Key, VarValue);
-      end;
-    finally
-      ParsedDict.Free;
-    end;
-    try
-      Evaluated := EvaluateWithBlocks(BlockContent, MergedContext);
-      Evaluated := RenderInternal(Evaluated, MergedContext);
-      ResultSB.Append(Evaluated);
-    finally
-      MergedContext.Free;
-    end;
-    CurrentPos := EndWithTagEnd + 2;
-  end;
-  ResultSB.Append(Template.Substring(CurrentPos));
-  Result := ResultSB.ToString;
-  ResultSB.Free;
-end;
-
-
-/// <summary>
-/// Evaluates and processes for blocks in the template.
-/// </summary>
-/// <param name="Template">The template string containing for blocks.</param>
-/// <param name="Context">The context dictionary for variable resolution.</param>
-/// <returns>The template with for blocks evaluated and replaced.</returns>
-/// <remarks>
-/// Handles for loops like {% for i in 0..1000 if current_date <= max_date %}, including range expressions and if conditions.
-/// Iterates over arrays and renders the loop body for elements satisfying the condition.
-/// Supports nested loops, else clauses, and various iterable types.
-/// Updates to variables within the loop now persist in the parent context.
-/// </remarks>
-function TTina4Twig.EvaluateForBlocks(const Template: String; Context: TDictionary<String, TValue>): String;
-var
-  ResultSB: TStringBuilder;
-  LowerTemplate: String;
-  CurrentPos, ForTagStart, ForTagEnd, InPos, Depth, IfDepth, TagStart, TagEnd, ElseTagStart, ElseTagEnd, EndForTagStart, EndForTagEnd: Integer;
-  ForExpr, TagContent, LowerTagContent, VarName, ListExpr, IfExpr, BlockContent, ElseContent, Output: String;
-  Value: TValue;
-  ValueArray: TArray<TValue>;
-  JSONArray: TJSONArray;
-  I: Integer;
-  ProcessedBlock, Rendered: String;
-  MergedContext: TDictionary<String, TValue>;
-  Pair: TPair<String, TValue>;
-  Condition: Boolean;
-begin
-  ResultSB := TStringBuilder.Create;
-  LowerTemplate := LowerCase(Template);
-  CurrentPos := 0;
-  try
-    while True do
-    begin
-      ForTagStart := LowerTemplate.IndexOf('{%for', CurrentPos);
-      if ForTagStart < 0 then
-        ForTagStart := LowerTemplate.IndexOf('{% for', CurrentPos);
-      if ForTagStart < 0 then Break;
-      ResultSB.Append(Template.Substring(CurrentPos, ForTagStart - CurrentPos));
-      ForTagEnd := LowerTemplate.IndexOf('%}', ForTagStart + 2);
-      if ForTagEnd < 0 then Break;
-      ForExpr := Trim(Template.Substring(ForTagStart + 2, ForTagEnd - ForTagStart - 2));
-      if not ForExpr.ToLower.StartsWith('for') then
-      begin
-        CurrentPos := ForTagEnd + 2;
-        Continue;
-      end;
-      ForExpr := ForExpr.Substring(3).Trim;
-      InPos := ForExpr.ToLower.IndexOf(' in ');
-      if InPos < 0 then
-      begin
-        CurrentPos := ForTagEnd + 2;
-        Continue;
-      end;
-      VarName := ForExpr.Substring(0, InPos).Trim;
-      // Check for 'if' condition
-      ListExpr := ForExpr.Substring(InPos + 4).Trim;
-      IfExpr := '';
-      var IfPos := ListExpr.ToLower.IndexOf(' if ');
-      if IfPos >= 0 then
-      begin
-        IfExpr := Trim(ListExpr.Substring(IfPos + 4));
-        ListExpr := Trim(ListExpr.Substring(0, IfPos));
-      end;
-      Depth := 1;
-      IfDepth := 0;
-      CurrentPos := ForTagEnd + 2;
-      ElseTagStart := -1;
-      ElseTagEnd := -1;
-      EndForTagStart := -1;
-      EndForTagEnd := -1;
-      while True do
-      begin
-        TagStart := LowerTemplate.IndexOf('{%', CurrentPos);
-        if TagStart < 0 then Break;
-        TagEnd := LowerTemplate.IndexOf('%}', TagStart + 2);
-        if TagEnd < 0 then Break;
-        TagContent := Trim(Template.Substring(TagStart + 2, TagEnd - TagStart - 2));
-        LowerTagContent := LowerCase(TagContent);
-        if LowerTagContent.StartsWith('for') then
-        begin
-          Inc(Depth);
-        end
-        else if LowerTagContent.StartsWith('if') then
-        begin
-          Inc(IfDepth);
-        end
-        else if LowerTagContent = 'endif' then
-        begin
-          if IfDepth > 0 then
-            Dec(IfDepth);
-        end
-        else if LowerTagContent = 'endfor' then
-        begin
-          Dec(Depth);
-          if Depth = 0 then
-          begin
-            EndForTagStart := TagStart;
-            EndForTagEnd := TagEnd;
-            Break;
-          end;
-        end
-        else if LowerTagContent = 'else' then
-        begin
-          if (Depth = 1) and (IfDepth = 0) then
-          begin
-            ElseTagStart := TagStart;
-            ElseTagEnd := TagEnd;
-          end;
-        end;
-        CurrentPos := TagEnd + 2;
-      end;
-      if EndForTagStart < 0 then Break;
-      if ElseTagStart >= 0 then
-      begin
-        BlockContent := Template.Substring(ForTagEnd + 2, ElseTagStart - ForTagEnd - 2);
-        ElseContent := Template.Substring(ElseTagEnd + 2, EndForTagStart - ElseTagEnd - 2);
-      end
-      else
-      begin
-        BlockContent := Template.Substring(ForTagEnd + 2, EndForTagStart - ForTagEnd - 2);
-        ElseContent := '';
-      end;
-      Output := '';
-      // Evaluate the iterable expression
-      Value := EvaluateExpression(ListExpr, Context);
-      if Value.IsEmpty or (Value.IsArray and (Length(Value.AsType<TArray<TValue>>) = 0)) or
-         (Value.IsType<TJSONArray> and (Value.AsType<TJSONArray>.Count = 0)) or
-         (Value.IsType<TDictionary<String, TValue>> and (Value.AsType<TDictionary<String, TValue>>.Count = 0)) then
-      begin
-        Output := RenderInternal(ElseContent, Context);
-        ResultSB.Append(Output);
-        CurrentPos := EndForTagEnd + 2;
-        Continue;
-      end;
-      ValueArray := nil;
-      if Value.IsArray then
-      begin
-        ValueArray := Value.AsType<TArray<TValue>>;
-      end
-      else if Value.IsType<TJSONArray> then
-      begin
-        JSONArray := Value.AsType<TJSONArray>;
-        SetLength(ValueArray, JSONArray.Count);
-        for I := 0 to JSONArray.Count - 1 do
-        begin
-          var JSONVal := JSONArray.Items[I];
-          if JSONVal is TJSONString then
-            ValueArray[I] := TValue.From<String>(TJSONString(JSONVal).Value)
-          else if JSONVal is TJSONNumber then
-          begin
-            var numStr := JSONVal.Value;
-            if (Pos('.', numStr) > 0) or (Pos('e', LowerCase(numStr)) > 0) then
-              ValueArray[I] := TValue.From<Double>(TJSONNumber(JSONVal).AsDouble)
-            else
-              ValueArray[I] := TValue.From<Int64>(TJSONNumber(JSONVal).AsInt64);
-          end
-          else if JSONVal is TJSONBool then
-            ValueArray[I] := TValue.From<Boolean>(TJSONBool(JSONVal).AsBoolean)
-          else if JSONVal is TJSONNull then
-            ValueArray[I] := TValue.Empty
-          else if JSONVal is TJSONObject then
-          begin
-            var SubDict := TDictionary<String, TValue>.Create;
-            try
-              for var JPair in TJSONObject(JSONVal) do
-              begin
-                var SubVal: TValue;
-                if JPair.JsonValue is TJSONNumber then
-                begin
-                  var numStr := JPair.JsonValue.Value;
-                  if (Pos('.', numStr) > 0) or (Pos('e', LowerCase(numStr)) > 0) then
-                    SubVal := TValue.From<Double>(TJSONNumber(JPair.JsonValue).AsDouble)
-                  else
-                    SubVal := TValue.From<Int64>(TJSONNumber(JPair.JsonValue).AsInt64);
-                end
-                else if JPair.JsonValue is TJSONBool then
-                  SubVal := TValue.From<Boolean>(TJSONBool(JPair.JsonValue).AsBoolean)
-                else if JPair.JsonValue is TJSONString then
-                  SubVal := TValue.From<String>(TJSONString(JPair.JsonValue).Value)
-                else if JPair.JsonValue is TJSONNull then
-                  SubVal := TValue.Empty
-                else
-                  SubVal := TValue.From<String>(JPair.JsonValue.ToString);
-                SubDict.AddOrSetValue(JPair.JsonString.Value, SubVal);
-              end;
-              ValueArray[I] := TValue.From<TDictionary<String, TValue>>(SubDict);
-            except
-              SubDict.Free;
-              raise;
-            end;
-          end
-          else if JSONVal is TJSONArray then
-            ValueArray[I] := TValue.From<TJSONArray>(TJSONArray(JSONVal))
-          else
-            ValueArray[I] := TValue.From<String>(JSONVal.ToString);
-        end;
-      end
-      else if Value.IsType<TDictionary<String, TValue>> then
-      begin
-        var Dict := Value.AsType<TDictionary<String, TValue>>;
-        SetLength(ValueArray, Dict.Count);
-        I := 0;
-        for Pair in Dict do
-        begin
-          ValueArray[I] := Pair.Value;
-          Inc(I);
-        end;
-      end
-      else
-      begin
-        Output := RenderInternal(ElseContent, Context);
-        ResultSB.Append(Output);
-        CurrentPos := EndForTagEnd + 2;
-        Continue;
-      end;
-      if Length(ValueArray) = 0 then
-      begin
-        Output := RenderInternal(ElseContent, Context);
-        ResultSB.Append(Output);
-        CurrentPos := EndForTagEnd + 2;
-        Continue;
-      end;
-      for I := 0 to High(ValueArray) do
-      begin
-        MergedContext := TDictionary<String, TValue>.Create;
-        try
-          for Pair in Context do
-            MergedContext.AddOrSetValue(Pair.Key, Pair.Value);
-          MergedContext.AddOrSetValue(VarName, ValueArray[I]);
-          MergedContext.AddOrSetValue('loop.index0', TValue.From<Int64>(I));
-          MergedContext.AddOrSetValue('loop.index', TValue.From<Int64>(I + 1));
-          MergedContext.AddOrSetValue('loop.first', TValue.From<Boolean>(I = 0));
-          MergedContext.AddOrSetValue('loop.last', TValue.From<Boolean>(I = High(ValueArray)));
-          MergedContext.AddOrSetValue('loop.length', TValue.From<Int64>(Length(ValueArray)));
-          // Evaluate if condition
-          if IfExpr <> '' then
-          begin
-            var ConditionVal := EvaluateExpression(IfExpr, MergedContext);
-            Condition := ToBool(ConditionVal);
-            if not Condition then
-              Continue;
-          end;
-          ProcessedBlock := RenderInternal(BlockContent, MergedContext);
-          // Update parent context with changes from MergedContext, excluding loop variables
-          for Pair in MergedContext do
-            if not Pair.Key.StartsWith('loop.') then
-              Context.AddOrSetValue(Pair.Key, Pair.Value);
-          Output := Output + ProcessedBlock;
-        finally
-          MergedContext.Free;
-        end;
-      end;
-      ResultSB.Append(Output);
-      CurrentPos := EndForTagEnd + 2;
-    end;
-    ResultSB.Append(Template.Substring(CurrentPos));
-    Result := ResultSB.ToString;
-  finally
-    ResultSB.Free;
-  end;
-end;
 
 
 
@@ -5344,9 +4749,9 @@ end;
 /// Handles TJSONArray for JSON array iteration in for loops.
 /// Recurses for nested structures.
 /// Updated to support array appending with set var[] = value syntax, fixing variable naming and adding type conversion for integers.
-/// Fixed context persistence by ensuring LoopContext changes are propagated to LocalContext after each for loop iteration.
+/// Fixed context persistence for scalar variables in for loops to ensure updates (e.g., some_var = some_var + 1) persist across iterations by updating LocalContext before each iteration.
 /// </remarks>
-function TTina4Twig.ProcessTemplate(const Template: String; const Context: TDictionary<String, TValue>): String;
+function TTina4Twig.ProcessTemplate(const Template: String; var Context: TDictionary<String, TValue>): String;
 type
   TBranch = record
     Condition: String;
@@ -5438,6 +4843,8 @@ begin
 
           if Tag.StartsWith('set ') then
           begin
+            if FDebug then
+               WriteLn('Debug: Set: Tag passed is = ', Tag);
             var SetStr := Trim(Copy(Tag, 4, MaxInt));
             var EqPos := FindTopLevelPos(SetStr, '=');
             if EqPos <= 0 then
@@ -5505,7 +4912,7 @@ begin
             else
             begin
               if FDebug then
-                WriteLn('Evaluating: '+Expr);
+                WriteLn('Debug: Evaluating set expression: ' + Expr);
               var Val := EvaluateExpression(Expr, LocalContext);
               // Explicitly handle empty array initialization
               if Expr.Trim = '[]' then
@@ -5681,18 +5088,14 @@ begin
                       try
                         // Copy all current LocalContext values to LoopContext
                         for var Pair in LocalContext do
-                        begin
-                          if FDebug then
-                             WriteLn('Adding ', Pair.Key ,' = ', Pair.Value.ToString);
                           LoopContext.AddOrSetValue(Pair.Key, Pair.Value);
-                        end;
-                        //Sets the loop var
+
+                        // Set the loop variable
                         LoopContext.AddOrSetValue(LoopVar, Item);
-                        if FDebug then
-                          WriteLn('Debug: Loop var ', LoopVar, ' = ', Item.ToString);
 
                         if FDebug then
-                          WriteLn('Evaluating: '+LoopCondition);
+                          WriteLn('Debug: Loop var ', LoopVar, ' = ', Item.ToString, ' ==== ',  LoopCondition);
+
                         if (LoopCondition = '') or ToBool(EvaluateExpression(LoopCondition, LoopContext)) then
                         begin
                           var ForBody: String;
@@ -5700,14 +5103,27 @@ begin
                             ForBody := Copy(Template, BodyStart, ElsePos - BodyStart - Length('{% else %}'))
                           else
                             ForBody := Copy(Template, BodyStart, TagStart - BodyStart);
+
+                          if FDebug then
+                              WriteLn('Debug: Loop Body ', ForBody, LoopContext.ToString);
+
                           var BodyResult := ProcessTemplate(ForBody, LoopContext);
-                          SB.Append(BodyResult);
+
+                          if BodyResult <> '' then
+                              SB.Append(BodyResult);
+
                           if FDebug then
                             WriteLn('Debug: For body result = ', BodyResult);
-                          // Update LocalContext with all changes from LoopContext
-                          for var Pair in LoopContext do
+                          // Update LocalContext with all changes from LoopContext to persist changes across iterations
+                        end;
+
+                        for var Pair in LoopContext do
+                        begin
+                            if FDebug then
+                              WriteLn('Reading: ', Pair.Key, ' = ', Pair.Value.ToString);
                             LocalContext.AddOrSetValue(Pair.Key, Pair.Value);
                         end;
+
                       finally
                         LoopContext.Free;
                       end;
@@ -5739,7 +5155,8 @@ begin
                           SB.Append(BodyResult);
                           if FDebug then
                             WriteLn('Debug: For body result = ', BodyResult);
-                          // Update LocalContext with all changes from LoopContext
+                          // Update LocalContext with all changes from LoopContext to persist changes across iterations
+                          LocalContext.Clear;
                           for var Pair2 in LoopContext do
                             LocalContext.AddOrSetValue(Pair2.Key, Pair2.Value);
                         end;
@@ -5777,7 +5194,8 @@ begin
                           SB.Append(BodyResult);
                           if FDebug then
                             WriteLn('Debug: For body result = ', BodyResult);
-                          // Update LocalContext with all changes from LoopContext
+                          // Update LocalContext with all changes from LoopContext to persist changes across iterations
+                          LocalContext.Clear;
                           for var Pair in LoopContext do
                             LocalContext.AddOrSetValue(Pair.Key, Pair.Value);
                         end;

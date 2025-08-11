@@ -793,7 +793,6 @@ end;
 /// Processes arithmetic operations, filter chains, comparisons, 'in', 'starts with', 'matches', and range '..' operators.
 /// Updated to safely handle regex evaluation for 'matches' operator and range operator for array creation.
 /// Ensures integer operands for '..' by converting strings and floats to integers where possible.
-/// Now handles function calls by accumulating arguments from subsequent tokens.
 /// </remarks>
 function TTina4Twig.EvaluateRPN(const RPN: TArray<String>; const Context: TDictionary<String, TValue>): TValue;
 var
@@ -886,17 +885,14 @@ begin
         Inc(I);
         Continue;
       end;
-      // Check if token is a function call
       if FFunctions.ContainsKey(Token) then
       begin
         ArgList := TList<String>.Create;
         try
-          // Collect arguments from subsequent tokens
           Inc(I);
           if I >= Length(RPN) then
             raise Exception.Create('Invalid function call: no arguments for ' + Token);
-          // For simplicity, assume one argument (extend for multi-arg functions as needed)
-          ArgList.Add(RPN[I]); // Use the next token as the argument
+          ArgList.Add(RPN[I]);
           Args := ArgList.ToArray;
           if FFunctions.TryGetValue(Token, Func) then
           begin
@@ -929,7 +925,7 @@ begin
       end
       else if not CharInSet(Token[1], ['+', '-', '*', '/', '%', '~', '<', '>', '=', '!']) and
               (Token <> 'in') and (Token <> 'starts with') and (Token <> 'matches') and (Token <> '..') and
-              (Token <> 'and') and (Token <> 'or') and (Token <> 'not') then
+              (Token <> 'and') and (Token <> 'or') and (Token <> 'not') and (Token <> 'not in') then
       begin
         CurrentVal := ResolveVariablePath(Token, Context);
         if (CurrentVal.Kind in [tkString, tkUString]) and TryStrToInt64(CurrentVal.AsString, IA) then
@@ -1026,10 +1022,19 @@ begin
         end
         else if Token = '..' then
         begin
-          if not (A.IsOrdinal and B.IsOrdinal) then
+          if not (A.IsOrdinal or (A.Kind in [tkString, tkUString]) and TryStrToInt64(A.AsString, IA)) or
+             not (B.IsOrdinal or (B.Kind in [tkString, tkUString]) and TryStrToInt64(B.AsString, IB)) then
             raise Exception.Create('Range operator requires integer operands: A=' + A.ToString + ', B=' + B.ToString);
-          var Start: Int64 := A.AsInt64;
-          var Finish: Int64 := B.AsInt64;
+          if A.Kind in [tkString, tkUString] then
+            IA := StrToInt64(A.AsString)
+          else
+            IA := A.AsInt64;
+          if B.Kind in [tkString, tkUString] then
+            IB := StrToInt64(B.AsString)
+          else
+            IB := B.AsInt64;
+          var Start: Int64 := IA;
+          var Finish: Int64 := IB;
           var Step: Integer := 1;
           if Start > Finish then
             Step := -1;
@@ -1042,6 +1047,7 @@ begin
             Cur := Cur + Step;
           end;
           Stack.Push(TValue.From<TArray<TValue>>(Arr));
+          if FDebug then WriteLn('Debug: Range ', Start, '..', Finish, ' produced array length=', Length(Arr));
         end
         else if Token = 'and' then
           Stack.Push(TValue.From<Boolean>(ToBool(A) and ToBool(B)))
@@ -4153,24 +4159,24 @@ begin
     end);
 
   FFilters.Add('language_name',
-    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
-    begin
-      // Stub: language name lookup not implemented
-      Result := Input.ToString;
-    end);
+  function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
+  begin
+    // Stub: language name lookup not implemented
+    Result := Input.ToString;
+  end);
 
   FFilters.Add('last',
-    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
-    begin
-      if (Input.Kind in [tkString, tkUString]) and (Input.AsString <> '') then
-        Result := Input.AsString[Length(Input.AsString)]
-      else if Input.IsArray and (Input.GetArrayLength > 0) then
-        Result := Input.AsType<TArray<TValue>>[High(Input.AsType<TArray<TValue>>)].ToString
-      else if Input.IsObject and (Input.AsObject is TJSONArray) and (TJSONArray(Input.AsObject).Count > 0) then
-        Result := TJSONArray(Input.AsObject).Items[TJSONArray(Input.AsObject).Count - 1].ToString
-      else
-        Result := '';
-    end);
+  function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
+  begin
+    if (Input.Kind in [tkString, tkUString]) and (Input.AsString <> '') then
+      Result := Input.AsString[Length(Input.AsString)]
+    else if Input.IsArray and (Input.GetArrayLength > 0) then
+      Result := Input.AsType<TArray<TValue>>[High(Input.AsType<TArray<TValue>>)].ToString
+    else if Input.IsObject and (Input.AsObject is TJSONArray) and (TJSONArray(Input.AsObject).Count > 0) then
+      Result := TJSONArray(Input.AsObject).Items[TJSONArray(Input.AsObject).Count - 1].ToString
+    else
+      Result := '';
+  end);
 
   FFilters.Add('length',
     function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
@@ -5201,35 +5207,35 @@ end;
 procedure TTina4Twig.RegisterDefaultFunctions;
 begin
   FFunctions.Add('dump',
-    function(const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
-    var
-      I: Integer;
-      DumpResult: TStringList;
-      Value: TValue;
-    begin
-      DumpResult := TStringList.Create;
-      try
-        if Length(Args) = 0 then
-          Exit('(no arguments)');
+  function(const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
+  var
+    I: Integer;
+    DumpResult: TStringList;
+    Value: TValue;
+  begin
+    DumpResult := TStringList.Create;
+    try
+      if Length(Args) = 0 then
+        Exit('(no arguments)');
 
-        for I := 0 to High(Args) do
+      for I := 0 to High(Args) do
+      begin
+        if Context.TryGetValue(Args[I], Value) then
         begin
-          if Context.TryGetValue(Args[I], Value) then
-          begin
-            DumpResult.Add(Args[I] + ' =');
-            DumpValue(Value, DumpResult, '  ');
-          end
-          else
-          begin
-            DumpResult.Add(Args[I] + ' = (not found)');
-          end;
+          DumpResult.Add(Args[I] + ' =');
+          DumpValue(Value, DumpResult, '  ');
+        end
+        else
+        begin
+          DumpResult.Add(Args[I] + ' = (not found)');
         end;
-
-        Result := '<pre>' + DumpResult.Text + '</pre>';
-      finally
-        DumpResult.Free;
       end;
-    end);
+
+      Result := '<pre>' + DumpResult.Text + '</pre>';
+    finally
+      DumpResult.Free;
+    end;
+  end);
 
   FFunctions.Add('range',
   function(const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
@@ -5260,39 +5266,39 @@ begin
   end);
 
   FFunctions.Add('date',
-      function(const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
-      var
-        Input: TValue;
-        DateTimeValue: TDateTime;
-        FormatStr: String;
-      begin
-        if Length(Args) = 0 then
-         Input := Now()
-          else
-        Input := ResolveVariablePath(Args[0], Context);
+  function(const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
+  var
+    Input: TValue;
+    DateTimeValue: TDateTime;
+    FormatStr: String;
+  begin
+    if Length(Args) = 0 then
+     Input := Now()
+      else
+    Input := ResolveVariablePath(Args[0], Context);
         
-        if Length(Args) > 1 then
-          FormatStr := Args[1]
-        else
-          FormatStr := FDateFormat; // Default format as per Twig
+    if Length(Args) > 1 then
+      FormatStr := Args[1]
+    else
+      FormatStr := FDateFormat; // Default format as per Twig
 
-        if Input.IsType<Int64> then
-          DateTimeValue := UnixToDateTime(Input.AsInt64)
-        else if Input.Kind in [tkString, tkUString] then
-        begin
-          try
-            DateTimeValue := StrToDateTime(Input.AsString);
-          except
-            DateTimeValue := Now; // Fallback to current date/time on parse failure
-          end;
-        end
-        else if Input.IsType<TDateTime> then
-          DateTimeValue := Input.AsType<TDateTime>
-        else
-          DateTimeValue := Now; // Fallback for unsupported types
+    if Input.IsType<Int64> then
+      DateTimeValue := UnixToDateTime(Input.AsInt64)
+    else if Input.Kind in [tkString, tkUString] then
+    begin
+      try
+        DateTimeValue := StrToDateTime(Input.AsString);
+      except
+        DateTimeValue := Now; // Fallback to current date/time on parse failure
+      end;
+    end
+    else if Input.IsType<TDateTime> then
+      DateTimeValue := Input.AsType<TDateTime>
+    else
+      DateTimeValue := Now; // Fallback for unsupported types
 
-        Result := FormatDateTime(FormatStr, DateTimeValue);
-      end);
+    Result := FormatDateTime(FormatStr, DateTimeValue);
+  end);
 end;
 
 /// <summary>
@@ -5323,6 +5329,7 @@ begin
   end;
 end;
 
+
 /// <summary>
 /// Processes the template sequentially, handling tags in order.
 /// </summary>
@@ -5330,9 +5337,14 @@ end;
 /// <param name="Context">The context dictionary.</param>
 /// <returns>The rendered output.</returns>
 /// <remarks>
-/// Handles set, if/elseif/else, for, include, with blocks sequentially.
+/// Handles set, if/elseif/else, for, include, with, macro blocks sequentially.
 /// Updates context for sets and evaluates variables at the time of encounter.
+/// Processes macro definitions and calls.
+/// Supports 'only' option in with blocks and nested structures.
+/// Handles TJSONArray for JSON array iteration in for loops.
 /// Recurses for nested structures.
+/// Updated to support array appending with set var[] = value syntax, fixing variable naming and adding type conversion for integers.
+/// Fixed context persistence by ensuring LoopContext changes are propagated to LocalContext after each for loop iteration.
 /// </remarks>
 function TTina4Twig.ProcessTemplate(const Template: String; const Context: TDictionary<String, TValue>): String;
 type
@@ -5342,15 +5354,14 @@ type
   end;
 var
   SB: TStringBuilder;
-  Pos, EndPos, TagStart: Integer;
+  CurrentPos, EndPos, TagStart: Integer;
   Tag, Current: String;
   LocalContext: TDictionary<String, TValue>;
-  Depth: Integer;
+  IfDepth, ForDepth, WithDepth, MacroDepth: Integer;
   BodyStart: Integer;
   Body: String;
-  Branches: TList<TBranch>;
   ForTag: String;
-  LoopVar, LoopExpr: String;
+  LoopVar, LoopExpr, LoopCondition: String;
   ForParts: TArray<String>;
   Iterable: TValue;
   Arr: TArray<TValue>;
@@ -5361,44 +5372,70 @@ var
   IncludeExpr, IncludeName, IncludeText: String;
   WithTag, WithExpr: String;
   WithDict: TDictionary<String, TValue>;
+  MacroTag, MacroName: String;
+  MacroParams: TArray<String>;
+  MacroDefaults: TDictionary<String, String>;
+  ParamParts: TArray<String>;
+  UseOnly: Boolean;
 begin
   LocalContext := TDictionary<String, TValue>.Create(Context);
   try
     SB := TStringBuilder.Create;
     try
-      Pos := 1;
-      while Pos <= Length(Template) do
+      CurrentPos := 1;
+      while CurrentPos <= Length(Template) do
       begin
-        EndPos := Pos;
+        EndPos := CurrentPos;
         while (EndPos <= Length(Template)) and not ((Template[EndPos] = '{') and (EndPos + 1 <= Length(Template)) and (Template[EndPos + 1] in ['{', '%'])) do
           Inc(EndPos);
-        if EndPos > Pos then
-          SB.Append(Copy(Template, Pos, EndPos - Pos));
+        if EndPos > CurrentPos then
+          SB.Append(Copy(Template, CurrentPos, EndPos - CurrentPos));
         if EndPos > Length(Template) then
           Break;
         if Template[EndPos + 1] = '{' then // {{ }}
         begin
-          Pos := EndPos + 2;
-          EndPos := Pos;
+          CurrentPos := EndPos + 2;
+          EndPos := CurrentPos;
           while (EndPos <= Length(Template)) and not ((Template[EndPos] = '}') and (EndPos + 1 <= Length(Template)) and (Template[EndPos + 1] = '}')) do
             Inc(EndPos);
           if EndPos > Length(Template) then
             raise Exception.Create('Unclosed {{');
-          Tag := Trim(Copy(Template, Pos, EndPos - Pos));
-          Current := EvaluateExpression(Tag, LocalContext).ToString;
-          SB.Append(Current);
-          Pos := EndPos + 2;
+          Tag := Trim(Copy(Template, CurrentPos, EndPos - CurrentPos));
+          // Check if this is a macro call
+          var OpenParen := System.Pos('(', Tag);
+          if (OpenParen > 0) and Tag.EndsWith(')') and FMacros.ContainsKey(Tag.Substring(0, OpenParen - 1)) then
+          begin
+            MacroName := Tag.Substring(0, OpenParen - 1);
+            var ArgsStr := Trim(Copy(Tag, OpenParen + 1, Length(Tag) - OpenParen - 1));
+            var Args: TArray<String>;
+            if ArgsStr <> '' then
+              Args := SplitOnTopLevel(ArgsStr, ',')
+            else
+              SetLength(Args, 0);
+            for var I := 0 to High(Args) do
+              Args[I] := Trim(EvaluateExpression(Trim(Args[I]), LocalContext).ToString);
+            var MacroFunc := FMacros[MacroName];
+            Current := MacroFunc(MacroName, Args, LocalContext);
+            SB.Append(Current);
+          end
+          else
+          begin
+            Current := EvaluateExpression(Tag, LocalContext).ToString;
+            SB.Append(Current);
+          end;
+          CurrentPos := EndPos + 2;
         end
         else if Template[EndPos + 1] = '%' then // {% %}
         begin
-          Pos := EndPos + 2;
-          EndPos := Pos;
+          CurrentPos := EndPos + 2;
+          EndPos := CurrentPos;
           while (EndPos <= Length(Template)) and not ((Template[EndPos] = '%') and (EndPos + 1 <= Length(Template)) and (Template[EndPos + 1] = '}')) do
             Inc(EndPos);
           if EndPos > Length(Template) then
             raise Exception.Create('Unclosed {%');
-          Tag := Trim(Copy(Template, Pos, EndPos - Pos));
-          Pos := EndPos + 2;
+          Tag := Trim(Copy(Template, CurrentPos, EndPos - CurrentPos));
+          CurrentPos := EndPos + 2;
+
           if Tag.StartsWith('set ') then
           begin
             var SetStr := Trim(Copy(Tag, 4, MaxInt));
@@ -5407,40 +5444,114 @@ begin
               raise Exception.Create('Invalid set: ' + Tag);
             var VarName := Trim(Copy(SetStr, 1, EqPos - 1));
             var Expr := Trim(Copy(SetStr, EqPos + 1, MaxInt));
-            var Val := EvaluateExpression(Expr, LocalContext);
-            LocalContext.AddOrSetValue(VarName, Val);
+            if VarName.EndsWith('[]') then
+            begin
+              VarName := Trim(Copy(VarName, 1, Length(VarName) - 2));
+              if VarName.IsEmpty then
+                raise Exception.Create('Invalid array variable name in set: ' + Tag);
+              var Val := EvaluateExpression(Expr, LocalContext);
+              if FDebug then
+                WriteLn('Debug: VarName = ' + VarName + ' Val = ' + Val.ToString);
+              // Ensure Val is converted to appropriate type (e.g., integer for range values)
+              if Val.Kind in [tkString, tkUString] then
+              begin
+                var IntVal: Int64;
+                if TryStrToInt64(Val.AsString, IntVal) then
+                  Val := TValue.From<Int64>(IntVal);
+              end;
+              var ExistingVal: TValue;
+              if LocalContext.TryGetValue(VarName, ExistingVal) then
+              begin
+                if ExistingVal.IsType<TArray<TValue>> then
+                begin
+                  Arr := ExistingVal.AsType<TArray<TValue>>;
+                  if FDebug then
+                    WriteLn('Debug: Found existing array for ', VarName, ' with length ', Length(Arr));
+                end
+                else if ExistingVal.IsType<TJSONArray> then
+                begin
+                  var JsonArr := ExistingVal.AsType<TJSONArray>;
+                  SetLength(Arr, JsonArr.Count);
+                  for var I := 0 to JsonArr.Count - 1 do
+                    Arr[I] := TValue.FromVariant(JsonArr.Items[I].Value);
+                  if FDebug then
+                    WriteLn('Debug: Converted JSONArray to array for ', VarName, ' with length ', Length(Arr));
+                end
+                else
+                begin
+                  SetLength(Arr, 0);
+                  if FDebug then
+                    WriteLn('Debug: Initialized empty array for ', VarName, ' due to invalid type: ', ExistingVal.TypeInfo.Name);
+                end;
+              end
+              else
+              begin
+                SetLength(Arr, 0);
+                if FDebug then
+                  WriteLn('Debug: Initialized empty array for ', VarName, ' as it was not found');
+              end;
+              SetLength(Arr, Length(Arr) + 1);
+              Arr[High(Arr)] := Val;
+              LocalContext.AddOrSetValue(VarName, TValue.From<TArray<TValue>>(Arr));
+              if FDebug then
+              begin
+                var ArrStr: TArray<String>;
+                SetLength(ArrStr, Length(Arr));
+                for var I := 0 to High(Arr) do
+                  ArrStr[I] := Arr[I].ToString;
+                WriteLn('Debug: Set array ' + VarName + ' = [' + String.Join(',', ArrStr) + ']');
+              end;
+            end
+            else
+            begin
+              if FDebug then
+                WriteLn('Evaluating: '+Expr);
+              var Val := EvaluateExpression(Expr, LocalContext);
+              // Explicitly handle empty array initialization
+              if Expr.Trim = '[]' then
+              begin
+                Val := TValue.From<TArray<TValue>>([]);
+                if FDebug then
+                  WriteLn('Debug: Initialized empty array for ', VarName);
+              end;
+              LocalContext.AddOrSetValue(VarName, Val);
+              if FDebug then
+                WriteLn('Debug: Set ' + VarName + ' = ' + Val.ToString);
+            end;
           end
           else if Tag.StartsWith('if ') then
           begin
-            Branches := TList<TBranch>.Create;
+            var Branches := TList<TBranch>.Create;
             try
-              Depth := 1;
+              IfDepth := 1;
               var Branch: TBranch;
               Branch.Condition := Trim(Copy(Tag, 3, MaxInt));
-              BodyStart := Pos;
-              var ForDepth: Integer := 0;
-              while Pos <= Length(Template) do
+              BodyStart := CurrentPos;
+              ForDepth := 0;
+              WithDepth := 0;
+              MacroDepth := 0;
+              while CurrentPos <= Length(Template) do
               begin
-                EndPos := Pos;
+                EndPos := CurrentPos;
                 while (EndPos <= Length(Template)) and not ((Template[EndPos] = '{') and (EndPos + 1 <= Length(Template)) and (Template[EndPos + 1] = '%')) do
                   Inc(EndPos);
                 if EndPos > Length(Template) then
                   raise Exception.Create('Unclosed if');
                 TagStart := EndPos;
-                Pos := EndPos + 2;
-                EndPos := Pos;
+                CurrentPos := EndPos + 2;
+                EndPos := CurrentPos;
                 while (EndPos <= Length(Template)) and not ((Template[EndPos] = '%') and (EndPos + 1 <= Length(Template)) and (Template[EndPos + 1] = '}')) do
                   Inc(EndPos);
                 if EndPos > Length(Template) then
                   raise Exception.Create('Unclosed {% in if block');
-                Tag := Trim(Copy(Template, Pos, EndPos - Pos));
-                Pos := EndPos + 2;
+                Tag := Trim(Copy(Template, CurrentPos, EndPos - CurrentPos));
+                CurrentPos := EndPos + 2;
                 if Tag.StartsWith('if ') then
-                  Inc(Depth)
+                  Inc(IfDepth)
                 else if Tag = 'endif' then
                 begin
-                  Dec(Depth);
-                  if Depth = 0 then
+                  Dec(IfDepth);
+                  if IfDepth = 0 then
                   begin
                     Branch.Body := Copy(Template, BodyStart, TagStart - BodyStart);
                     Branches.Add(Branch);
@@ -5450,8 +5561,16 @@ begin
                 else if Tag.StartsWith('for ') then
                   Inc(ForDepth)
                 else if Tag = 'endfor' then
-                  Dec(ForDepth);
-                if (Depth = 1) and (Tag.StartsWith('elseif ') or (Tag = 'else')) and (ForDepth = 0) then
+                  Dec(ForDepth)
+                else if Tag.StartsWith('with ') or (Tag = 'with') then
+                  Inc(WithDepth)
+                else if Tag = 'endwith' then
+                  Dec(WithDepth)
+                else if Tag.StartsWith('macro ') then
+                  Inc(MacroDepth)
+                else if Tag = 'endmacro' then
+                  Dec(MacroDepth);
+                if (IfDepth = 1) and (Tag.StartsWith('elseif ') or (Tag = 'else')) and (ForDepth = 0) and (WithDepth = 0) and (MacroDepth = 0) then
                 begin
                   Branch.Body := Copy(Template, BodyStart, TagStart - BodyStart);
                   Branches.Add(Branch);
@@ -5459,9 +5578,11 @@ begin
                     Branch.Condition := ''
                   else
                     Branch.Condition := Trim(Copy(Tag, 8, MaxInt));
-                  BodyStart := Pos;
+                  BodyStart := CurrentPos;
                 end;
               end;
+              if IfDepth > 0 then
+                raise Exception.Create('Unclosed if');
               var Done := False;
               for Branch in Branches do
               begin
@@ -5486,124 +5607,393 @@ begin
           end
           else if Tag.StartsWith('for ') then
           begin
-            Branches := TList<TBranch>.Create;
-            try
-              Depth := 1;
-              var Branch: TBranch;
-              Branch.Condition := Trim(Copy(Tag, 4, MaxInt));
-              BodyStart := Pos;
-              var IfDepth: Integer := 0;
-              while Pos <= Length(Template) do
+            ForTag := Tag;
+            ForDepth := 1;
+            BodyStart := CurrentPos;
+            HasElse := False;
+            ElsePos := 0;
+            IfDepth := 0;
+            WithDepth := 0;
+            MacroDepth := 0;
+            while CurrentPos <= Length(Template) do
+            begin
+              EndPos := CurrentPos;
+              while (EndPos <= Length(Template)) and not ((Template[EndPos] = '{') and (EndPos + 1 <= Length(Template)) and (Template[EndPos + 1] = '%')) do
+                Inc(EndPos);
+              if EndPos > Length(Template) then
+                raise Exception.Create('Unclosed for');
+              TagStart := EndPos;
+              CurrentPos := EndPos + 2;
+              EndPos := CurrentPos;
+              while (EndPos <= Length(Template)) and not ((Template[EndPos] = '%') and (EndPos + 1 <= Length(Template)) and (Template[EndPos + 1] = '}')) do
+                Inc(EndPos);
+              if EndPos > Length(Template) then
+                raise Exception.Create('Unclosed {% in for block');
+              Tag := Trim(Copy(Template, CurrentPos, EndPos - CurrentPos));
+              CurrentPos := EndPos + 2;
+              if Tag.StartsWith('for ') then
+                Inc(ForDepth);
+              if Tag = 'endfor' then
               begin
-                EndPos := Pos;
-                while (EndPos <= Length(Template)) and not ((Template[EndPos] = '{') and (EndPos + 1 <= Length(Template)) and (Template[EndPos + 1] = '%')) do
-                  Inc(EndPos);
-                if EndPos > Length(Template) then
-                  raise Exception.Create('Unclosed for');
-                TagStart := EndPos;
-                Pos := EndPos + 2;
-                EndPos := Pos;
-                while (EndPos <= Length(Template)) and not ((Template[EndPos] = '%') and (EndPos + 1 <= Length(Template)) and (Template[EndPos + 1] = '}')) do
-                  Inc(EndPos);
-                if EndPos > Length(Template) then
-                  raise Exception.Create('Unclosed {% in for block');
-                Tag := Trim(Copy(Template, Pos, EndPos - Pos));
-                Pos := EndPos + 2;
-                if Tag.StartsWith('for ') then
-                  Inc(Depth)
-                else if Tag = 'endfor' then
+                Dec(ForDepth);
+                if ForDepth = 0 then
                 begin
-                  Dec(Depth);
-                  if Depth = 0 then
+                  ForParts := Tokenize(Copy(ForTag, 5, MaxInt));
+                  if (Length(ForParts) < 3) or (ForParts[1] <> 'in') then
+                    raise Exception.Create('Invalid for: ' + ForTag);
+                  LoopVar := ForParts[0];
+                  LoopExpr := '';
+                  LoopCondition := '';
+                  for var J := 2 to High(ForParts) do
                   begin
-                    Branch.Body := Copy(Template, BodyStart, TagStart - BodyStart);
-                    Branches.Add(Branch);
-                    Break;
+                    if ForParts[J] = 'if' then
+                    begin
+                      LoopExpr := String.Join(' ', Copy(ForParts, 2, J - 2));
+                      LoopCondition := String.Join(' ', Copy(ForParts, J + 1, MaxInt));
+                      Break;
+                    end;
                   end;
-                end
-                else if Tag.StartsWith('if ') then
-                  Inc(IfDepth)
-                else if Tag = 'endif' then
-                  Dec(IfDepth);
-                if (Depth = 1) and (Tag.StartsWith('elseif ') or (Tag = 'else')) and (IfDepth = 0) then
-                begin
-                  Branch.Body := Copy(Template, BodyStart, TagStart - BodyStart);
-                  Branches.Add(Branch);
-                  if Tag = 'else' then
-                    Branch.Condition := ''
-                  else
-                    Branch.Condition := Trim(Copy(Tag, 7, MaxInt));
-                  BodyStart := Pos;
+                  if LoopExpr = '' then
+                    LoopExpr := String.Join(' ', Copy(ForParts, 2, MaxInt));
+                  Iterable := EvaluateExpression(LoopExpr, LocalContext);
+                  if FDebug then
+                  begin
+                    if Iterable.IsType<TArray<TValue>> then
+                    begin
+                      var ArrStr: TArray<String>;
+                      SetLength(ArrStr, Length(Iterable.AsType<TArray<TValue>>));
+                      for var I := 0 to High(Iterable.AsType<TArray<TValue>>) do
+                        ArrStr[I] := Iterable.AsType<TArray<TValue>>[I].ToString;
+                      WriteLn('Debug: For loop iterable ', LoopExpr, ' = [', String.Join(',', ArrStr), ']');
+                    end
+                    else
+                      WriteLn('Debug: For loop iterable ', LoopExpr, ' = ', Iterable.ToString);
+                  end;
+                  var HasItems := False;
+                  if Iterable.IsType<TArray<TValue>> then
+                  begin
+                    Arr := Iterable.AsType<TArray<TValue>>;
+                    if Length(Arr) > 0 then
+                      HasItems := True;
+                    for Item in Arr do
+                    begin
+                      LoopContext := TDictionary<String, TValue>.Create;
+                      try
+                        // Copy all current LocalContext values to LoopContext
+                        for var Pair in LocalContext do
+                        begin
+                          if FDebug then
+                             WriteLn('Adding ', Pair.Key ,' = ', Pair.Value.ToString);
+                          LoopContext.AddOrSetValue(Pair.Key, Pair.Value);
+                        end;
+                        //Sets the loop var
+                        LoopContext.AddOrSetValue(LoopVar, Item);
+                        if FDebug then
+                          WriteLn('Debug: Loop var ', LoopVar, ' = ', Item.ToString);
+
+                        if FDebug then
+                          WriteLn('Evaluating: '+LoopCondition);
+                        if (LoopCondition = '') or ToBool(EvaluateExpression(LoopCondition, LoopContext)) then
+                        begin
+                          var ForBody: String;
+                          if HasElse then
+                            ForBody := Copy(Template, BodyStart, ElsePos - BodyStart - Length('{% else %}'))
+                          else
+                            ForBody := Copy(Template, BodyStart, TagStart - BodyStart);
+                          var BodyResult := ProcessTemplate(ForBody, LoopContext);
+                          SB.Append(BodyResult);
+                          if FDebug then
+                            WriteLn('Debug: For body result = ', BodyResult);
+                          // Update LocalContext with all changes from LoopContext
+                          for var Pair in LoopContext do
+                            LocalContext.AddOrSetValue(Pair.Key, Pair.Value);
+                        end;
+                      finally
+                        LoopContext.Free;
+                      end;
+                    end;
+                  end
+                  else if Iterable.IsType<TDictionary<String, TValue>> then
+                  begin
+                    var Dict := Iterable.AsType<TDictionary<String, TValue>>;
+                    if Dict.Count > 0 then
+                      HasItems := True;
+                    for var Pair in Dict do
+                    begin
+                      LoopContext := TDictionary<String, TValue>.Create;
+                      try
+                        // Copy all current LocalContext values to LoopContext
+                        for var Pair2 in LocalContext do
+                          LoopContext.AddOrSetValue(Pair2.Key, Pair2.Value);
+                        LoopContext.AddOrSetValue(LoopVar, Pair.Value);
+                        if FDebug then
+                          WriteLn('Debug: Loop var ', LoopVar, ' = ', Pair.Value.ToString);
+                        if (LoopCondition = '') or ToBool(EvaluateExpression(LoopCondition, LoopContext)) then
+                        begin
+                          var ForBody: String;
+                          if HasElse then
+                            ForBody := Copy(Template, BodyStart, ElsePos - BodyStart - Length('{% else %}'))
+                          else
+                            ForBody := Copy(Template, BodyStart, TagStart - BodyStart);
+                          var BodyResult := ProcessTemplate(ForBody, LoopContext);
+                          SB.Append(BodyResult);
+                          if FDebug then
+                            WriteLn('Debug: For body result = ', BodyResult);
+                          // Update LocalContext with all changes from LoopContext
+                          for var Pair2 in LoopContext do
+                            LocalContext.AddOrSetValue(Pair2.Key, Pair2.Value);
+                        end;
+                      finally
+                        LoopContext.Free;
+                      end;
+                    end;
+                  end
+                  else if Iterable.IsType<TJSONArray> then
+                  begin
+                    var JsonArr := Iterable.AsType<TJSONArray>;
+                    if JsonArr.Count > 0 then
+                      HasItems := True;
+                    SetLength(Arr, JsonArr.Count);
+                    for var I := 0 to JsonArr.Count - 1 do
+                      Arr[I] := TValue.FromVariant(JsonArr.Items[I].Value);
+                    for Item in Arr do
+                    begin
+                      LoopContext := TDictionary<String, TValue>.Create;
+                      try
+                        // Copy all current LocalContext values to LoopContext
+                        for var Pair in LocalContext do
+                          LoopContext.AddOrSetValue(Pair.Key, Pair.Value);
+                        LoopContext.AddOrSetValue(LoopVar, Item);
+                        if FDebug then
+                          WriteLn('Debug: Loop var ', LoopVar, ' = ', Item.ToString);
+                        if (LoopCondition = '') or ToBool(EvaluateExpression(LoopCondition, LoopContext)) then
+                        begin
+                          var ForBody: String;
+                          if HasElse then
+                            ForBody := Copy(Template, BodyStart, ElsePos - BodyStart - Length('{% else %}'))
+                          else
+                            ForBody := Copy(Template, BodyStart, TagStart - BodyStart);
+                          var BodyResult := ProcessTemplate(ForBody, LoopContext);
+                          SB.Append(BodyResult);
+                          if FDebug then
+                            WriteLn('Debug: For body result = ', BodyResult);
+                          // Update LocalContext with all changes from LoopContext
+                          for var Pair in LoopContext do
+                            LocalContext.AddOrSetValue(Pair.Key, Pair.Value);
+                        end;
+                      finally
+                        LoopContext.Free;
+                      end;
+                    end;
+                  end;
+                  if not HasItems and HasElse then
+                  begin
+                    Body := Copy(Template, ElsePos, TagStart - ElsePos);
+                    var ElseBody := ProcessTemplate(Body, LocalContext);
+                    SB.Append(ElseBody);
+                    if FDebug then
+                      WriteLn('Debug: For else body result = ', ElseBody);
+                  end;
+                  Break;
                 end;
               end;
-              var Done := False;
-              for Branch in Branches do
+              if Tag.StartsWith('if ') then
+                Inc(IfDepth)
+              else if Tag = 'endif' then
+                Dec(IfDepth);
+              if Tag.StartsWith('with ') or (Tag = 'with') then
+                Inc(WithDepth)
+              else if Tag = 'endwith' then
+                Dec(WithDepth);
+              if Tag.StartsWith('macro ') then
+                Inc(MacroDepth)
+              else if Tag = 'endmacro' then
+                Dec(MacroDepth);
+              if (Tag = 'else') and (ForDepth = 1) and (IfDepth = 0) and (WithDepth = 0) and (MacroDepth = 0) then
               begin
-                if Done then Break;
-                if Branch.Condition = '' then
-                begin
-                  SB.Append(ProcessTemplate(Branch.Body, LocalContext));
-                  Done := True;
-                end
-                else
-                begin
-                  if ToBool(EvaluateExpression(Branch.Condition, LocalContext)) then
-                  begin
-                    SB.Append(ProcessTemplate(Branch.Body, LocalContext));
-                    Done := True;
-                  end;
-                end;
+                HasElse := True;
+                ElsePos := CurrentPos;
               end;
-            finally
-              Branches.Free;
             end;
+            if ForDepth > 0 then
+              raise Exception.Create('Unclosed for');
           end
           else if Tag.StartsWith('with ') or (Tag = 'with') then
           begin
             WithTag := Tag;
-            Depth := 1;
-            BodyStart := Pos;
-            while Pos <= Length(Template) do
+            WithDepth := 1;
+            BodyStart := CurrentPos;
+            IfDepth := 0;
+            ForDepth := 0;
+            MacroDepth := 0;
+            UseOnly := False;
+            while CurrentPos <= Length(Template) do
             begin
-              EndPos := Pos;
+              EndPos := CurrentPos;
               while (EndPos <= Length(Template)) and not ((Template[EndPos] = '{') and (EndPos + 1 <= Length(Template)) and (Template[EndPos + 1] = '%')) do
                 Inc(EndPos);
               if EndPos > Length(Template) then
                 raise Exception.Create('Unclosed with');
               TagStart := EndPos;
-              Pos := EndPos + 2;
-              EndPos := Pos;
+              CurrentPos := EndPos + 2;
+              EndPos := CurrentPos;
               while (EndPos <= Length(Template)) and not ((Template[EndPos] = '%') and (EndPos + 1 <= Length(Template)) and (Template[EndPos + 1] = '}')) do
                 Inc(EndPos);
-              Tag := Trim(Copy(Template, Pos, EndPos - Pos));
-              Pos := EndPos + 2;
-              if Tag.StartsWith('with ') then
-                Inc(Depth);
+              Tag := Trim(Copy(Template, CurrentPos, EndPos - CurrentPos));
+              CurrentPos := EndPos + 2;
+              if Tag.StartsWith('with ') or (Tag = 'with') then
+                Inc(WithDepth);
               if Tag = 'endwith' then
               begin
-                Dec(Depth);
-                if Depth = 0 then
+                Dec(WithDepth);
+                if WithDepth = 0 then
+                begin
+                  WithExpr := Trim(Copy(WithTag, 5, MaxInt));
+                  if WithExpr.EndsWith(' only') then
+                  begin
+                    UseOnly := True;
+                    WithExpr := Trim(Copy(WithExpr, 1, Length(WithExpr) - Length(' only')));
+                  end;
+                  LoopContext := TDictionary<String, TValue>.Create;
+                  try
+                    if not UseOnly then
+                      for var Pair in LocalContext do
+                        LoopContext.AddOrSetValue(Pair.Key, Pair.Value);
+                    if WithExpr <> '' then
+                    begin
+                      WithDict := ParseVariableDict(WithExpr, LocalContext);
+                      try
+                        for var Pair in WithDict do
+                          LoopContext.AddOrSetValue(Pair.Key, Pair.Value);
+                      finally
+                        WithDict.Free;
+                      end;
+                    end;
+                    Body := Copy(Template, BodyStart, TagStart - BodyStart);
+                    var BodyResult := ProcessTemplate(Body, LoopContext);
+                    SB.Append(BodyResult);
+                    // Update LocalContext with all changes from LoopContext
+                    for var Pair in LoopContext do
+                      LocalContext.AddOrSetValue(Pair.Key, Pair.Value);
+                  finally
+                    LoopContext.Free;
+                  end;
                   Break;
-              end;
-            end;
-            WithExpr := Trim(Copy(WithTag, 5, MaxInt));
-            LoopContext := TDictionary<String, TValue>.Create(LocalContext);
-            try
-              if WithExpr <> '' then
-              begin
-                WithDict := ParseVariableDict(WithExpr, LocalContext);
-                try
-                  for var Pair in WithDict do
-                    LoopContext.AddOrSetValue(Pair.Key, Pair.Value);
-                finally
-                  WithDict.Free;
                 end;
               end;
-              Body := Copy(Template, BodyStart, Pos - EndPos - 2 - BodyStart + 1);
-              SB.Append(ProcessTemplate(Body, LoopContext));
-            finally
-              LoopContext.Free;
+              if Tag.StartsWith('if ') then
+                Inc(IfDepth)
+              else if Tag = 'endif' then
+                Dec(IfDepth);
+              if Tag.StartsWith('for ') then
+                Inc(ForDepth)
+              else if Tag = 'endfor' then
+                Dec(ForDepth);
+              if Tag.StartsWith('macro ') then
+                Inc(MacroDepth)
+              else if Tag = 'endmacro' then
+                Dec(MacroDepth);
             end;
+            if WithDepth > 0 then
+              raise Exception.Create('Unclosed with');
+          end
+          else if Tag.StartsWith('macro ') then
+          begin
+            MacroTag := Tag;
+            MacroDepth := 1;
+            BodyStart := CurrentPos;
+            IfDepth := 0;
+            ForDepth := 0;
+            WithDepth := 0;
+            while CurrentPos <= Length(Template) do
+            begin
+              EndPos := CurrentPos;
+              while (EndPos <= Length(Template)) and not ((Template[EndPos] = '{') and (EndPos + 1 <= Length(Template)) and (Template[EndPos + 1] = '%')) do
+                Inc(EndPos);
+              if EndPos > Length(Template) then
+                raise Exception.Create('Unclosed macro');
+              TagStart := EndPos;
+              CurrentPos := EndPos + 2;
+              EndPos := CurrentPos;
+              while (EndPos <= Length(Template)) and not ((Template[EndPos] = '%') and (EndPos + 1 <= Length(Template)) and (Template[EndPos + 1] = '}')) do
+                Inc(EndPos);
+              Tag := Trim(Copy(Template, CurrentPos, EndPos - CurrentPos));
+              CurrentPos := EndPos + 2;
+              if Tag.StartsWith('macro ') then
+                Inc(MacroDepth);
+              if Tag = 'endmacro' then
+              begin
+                Dec(MacroDepth);
+                if MacroDepth = 0 then
+                begin
+                  var MacroStr := Trim(Copy(MacroTag, 6, MaxInt));
+                  var OpenParen := System.Pos('(', MacroStr);
+                  if OpenParen <= 0 then
+                    raise Exception.Create('Invalid macro: ' + MacroTag);
+                  MacroName := Trim(Copy(MacroStr, 1, OpenParen - 1));
+                  var ParamStr := Trim(Copy(MacroStr, OpenParen + 1, System.Pos(')', MacroStr) - OpenParen - 1));
+                  MacroParams := SplitOnTopLevel(ParamStr, ',');
+                  MacroDefaults := TDictionary<String, String>.Create;
+                  try
+                    for var I := 0 to High(MacroParams) do
+                    begin
+                      ParamParts := SplitOnTopLevel(Trim(MacroParams[I]), '=');
+                      if Length(ParamParts) > 1 then
+                      begin
+                        MacroParams[I] := Trim(ParamParts[0]);
+                        MacroDefaults.Add(MacroParams[I], Trim(ParamParts[1]));
+                      end
+                      else
+                        MacroParams[I] := Trim(MacroParams[I]);
+                    end;
+                    var MacroBody := Copy(Template, BodyStart, TagStart - BodyStart);
+                    FMacroBodies.AddOrSetValue(MacroName, MacroBody);
+                    FMacroParams.AddOrSetValue(MacroName, MacroParams);
+                    FMacroDefaults.AddOrSetValue(MacroName, MacroDefaults);
+                    FMacros.AddOrSetValue(MacroName,
+                      function(const MName: String; const Args: TArray<String>; const MacroContext: TDictionary<String, TValue>): String
+                      var
+                        LocalMacroContext: TDictionary<String, TValue>;
+                        I: Integer;
+                      begin
+                        LocalMacroContext := TDictionary<String, TValue>.Create(MacroContext);
+                        try
+                          for I := 0 to High(FMacroParams[MName]) do
+                          begin
+                            if I < Length(Args) then
+                              LocalMacroContext.AddOrSetValue(FMacroParams[MName][I], TValue.From<String>(Args[I]))
+                            else if FMacroDefaults[MName].ContainsKey(FMacroParams[MName][I]) then
+                              LocalMacroContext.AddOrSetValue(FMacroParams[MName][I], TValue.From<String>(FMacroDefaults[MName][FMacroParams[MName][I]]))
+                            else
+                              LocalMacroContext.AddOrSetValue(FMacroParams[MName][I], TValue.Empty);
+                          end;
+                          Result := ProcessTemplate(FMacroBodies[MName], LocalMacroContext);
+                        finally
+                          LocalMacroContext.Free;
+                        end;
+                      end);
+                  except
+                    MacroDefaults.Free;
+                    raise;
+                  end;
+                  Break;
+                end;
+              end;
+              if Tag.StartsWith('if ') then
+                Inc(IfDepth)
+              else if Tag = 'endif' then
+                Dec(IfDepth);
+              if Tag.StartsWith('for ') then
+                Inc(ForDepth)
+              else if Tag = 'endfor' then
+                Dec(ForDepth);
+              if Tag.StartsWith('with ') or (Tag = 'with') then
+                Inc(WithDepth)
+              else if Tag = 'endwith' then
+                Dec(WithDepth);
+            end;
+            if MacroDepth > 0 then
+              raise Exception.Create('Unclosed macro');
           end
           else
           begin
@@ -5613,7 +6003,7 @@ begin
         else
         begin
           SB.Append('{');
-          Pos := EndPos + 1;
+          CurrentPos := EndPos + 1;
         end;
       end;
       Result := SB.ToString;
@@ -5624,6 +6014,7 @@ begin
     LocalContext.Free;
   end;
 end;
+
 
 /// <summary>
 /// Internal rendering logic for templates.

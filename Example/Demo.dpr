@@ -3,7 +3,8 @@ program Demo;
 uses
   System.StartUpCopy,
   FMX.Forms,
-  uDemo in 'uDemo.pas' {Form2};
+  uDemo in 'uDemo.pas' {Form2},
+  TwigParser in 'TwigParser.pas';
 
 {$R *.res}
 

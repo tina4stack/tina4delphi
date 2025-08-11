@@ -2,7 +2,7 @@ object Form2: TForm2
   Left = 0
   Top = 0
   Caption = 'Twig Demo Form'
-  ClientHeight = 480
+  ClientHeight = 598
   ClientWidth = 916
   FormFactor.Width = 320
   FormFactor.Height = 480
@@ -12,15 +12,16 @@ object Form2: TForm2
   object btnRender: TButton
     Anchors = [akRight, akBottom]
     Position.X = 828.000000000000000000
-    Position.Y = 450.000000000000000000
+    Position.Y = 568.000000000000000000
     TabOrder = 0
     Text = 'Render'
     TextSettings.Trimming = None
     OnClick = btnRenderClick
   end
   object btnSave: TButton
+    Anchors = [akLeft, akBottom]
     Position.X = 8.000000000000000000
-    Position.Y = 450.000000000000000000
+    Position.Y = 570.000000000000000000
     TabOrder = 1
     Text = 'Save'
     TextSettings.Trimming = None
@@ -34,15 +35,15 @@ object Form2: TForm2
     Align = Top
     Anchors = [akLeft, akTop, akRight, akBottom]
     Size.Width = 916.000000000000000000
-    Size.Height = 442.000000000000000000
+    Size.Height = 560.000000000000000000
     Size.PlatformDefault = False
     TabOrder = 4
     object HtPanel1: THtPanel
       Align = Left
       Size.Width = 337.000000000000000000
-      Size.Height = 442.000000000000000000
+      Size.Height = 560.000000000000000000
       Size.PlatformDefault = False
-      TabOrder = 2
+      TabOrder = 0
       OnClick = HtPanel1Click
       AutoHeight = False
       Active = True
@@ -55,7 +56,7 @@ object Form2: TForm2
       ScaleMin = 0.100000001490116100
       ScaleMax = 100.000000000000000000
       Viewport.Width = 337.000000000000000000
-      Viewport.Height = 442.000000000000000000
+      Viewport.Height = 560.000000000000000000
     end
     object Splitter1: TSplitter
       Align = Left
@@ -63,19 +64,37 @@ object Form2: TForm2
       MinSize = 20.000000000000000000
       Position.X = 337.000000000000000000
       Size.Width = 24.000000000000000000
-      Size.Height = 442.000000000000000000
+      Size.Height = 560.000000000000000000
       Size.PlatformDefault = False
     end
-    object memTwig: TMemo
-      Touch.InteractiveGestures = [Pan, LongTap, DoubleTap]
-      DataDetectorTypes = []
+    object Panel2: TPanel
       Align = Client
       Size.Width = 555.000000000000000000
-      Size.Height = 442.000000000000000000
+      Size.Height = 560.000000000000000000
       Size.PlatformDefault = False
-      TabOrder = 1
-      Viewport.Width = 551.000000000000000000
-      Viewport.Height = 438.000000000000000000
+      TabOrder = 2
+      object memTwig: TMemo
+        Touch.InteractiveGestures = [Pan, LongTap, DoubleTap]
+        DataDetectorTypes = []
+        Align = Top
+        Size.Width = 555.000000000000000000
+        Size.Height = 441.000000000000000000
+        Size.PlatformDefault = False
+        TabOrder = 2
+        Viewport.Width = 551.000000000000000000
+        Viewport.Height = 437.000000000000000000
+      end
+      object memOutput: TMemo
+        Touch.InteractiveGestures = [Pan, LongTap, DoubleTap]
+        DataDetectorTypes = []
+        Align = Client
+        Size.Width = 555.000000000000000000
+        Size.Height = 119.000000000000000000
+        Size.PlatformDefault = False
+        TabOrder = 0
+        Viewport.Width = 551.000000000000000000
+        Viewport.Height = 115.000000000000000000
+      end
     end
   end
 end

@@ -6,7 +6,7 @@ uses
   System.SysUtils, System.Types, System.UITypes, System.Classes, System.Variants,
   FMX.Types, FMX.Controls, FMX.Forms, FMX.Graphics, FMX.Dialogs, Tina4Twig,
   FMX.Layouts, fmx.fhtmlcomp, FMX.Controls.Presentation, FMX.StdCtrls,
-  FMX.Memo.Types, FMX.ScrollBox, FMX.Memo;
+  FMX.Memo.Types, FMX.ScrollBox, FMX.Memo, TwigParser;
 
 type
   TForm2 = class(TForm)
@@ -16,6 +16,8 @@ type
     Panel1: TPanel;
     HtPanel1: THtPanel;
     Splitter1: TSplitter;
+    memOutput: TMemo;
+    Panel2: TPanel;
     memTwig: TMemo;
     procedure HtPanel1Click(Sender: TObject);
     procedure btnRenderClick(Sender: TObject);
@@ -36,10 +38,10 @@ implementation
 
 procedure TForm2.btnRenderClick(Sender: TObject);
 begin
-  var Twig := TTina4Twig.Create;
+  var Twig := TTina4Twig.Create();
   try
-    HtPanel1.Html.Text := Twig.Render(memTwig.Text);
-
+    HtPanel1.Html.Text := Twig.Render(memTwig.Text, nil);
+    memOutput.Text := HtPanel1.Html.Text;
   finally
     Twig.Free;
   end;

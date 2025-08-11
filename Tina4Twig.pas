@@ -4068,112 +4068,133 @@ begin
 
 
     FFilters.Add('merge',
-  function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): TValue
-  var
-    MergeWith, TempVal: TValue;
-    Arr1, Arr2, MergedArr: TArray<TValue>;
-    Dict1, Dict2, MergedDict: TDictionary<String, TValue>;
-    JA1, JA2: TJSONArray;
-    JO1, JO2: TJSONObject;
-    I: Integer;
-  begin
-    if Length(Args) < 1 then
-      Exit(Input);
-
-    MergeWith := EvaluateExpression(Args[0], Context);
-
-    // Handle arrays including TJSONArray
-    if (Input.IsType<TArray<TValue>> or (Input.IsObject and (Input.AsObject is TJSONArray))) and
-       (MergeWith.IsType<TArray<TValue>> or (MergeWith.IsObject and (MergeWith.AsObject is TJSONArray))) then
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): TValue
+    var
+      MergeWith, TempVal: TValue;
+      Arr1, Arr2, MergedArr: TArray<TValue>;
+      Dict1, Dict2, MergedDict: TDictionary<String, TValue>;
+      JA1, JA2: TJSONArray;
+      JO1, JO2: TJSONObject;
+      I: Integer;
     begin
-      if Input.IsType<TArray<TValue>> then
-        Arr1 := Input.AsType<TArray<TValue>>
-      else
-      begin
-        JA1 := TJSONArray(Input.AsObject);
-        SetLength(Arr1, JA1.Count);
-        for I := 0 to JA1.Count - 1 do
-          Arr1[I] := TValue.FromVariant(JA1.Items[I].Value);
-      end;
+      if Length(Args) < 1 then
+        Exit(Input);
 
-      if MergeWith.IsType<TArray<TValue>> then
-        Arr2 := MergeWith.AsType<TArray<TValue>>
-      else
-      begin
-        JA2 := TJSONArray(MergeWith.AsObject);
-        SetLength(Arr2, JA2.Count);
-        for I := 0 to JA2.Count - 1 do
-          Arr2[I] := TValue.FromVariant(JA2.Items[I].Value);
-      end;
+      MergeWith := EvaluateExpression(Args[0], Context);
 
-      SetLength(MergedArr, Length(Arr1) + Length(Arr2));
-      if Length(Arr1) > 0 then
-        System.Move(Arr1[0], MergedArr[0], Length(Arr1) * SizeOf(TValue));
-      if Length(Arr2) > 0 then
-        System.Move(Arr2[0], MergedArr[Length(Arr1)], Length(Arr2) * SizeOf(TValue));
-      Result := TValue.From<TArray<TValue>>(MergedArr);
-      Exit;
-    end;
-
-    // Handle dictionaries including TJSONObject
-    if (Input.IsType<TDictionary<String, TValue>> or (Input.IsObject and (Input.AsObject is TJSONObject))) and
-       (MergeWith.IsType<TDictionary<String, TValue>> or (MergeWith.IsObject and (MergeWith.AsObject is TJSONObject))) then
-    begin
-      if Input.IsType<TDictionary<String, TValue>> then
-        Dict1 := Input.AsType<TDictionary<String, TValue>>
-      else
+      // Handle arrays including TJSONArray
+      if Input.IsType<TArray<TValue>> or (Input.IsObject and (Input.AsObject is TJSONArray)) then
       begin
-        JO1 := TJSONObject(Input.AsObject);
-        Dict1 := TDictionary<String, TValue>.Create;
-        for var Pair in JO1 do
+        if Input.IsType<TArray<TValue>> then
+          Arr1 := Input.AsType<TArray<TValue>>
+        else
         begin
-          if Pair.JsonValue is TJSONNumber then
-            TempVal := TValue.From<Double>((Pair.JsonValue as TJSONNumber).AsDouble)
-          else if Pair.JsonValue is TJSONBool then
-            TempVal := TValue.From<Boolean>((Pair.JsonValue as TJSONBool).AsBoolean)
-          else if Pair.JsonValue is TJSONString then
-            TempVal := TValue.From<String>(Pair.JsonValue.Value)
-          else
-            TempVal := TValue.From<String>(Pair.JsonValue.ToString);
-          Dict1.Add(Pair.JsonString.Value, TempVal);
+          JA1 := TJSONArray(Input.AsObject);
+          SetLength(Arr1, JA1.Count);
+          for I := 0 to JA1.Count - 1 do
+            Arr1[I] := TValue.FromVariant(JA1.Items[I].Value);
         end;
-      end;
 
-      if MergeWith.IsType<TDictionary<String, TValue>> then
-        Dict2 := MergeWith.AsType<TDictionary<String, TValue>>
-      else
-      begin
-        JO2 := TJSONObject(MergeWith.AsObject);
-        Dict2 := TDictionary<String, TValue>.Create;
-        for var Pair in JO2 do
+        if MergeWith.IsType<TArray<TValue>> then
+          Arr2 := MergeWith.AsType<TArray<TValue>>
+        else if MergeWith.IsObject and (MergeWith.AsObject is TJSONArray) then
         begin
-          if Pair.JsonValue is TJSONNumber then
-            TempVal := TValue.From<Double>((Pair.JsonValue as TJSONNumber).AsDouble)
-          else if Pair.JsonValue is TJSONBool then
-            TempVal := TValue.From<Boolean>((Pair.JsonValue as TJSONBool).AsBoolean)
-          else if Pair.JsonValue is TJSONString then
-            TempVal := TValue.From<String>(Pair.JsonValue.Value)
-          else
-            TempVal := TValue.From<String>(Pair.JsonValue.ToString);
-          Dict2.Add(Pair.JsonString.Value, TempVal);
-        end;
+          JA2 := TJSONArray(MergeWith.AsObject);
+          SetLength(Arr2, JA2.Count);
+          for I := 0 to JA2.Count - 1 do
+            Arr2[I] := TValue.FromVariant(JA2.Items[I].Value);
+        end
+        else
+          Exit(Input); // Invalid merge argument, return input unchanged
+
+        SetLength(MergedArr, Length(Arr1) + Length(Arr2));
+        for I := 0 to High(Arr1) do
+          MergedArr[I] := Arr1[I];
+        for I := 0 to High(Arr2) do
+          MergedArr[Length(Arr1) + I] := Arr2[I];
+        Result := TValue.From<TArray<TValue>>(MergedArr);
+        Exit;
       end;
 
-      MergedDict := TDictionary<String, TValue>.Create;
-      for var Pair in Dict1 do
-        MergedDict.Add(Pair.Key, Pair.Value);
-      for var Pair in Dict2 do
-        MergedDict.AddOrSetValue(Pair.Key, Pair.Value);
-      Result := TValue.From<TDictionary<String, TValue>>(MergedDict);
+      // Handle dictionaries including TJSONObject
+      if Input.IsType<TDictionary<String, TValue>> or (Input.IsObject and (Input.AsObject is TJSONObject)) then
+      begin
+        if Input.IsType<TDictionary<String, TValue>> then
+          Dict1 := Input.AsType<TDictionary<String, TValue>>
+        else
+        begin
+          JO1 := TJSONObject(Input.AsObject);
+          Dict1 := TDictionary<String, TValue>.Create;
+          try
+            for var Pair in JO1 do
+            begin
+              if Pair.JsonValue is TJSONNumber then
+                TempVal := TValue.From<Double>((Pair.JsonValue as TJSONNumber).AsDouble)
+              else if Pair.JsonValue is TJSONBool then
+                TempVal := TValue.From<Boolean>((Pair.JsonValue as TJSONBool).AsBoolean)
+              else if Pair.JsonValue is TJSONString then
+                TempVal := TValue.From<String>(Pair.JsonValue.Value)
+              else
+                TempVal := TValue.From<String>(Pair.JsonValue.ToString);
+              Dict1.Add(Pair.JsonString.Value, TempVal);
+            end;
+          except
+            Dict1.Free;
+            raise;
+          end;
+        end;
 
-      // Free temporary dictionaries if created
-      if Input.IsObject and (Input.AsObject is TJSONObject) then Dict1.Free;
-      if MergeWith.IsObject and (MergeWith.AsObject is TJSONObject) then Dict2.Free;
-      Exit;
-    end;
+        if MergeWith.IsType<TDictionary<String, TValue>> then
+          Dict2 := MergeWith.AsType<TDictionary<String, TValue>>
+        else if MergeWith.IsObject and (MergeWith.AsObject is TJSONObject) then
+        begin
+          JO2 := TJSONObject(MergeWith.AsObject);
+          Dict2 := TDictionary<String, TValue>.Create;
+          try
+            for var Pair in JO2 do
+            begin
+              if Pair.JsonValue is TJSONNumber then
+                TempVal := TValue.From<Double>((Pair.JsonValue as TJSONNumber).AsDouble)
+              else if Pair.JsonValue is TJSONBool then
+                TempVal := TValue.From<Boolean>((Pair.JsonValue as TJSONBool).AsBoolean)
+              else if Pair.JsonValue is TJSONString then
+                TempVal := TValue.From<String>(Pair.JsonValue.Value)
+              else
+                TempVal := TValue.From<String>(Pair.JsonValue.ToString);
+              Dict2.Add(Pair.JsonString.Value, TempVal);
+            end;
+          except
+            Dict2.Free;
+            raise;
+          end;
+        end
+        else
+        begin
+          if Input.IsType<TDictionary<String, TValue>> then
+            Result := TValue.From<TDictionary<String, TValue>>(Dict1)
+          else
+            Dict1.Free;
+          Exit;
+        end;
 
-    Result := Input;
-  end);
+        MergedDict := TDictionary<String, TValue>.Create;
+        try
+          for var Pair in Dict1 do
+            MergedDict.Add(Pair.Key, Pair.Value);
+          for var Pair in Dict2 do
+            MergedDict.AddOrSetValue(Pair.Key, Pair.Value);
+          Result := TValue.From<TDictionary<String, TValue>>(MergedDict);
+        finally
+          if Input.IsType<TDictionary<String, TValue>> then
+            Dict1.Free;
+          if MergeWith.IsType<TDictionary<String, TValue>> then
+            Dict2.Free;
+        end;
+        Exit;
+      end;
+
+      Result := Input;
+    end);
 
   FFilters.Add('nl2br',
     function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): TValue
@@ -4762,6 +4783,7 @@ begin
           SB.Append(Copy(Template, CurrentPos, EndPos - CurrentPos));
         if EndPos > Length(Template) then
           Break;
+
         if Template[EndPos + 1] = '{' then // {{ }}
         begin
           CurrentPos := EndPos + 2;
@@ -4791,7 +4813,20 @@ begin
           else
           begin
             var ExprVal := EvaluateExpression(Tag, LocalContext);
-            if ExprVal.IsEmpty or (ExprVal.Kind in [tkDynArray, tkArray, tkClass, tkRecord]) then
+            if ExprVal.IsEmpty then
+              Current := ''
+            else if ExprVal.IsType<TArray<TValue>> then
+            begin
+              Arr := ExprVal.AsType<TArray<TValue>>;
+              var ArrStr: TArray<String>;
+              SetLength(ArrStr, Length(Arr));
+              for var I := 0 to High(Arr) do
+                ArrStr[I] := Arr[I].ToString;
+              Current := String.Join('', ArrStr);
+              if FDebug then
+                WriteLn('Debug: Array output for ', Tag, ' = ', Current);
+            end
+            else if ExprVal.Kind in [tkClass, tkRecord] then
               Current := ''
             else
               Current := ExprVal.ToString;

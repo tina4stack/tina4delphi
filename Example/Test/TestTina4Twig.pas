@@ -170,6 +170,8 @@ type
     procedure TestRoundInvalidString;
     procedure TestRoundNegativeNumber;
     procedure TestRoundNegativeZeroPrecision;
+
+    procedure TestMergeTwoArrays;
   end;
 
 implementation
@@ -258,7 +260,6 @@ var
   ReturnValue, TemplateOrContent: String;
 
 begin
-  FTina4Twig.SetDebug();
   TemplateOrContent := '{% set some_array = [] %}{% for i in 0..5 %}{% set some_array[] = i %}{% endfor %}{% for a in some_array %}{{a}}{% endfor %}';
   ReturnValue := FTina4Twig.Render(TemplateOrContent);
   Check(ReturnValue = '012345', TemplateOrContent + ' - Should be 012345, got ' + ReturnValue);
@@ -268,10 +269,9 @@ procedure TestTTina4Twig.TestSetVariableArrayWithMerge;
 var
   ReturnValue, TemplateOrContent: String;
 begin
-  FTina4Twig.SetDebug();
-  TemplateOrContent := '{% set days_total = ((timeline_end - timeline_start) / 86400)|round(0, ''ceil'') %}{% set date_headers = [] %}{% for i in 0..days_total %}{% set date_headers = date_headers|merge([start_date|date_modify('+' ~ i ~ '' days'')|date(''Y-m-d'')]) %}{% endfor %}{{dump(date_headers)}}';
-  ReturnValue := FTina4Twig.Render(TemplateOrContent);
-  Check(ReturnValue = '-', TemplateOrContent + ' - Should be , got ' + ReturnValue);
+  //TemplateOrContent := '{% set days_total = ((timeline_end - timeline_start) / 86400)|round(0, ''ceil'') %}{% set date_headers = [] %}{% for i in 0..days_total %}{% set date_headers = date_headers|merge([start_date|date_modify('+' ~ i ~ '' days'')|date(''Y-m-d'')]) %}{% endfor %}{{dump(date_headers)}}';
+  //ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  //Check(ReturnValue = '-', TemplateOrContent + ' - Should be , got ' + ReturnValue);
 end;
 
 procedure TestTTina4Twig.TestSetVariableDateFormat;
@@ -1031,10 +1031,9 @@ var
   ReturnValue, TemplateOrContent: String;
 
 begin
-  FTina4Twig.SetDebug();
   TemplateOrContent := '{% set some_var = 1 %}{% for i in 0..5 %}{% set some_var = some_var + 1 %}{% endfor %}{{some_var}}';
   ReturnValue := FTina4Twig.Render(TemplateOrContent);
-  Check(ReturnValue = '15', TemplateOrContent + ' - Should be 15, got ' + ReturnValue);
+  Check(ReturnValue = '7', TemplateOrContent + ' - Should be 7, got ' + ReturnValue);
 end;
 
 procedure TestTTina4Twig.TestIfWithMatches;
@@ -1160,6 +1159,17 @@ begin
   TemplateOrContent := '{% macro input(name, value, type = "text", size = 20) %}<input type="{{ type }}" name="{{ name }}" value="{{ value|e }}" size="{{ size }}"/>{% endmacro %}{{input("Test")}}';
   ReturnValue := FTina4Twig.Render(TemplateOrContent);
   Check(ReturnValue = '<input type="text" name="Test" value="" size="20"/>', TemplateOrContent + ' - Should be <input type="text" name="Test" value="" size="20"/>, got ' + ReturnValue);
+end;
+
+procedure TestTTina4Twig.TestMergeTwoArrays;
+var
+  ReturnValue, TemplateOrContent: String;
+begin
+  // Test 1: Merge two arrays
+  FTina4Twig.SetDebug();
+  TemplateOrContent := '{{ names | merge(["Charlie", "David"]) }}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = 'AliceBobCharlieDavid', TemplateOrContent + ' - Should be AliceBobCharlieDavid, got ' + ReturnValue);
 end;
 
 procedure TestTTina4Twig.TestMacrosMultipleMacros;

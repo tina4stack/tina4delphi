@@ -8,7 +8,7 @@ uses
 
 type
   TStringDict = TDictionary<String, TValue>;
-  TFilterFunc = reference to function(const Input: TValue; const Args: TArray<String>;const Context: TDictionary<String, TValue>): String;
+  TFilterFunc = reference to function(const Input: TValue; const Args: TArray<String>;const Context: TDictionary<String, TValue>): TValue;
   TFunctionFunc = reference to function(const Args: TArray<String>; const Context: TDictionary<String, TValue>): String;
   TMacroFunc = reference to function(const MacroName: String; const Args: TArray<String>; const MacroContext: TDictionary<String, TValue>): String;
 
@@ -30,14 +30,13 @@ type
     function IsStrictNumeric(const Value: TValue): Boolean;
     function GetAsExtendedLenient(const Value: TValue): Extended;
     function CompareValues(const Left, Right: TValue; const Op: String): Boolean;
-    function ReplaceContextVariables(const Template: String; Context: TDictionary<String, TValue>): String;
     function EvaluateIncludes(const Template: String; Context: TDictionary<String, TValue>): String;
     function EvaluateExtends(const Template: String; Context: TDictionary<String, TValue>): String;
     function EvaluateMacroBlocks(const Template: String; Context: TDictionary<String, TValue>): String;
     function RemoveComments(const Template: String): String;
     function ParseVariableDict(const DictStr: String; OuterContext: TDictionary<String,TValue>): TDictionary<String,TValue>;
-    function ProcessTemplate(const Template: String; var Context: TDictionary<String, TValue>): String;
-    function RenderInternal(const TemplateOrContent: String; Context: TStringDict): String;
+    procedure ProcessTemplate(const Template: String; var LocalContext: TDictionary<String, TValue>; var Result: String);
+    function RenderInternal(const TemplateOrContent: String; var Context: TStringDict): String;
     function ResolveVariablePath(const VariablePath: string; Context: TDictionary<String, TValue>): TValue;
     function Contains(const Left, Right: TValue): Boolean;
     function ValuesAreEqual(const A, B: TValue): Boolean;
@@ -857,21 +856,7 @@ begin
           end;
           if FFilters.TryGetValue(FuncName, Filter) then
           begin
-            CurrentVal := TValue.From<String>(Filter(CurrentVal, Args, Context));
-            IsSimpleInteger := TryStrToInt64(CurrentVal.AsString, IA);
-            if IsSimpleInteger then
-            begin
-              for var K := 1 to Length(CurrentVal.AsString) do
-              begin
-                if (CurrentVal.AsString[K] in ['0', '+', '-']) and (K < Length(CurrentVal.AsString)) then
-                begin
-                  IsSimpleInteger := False;
-                  Break;
-                end;
-              end;
-            end;
-            if IsSimpleInteger then
-              CurrentVal := TValue.From<Int64>(IA);
+            CurrentVal := Filter(CurrentVal, Args, Context);
           end
           else
             CurrentVal := TValue.From<String>('(filter ' + FuncName + ' not found)');
@@ -1313,8 +1298,7 @@ begin
   FContext := TDictionary<String, TValue>.Create;
 
   //Set the date format for the system to be used in date_format and date
-  FDateFormat := 'YYYY-mm-dd';
-  FDaysFormat := '%d days';
+  SetDateFormat('YYYY-mm-dd', '%d days');
 
   if TemplatePath = '' then
   begin
@@ -1914,95 +1898,6 @@ begin
 end;
 
 
-/// <summary>
-/// Replaces variable placeholders in the template with context values, applying filters and functions.
-/// </summary>
-/// <param name="Template">The template string.</param>
-/// <param name="Context">The context dictionary.</param>
-/// <returns>
-/// The template with variables replaced.
-/// </returns>
-/// <remarks>
-/// Handles {{ var | filter(arg) }}, function calls, and macro calls.
-/// Prioritizes macro lookup to ensure correct macro execution.
-/// Uses EvaluateExpression for complex expressions with filters and operators.
-/// Strips quotes from macro and function arguments to ensure correct rendering.
-/// </remarks>
-function TTina4Twig.ReplaceContextVariables(const Template: String; Context: TDictionary<String, TValue>): String;
-var
-  Regex: TRegEx;
-  Match: TMatch;
-  FullMatch, Expr: String;
-  TempVal: TValue;
-  Func: TFunctionFunc;
-  Macro: TMacroFunc;
-  FilteredValue: String;
-  I: Integer;
-  Args: TArray<String>;
-begin
-  Result := Template;
-  Regex := TRegEx.Create('{{\s*([^}]+)\s*}}', [roSingleLine, roIgnoreCase]);
-
-  while True do
-  begin
-    Match := Regex.Match(Result);
-    if not Match.Success then
-      Break;
-
-    FullMatch := Match.Value;
-    Expr := Trim(Match.Groups[1].Value);
-
-
-    // Initialize Args to empty array to avoid undefined issues
-    SetLength(Args, 0);
-
-    // Handle expressions with filters and/or operators
-    if Expr.Contains('|') or Expr.Contains('+') or Expr.Contains('-') or Expr.Contains('*') or Expr.Contains('/') or Expr.Contains('%') or Expr.Contains('~') then
-    begin
-      TempVal := EvaluateExpression(Expr, Context);
-      Result := StringReplace(Result, FullMatch, TempVal.ToString, [rfReplaceAll]);
-      Continue;
-    end;
-
-    // Handle function or macro calls (e.g., {{ dump(var) }} or {{ input("Test") }})
-    if Expr.Contains('(') and Expr.EndsWith(')') then
-    begin
-      var FuncName := Trim(Copy(Expr, 1, Pos('(', Expr) - 1));
-      var ArgsStr := Trim(Copy(Expr, Pos('(', Expr) + 1, Length(Expr) - Pos('(', Expr) - 1));
-      if ArgsStr <> '' then
-        Args := ArgsStr.Split([','], TStringSplitOptions.ExcludeEmpty);
-      for I := 0 to High(Args) do
-      begin
-        Args[I] := Trim(Args[I]);
-        // Strip quotes from string literals in arguments
-        if ((Args[I].StartsWith('"') and Args[I].EndsWith('"')) or
-            (Args[I].StartsWith('''') and Args[I].EndsWith(''''))) and (Length(Args[I]) >= 2) then
-          Args[I] := Copy(Args[I], 2, Length(Args[I]) - 2);
-      end;
-
-      // Try macro first
-      if FMacros.TryGetValue(FuncName, Macro) then
-      begin
-        FilteredValue := Macro(FuncName, Args, Context);
-        Result := StringReplace(Result, FullMatch, FilteredValue, [rfReplaceAll]);
-        Continue;
-      end
-      else if FFunctions.TryGetValue(FuncName, Func) then
-      begin
-        FilteredValue := Func(Args, Context);
-        Result := StringReplace(Result, FullMatch, FilteredValue, [rfReplaceAll]);
-        Continue;
-      end;
-    end;
-
-    // Handle simple variable lookup
-    TempVal := ResolveVariablePath(Expr, Context);
-    if not TempVal.IsEmpty then
-      Result := StringReplace(Result, FullMatch, TempVal.ToString, [rfReplaceAll])
-    else
-      Result := StringReplace(Result, FullMatch, '', [rfReplaceAll]);
-  end;
-end;
 
 /// <summary>
 /// Resolves a dotted variable path from the context.
@@ -2686,7 +2581,7 @@ begin
   FFilters.Clear;
 
   FFilters.Add('abs',
-    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): TValue
     var
       Val: Double;
     begin
@@ -2701,7 +2596,7 @@ begin
     end);
 
   FFilters.Add('batch',
-    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): TValue
     var
       Size: Integer;
       Arr: TArray<TValue>;
@@ -2771,7 +2666,7 @@ begin
     end);
 
   FFilters.Add('capitalize',
-    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): TValue
     begin
       if (Input.Kind in [tkString, tkUString]) and (Input.AsString <> '') then
         Result := UpperCase(Input.AsString[1]) + LowerCase(Copy(Input.AsString, 2, MaxInt))
@@ -2780,7 +2675,7 @@ begin
     end);
 
   FFilters.Add('column',
-    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): TValue
     var
       Key: String;
       Arr: TArray<TValue>;
@@ -2839,35 +2734,35 @@ begin
     end);
 
   FFilters.Add('convert_encoding',
-    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): TValue
     begin
       // Stub: encoding conversion not implemented
       Result := Input.ToString;
     end);
 
   FFilters.Add('country_name',
-    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): TValue
     begin
       // Stub: country name lookup not implemented
       Result := Input.ToString;
     end);
 
   FFilters.Add('currency_name',
-    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): TValue
     begin
       // Stub: currency name lookup not implemented
       Result := Input.ToString;
     end);
 
   FFilters.Add('currency_symbol',
-    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): TValue
     begin
       // Stub: currency symbol lookup not implemented
       Result := Input.ToString;
     end);
 
   FFilters.Add('data_uri',
-    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): TValue
     begin
       if Input.Kind in [tkString, tkUString] then
         Result := 'data:;base64,' + TNetEncoding.Base64.Encode(Input.AsString)
@@ -2876,7 +2771,7 @@ begin
     end);
 
   FFilters.Add('date',
-    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): TValue
     var
       dt: TDateTime;
       fmt: String;
@@ -2929,7 +2824,7 @@ begin
 
 
    FFilters.Add('date_modify',
-    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): TValue
     var
       dt: TDateTime;
       modifier: String;
@@ -3014,7 +2909,7 @@ begin
 
 
   FFilters.Add('default',
-    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): TValue
     begin
       if (Input.IsEmpty or (Input.Kind in [tkString, tkUString]) and (Input.AsString = '')) then
       begin
@@ -3028,61 +2923,65 @@ begin
     end);
 
     FFilters.Add('escape',
-    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): TValue
     var
       Strategy: String;
       InputStr: String;
+      OutputStr: String;
     begin
       if Input.IsEmpty then
         Exit(''); // Return empty string for TValue.Empty
 
       InputStr := Input.ToString;
+      OutputStr:= '';
       Strategy := 'html';
       if Length(Args) > 0 then
         Strategy := LowerCase(Args[0]);
 
       if Strategy = 'html' then
       begin
-        Result := StringReplace(InputStr, '&', '&amp;', [rfReplaceAll]);
-        Result := StringReplace(Result, '<', '&lt;', [rfReplaceAll]);
-        Result := StringReplace(Result, '>', '&gt;', [rfReplaceAll]);
-        Result := StringReplace(Result, '"', '&quot;', [rfReplaceAll]);
-        Result := StringReplace(Result, '''', '&#39;', [rfReplaceAll]);
+        OutputStr := StringReplace(InputStr, '&', '&amp;', [rfReplaceAll]);
+        OutputStr := StringReplace(OutputStr, '<', '&lt;', [rfReplaceAll]);
+        OutputStr := StringReplace(OutputStr, '>', '&gt;', [rfReplaceAll]);
+        OutputStr := StringReplace(OutputStr, '"', '&quot;', [rfReplaceAll]);
+        OutputStr := StringReplace(OutputStr, '''', '&#39;', [rfReplaceAll]);
       end
       else if Strategy = 'js' then
       begin
-        Result := StringReplace(InputStr, '\', '\\', [rfReplaceAll]);
-        Result := StringReplace(Result, '"', '\"', [rfReplaceAll]);
-        Result := StringReplace(Result, '''', '\''', [rfReplaceAll]);
-        Result := StringReplace(Result, sLineBreak, '\n', [rfReplaceAll]);
+        OutputStr := StringReplace(InputStr, '\', '\\', [rfReplaceAll]);
+        OutputStr := StringReplace(OutputStr, '"', '\"', [rfReplaceAll]);
+        OutputStr := StringReplace(OutputStr, '''', '\''', [rfReplaceAll]);
+        OutputStr := StringReplace(OutputStr, sLineBreak, '\n', [rfReplaceAll]);
       end
       else if Strategy = 'css' then
-        Result := TNetEncoding.URL.Encode(InputStr)
+        OutputStr := TNetEncoding.URL.Encode(InputStr)
       else if Strategy = 'url' then
-        Result := TNetEncoding.URL.Encode(InputStr)
+        OutputStr := TNetEncoding.URL.Encode(InputStr)
       else if Strategy = 'html_attr' then
       begin
-        Result := StringReplace(InputStr, '&', '&amp;', [rfReplaceAll]);
-        Result := StringReplace(Result, '"', '&quot;', [rfReplaceAll]);
-        Result := StringReplace(Result, '''', '&#x27;', [rfReplaceAll]);
-        Result := StringReplace(Result, '<', '&lt;', [rfReplaceAll]);
-        Result := StringReplace(Result, '>', '&gt;', [rfReplaceAll]);
+        OutputStr := StringReplace(InputStr, '&', '&amp;', [rfReplaceAll]);
+        OutputStr := StringReplace(OutputStr, '"', '&quot;', [rfReplaceAll]);
+        OutputStr := StringReplace(OutputStr, '''', '&#x27;', [rfReplaceAll]);
+        OutputStr := StringReplace(OutputStr, '<', '&lt;', [rfReplaceAll]);
+        OutputStr := StringReplace(OutputStr, '>', '&gt;', [rfReplaceAll]);
       end
       else
-        Result := InputStr;
+        OutputStr := InputStr;
+
+      Result := TValue.From<String>(OutputStr);
     end);
 
   FFilters.Add('e', FFilters['escape']);
 
   FFilters.Add('filter',
-    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): TValue
     begin
       // Stub: generic filter not implemented
       Result := Input.ToString;
     end);
 
   FFilters.Add('find',
-    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): TValue
     begin
       if (Length(Args) > 0) and (Input.Kind in [tkString, tkUString]) then
       begin
@@ -3097,7 +2996,7 @@ begin
     end);
 
   FFilters.Add('first',
-    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): TValue
     begin
       if (Input.Kind in [tkString, tkUString]) and (Input.AsString <> '') then
         Result := Input.AsString[1]
@@ -3110,7 +3009,7 @@ begin
     end);
 
   FFilters.Add('format',
-  function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
+  function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): TValue
   var
     Fmt: String;
     SB: TStringBuilder;
@@ -3390,7 +3289,7 @@ begin
   end);
 
   FFilters.Add('format_currency',
-    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): TValue
     var
       Val: Double;
       Currency: String;
@@ -3407,13 +3306,13 @@ begin
     end);
 
   FFilters.Add('format_date',
-    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): TValue
     begin
       Result := FFilters['date'](Input, Args, Context);
     end);
 
   FFilters.Add('format_datetime',
-    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): TValue
     var
       FormatStr: String;
     begin
@@ -3425,7 +3324,7 @@ begin
     end);
 
   FFilters.Add('format_number',
-    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): TValue
     var
       Val: Double;
       Decimals: Integer;
@@ -3445,13 +3344,13 @@ begin
     end);
 
   FFilters.Add('format_time',
-    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): TValue
     begin
       Result := FFilters['date'](Input, ['hh:nn:ss'], Context);
     end);
 
   FFilters.Add('join',
-    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): TValue
     var
       Arr: TArray<TValue>;
       SB: TStringBuilder;
@@ -3503,7 +3402,7 @@ begin
     end);
 
   FFilters.Add('json_encode',
-    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): TValue
     var
       JsonValue: TJSONValue;
     begin
@@ -3526,7 +3425,7 @@ begin
     end);
 
   FFilters.Add('keys',
-    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): TValue
     var
       Dict: TDictionary<String, TValue>;
       I: Integer;
@@ -3564,14 +3463,14 @@ begin
     end);
 
   FFilters.Add('language_name',
-  function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
+  function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): TValue
   begin
     // Stub: language name lookup not implemented
     Result := Input.ToString;
   end);
 
   FFilters.Add('last',
-  function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
+  function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): TValue
   begin
     if (Input.Kind in [tkString, tkUString]) and (Input.AsString <> '') then
       Result := Input.AsString[Length(Input.AsString)]
@@ -3584,7 +3483,7 @@ begin
   end);
 
   FFilters.Add('length',
-    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): TValue
     begin
       if Input.IsArray then
         Result := IntToStr(Input.GetArrayLength)
@@ -3601,14 +3500,14 @@ begin
     end);
 
   FFilters.Add('locale_name',
-    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): TValue
     begin
       // Stub: locale name lookup not implemented
       Result := Input.ToString;
     end);
 
   FFilters.Add('lower',
-    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): TValue
     begin
       if Input.Kind in [tkString, tkUString] then
         Result := LowerCase(Input.AsString)
@@ -3617,7 +3516,7 @@ begin
     end);
 
   FFilters.Add('map',
-    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): TValue
     var
       ArrowExpr, VarName, Expr: String;
       Arr: TArray<TValue>;
@@ -3794,7 +3693,7 @@ begin
     end);
 
     FFilters.Add('min',
-    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): TValue
     var
       Arr: TArray<TValue>;
       JSONArray: TJSONArray;
@@ -3981,7 +3880,7 @@ begin
     end);
 
   FFilters.Add('max',
-    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): TValue
     var
       Arr: TArray<TValue>;
       JSONArray: TJSONArray;
@@ -4169,54 +4068,115 @@ begin
 
 
     FFilters.Add('merge',
-    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
-    var
-      Dict: TDictionary<String, TValue>;
-      JSONValue: TJSONValue;
-      I: Integer;
-      Output: TStringBuilder;
+  function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): TValue
+  var
+    MergeWith, TempVal: TValue;
+    Arr1, Arr2, MergedArr: TArray<TValue>;
+    Dict1, Dict2, MergedDict: TDictionary<String, TValue>;
+    JA1, JA2: TJSONArray;
+    JO1, JO2: TJSONObject;
+    I: Integer;
+  begin
+    if Length(Args) < 1 then
+      Exit(Input);
+
+    MergeWith := EvaluateExpression(Args[0], Context);
+
+    // Handle arrays including TJSONArray
+    if (Input.IsType<TArray<TValue>> or (Input.IsObject and (Input.AsObject is TJSONArray))) and
+       (MergeWith.IsType<TArray<TValue>> or (MergeWith.IsObject and (MergeWith.AsObject is TJSONArray))) then
     begin
-      Output := TStringBuilder.Create;
-      try
-        Output.Append('{');
-        if Input.IsObject and (Input.AsObject is TDictionary<String, TValue>) then
-        begin
-          Dict := TDictionary<String, TValue>(Input.AsObject);
-          for I := 0 to High(Args) do
-          begin
-            JSONValue := TJSONObject.ParseJSONValue(Args[I]);
-            try
-              if JSONValue is TJSONObject then
-              begin
-                for var Pair in TJSONObject(JSONValue) do
-                begin
-                  if Dict.ContainsKey(Pair.JsonString.Value) then
-                    Dict[Pair.JsonString.Value] := TValue.From<String>(Pair.JsonValue.ToString)
-                  else
-                    Dict.Add(Pair.JsonString.Value, TValue.From<String>(Pair.JsonValue.ToString));
-                end;
-              end;
-            finally
-              JSONValue.Free;
-            end;
-          end;
-          var Keys := Dict.Keys.ToArray;
-          for I := 0 to High(Keys) do
-          begin
-            if I > 0 then
-              Output.Append(',');
-            Output.Append('"' + Keys[I] + '":' + Dict[Keys[I]].ToString);
-          end;
-        end;
-        Output.Append('}');
-        Result := Output.ToString;
-      finally
-        Output.Free;
+      if Input.IsType<TArray<TValue>> then
+        Arr1 := Input.AsType<TArray<TValue>>
+      else
+      begin
+        JA1 := TJSONArray(Input.AsObject);
+        SetLength(Arr1, JA1.Count);
+        for I := 0 to JA1.Count - 1 do
+          Arr1[I] := TValue.FromVariant(JA1.Items[I].Value);
       end;
-    end);
+
+      if MergeWith.IsType<TArray<TValue>> then
+        Arr2 := MergeWith.AsType<TArray<TValue>>
+      else
+      begin
+        JA2 := TJSONArray(MergeWith.AsObject);
+        SetLength(Arr2, JA2.Count);
+        for I := 0 to JA2.Count - 1 do
+          Arr2[I] := TValue.FromVariant(JA2.Items[I].Value);
+      end;
+
+      SetLength(MergedArr, Length(Arr1) + Length(Arr2));
+      if Length(Arr1) > 0 then
+        System.Move(Arr1[0], MergedArr[0], Length(Arr1) * SizeOf(TValue));
+      if Length(Arr2) > 0 then
+        System.Move(Arr2[0], MergedArr[Length(Arr1)], Length(Arr2) * SizeOf(TValue));
+      Result := TValue.From<TArray<TValue>>(MergedArr);
+      Exit;
+    end;
+
+    // Handle dictionaries including TJSONObject
+    if (Input.IsType<TDictionary<String, TValue>> or (Input.IsObject and (Input.AsObject is TJSONObject))) and
+       (MergeWith.IsType<TDictionary<String, TValue>> or (MergeWith.IsObject and (MergeWith.AsObject is TJSONObject))) then
+    begin
+      if Input.IsType<TDictionary<String, TValue>> then
+        Dict1 := Input.AsType<TDictionary<String, TValue>>
+      else
+      begin
+        JO1 := TJSONObject(Input.AsObject);
+        Dict1 := TDictionary<String, TValue>.Create;
+        for var Pair in JO1 do
+        begin
+          if Pair.JsonValue is TJSONNumber then
+            TempVal := TValue.From<Double>((Pair.JsonValue as TJSONNumber).AsDouble)
+          else if Pair.JsonValue is TJSONBool then
+            TempVal := TValue.From<Boolean>((Pair.JsonValue as TJSONBool).AsBoolean)
+          else if Pair.JsonValue is TJSONString then
+            TempVal := TValue.From<String>(Pair.JsonValue.Value)
+          else
+            TempVal := TValue.From<String>(Pair.JsonValue.ToString);
+          Dict1.Add(Pair.JsonString.Value, TempVal);
+        end;
+      end;
+
+      if MergeWith.IsType<TDictionary<String, TValue>> then
+        Dict2 := MergeWith.AsType<TDictionary<String, TValue>>
+      else
+      begin
+        JO2 := TJSONObject(MergeWith.AsObject);
+        Dict2 := TDictionary<String, TValue>.Create;
+        for var Pair in JO2 do
+        begin
+          if Pair.JsonValue is TJSONNumber then
+            TempVal := TValue.From<Double>((Pair.JsonValue as TJSONNumber).AsDouble)
+          else if Pair.JsonValue is TJSONBool then
+            TempVal := TValue.From<Boolean>((Pair.JsonValue as TJSONBool).AsBoolean)
+          else if Pair.JsonValue is TJSONString then
+            TempVal := TValue.From<String>(Pair.JsonValue.Value)
+          else
+            TempVal := TValue.From<String>(Pair.JsonValue.ToString);
+          Dict2.Add(Pair.JsonString.Value, TempVal);
+        end;
+      end;
+
+      MergedDict := TDictionary<String, TValue>.Create;
+      for var Pair in Dict1 do
+        MergedDict.Add(Pair.Key, Pair.Value);
+      for var Pair in Dict2 do
+        MergedDict.AddOrSetValue(Pair.Key, Pair.Value);
+      Result := TValue.From<TDictionary<String, TValue>>(MergedDict);
+
+      // Free temporary dictionaries if created
+      if Input.IsObject and (Input.AsObject is TJSONObject) then Dict1.Free;
+      if MergeWith.IsObject and (MergeWith.AsObject is TJSONObject) then Dict2.Free;
+      Exit;
+    end;
+
+    Result := Input;
+  end);
 
   FFilters.Add('nl2br',
-    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): TValue
     begin
       if Input.Kind in [tkString, tkUString] then
         Result := StringReplace(Input.AsString, sLineBreak, '<br>', [rfReplaceAll])
@@ -4225,7 +4185,7 @@ begin
     end);
 
   FFilters.Add('number_format',
-  function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
+  function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): TValue
   var
     Val: Double;
     Decimals: Integer;
@@ -4267,32 +4227,32 @@ begin
       FormatStr := '0';
     Result := FormatFloat(FormatStr, Val);
     if Decimals > 0 then
-      Result := StringReplace(Result, '.', DecPoint, [rfReplaceAll]);
+      Result := TValue.From<String>(StringReplace(Result.ToString, '.', DecPoint, [rfReplaceAll]));
     // Note: Thousands separator not implemented due to lack of direct support in FormatFloat
   end);
 
   FFilters.Add('plural',
-    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): TValue
     begin
       // Stub: pluralization not implemented
       Result := Input.ToString;
     end);
 
   FFilters.Add('raw',
-    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): TValue
     begin
       Result := Input.ToString; // No escaping
     end);
 
   FFilters.Add('reduce',
-    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): TValue
     begin
       // Stub: reduce not implemented
       Result := Input.ToString;
     end);
 
   FFilters.Add('replace',
-    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): TValue
     begin
       if Length(Args) < 2 then
         Result := Input.ToString
@@ -4303,46 +4263,51 @@ begin
     end);
 
   FFilters.Add('reverse',
-    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): TValue
     var
       I: Integer;
+      OutputStr: String;
+
     begin
+      OutputStr := '';
       if Input.Kind in [tkString, tkUString] then
       begin
-        Result := '';
         for I := Length(Input.AsString) downto 1 do
-          Result := Result + Input.AsString[I];
+          OutputStr := OutputStr + Input.AsString[I];
       end
       else if Input.IsArray then
       begin
         var Arr := Input.AsType<TArray<TValue>>;
-        Result := '[';
+        OutputStr := '[';
         for I := High(Arr) downto 0 do
         begin
           if I < High(Arr) then
-            Result := Result + ',';
-          Result := Result + Arr[I].ToString;
+            OutputStr := OutputStr + ',';
+          OutputStr := OutputStr + Arr[I].ToString;
         end;
-        Result := Result + ']';
+        OutputStr := OutputStr + ']';
       end
-      else if Input.IsObject and (Input.AsObject is TJSONArray) then
+       else
+      if Input.IsObject and (Input.AsObject is TJSONArray) then
       begin
         var JSONArray := TJSONArray(Input.AsObject);
-        Result := '[';
+        OutputStr := '[';
         for I := JSONArray.Count - 1 downto 0 do
         begin
           if I < JSONArray.Count - 1 then
-            Result := Result + ',';
-          Result := Result + JSONArray.Items[I].ToString;
+            OutputStr := OutputStr + ',';
+          OutputStr := OutputStr + JSONArray.Items[I].ToString;
         end;
-        Result := Result + ']';
+        OutputStr := OutputStr + ']';
       end
-      else
-        Result := Input.ToString;
+       else
+        OutputStr := Input.ToString;
+
+      Result := TValue.From<String>(OutputStr);
     end);
 
   FFilters.Add('round',
-  function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
+  function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): TValue
   var
     Val: Double;
     Decimals: Integer;
@@ -4377,21 +4342,21 @@ begin
   end);
 
   FFilters.Add('shuffle',
-    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): TValue
     begin
       // Stub: shuffle not implemented
       Result := Input.ToString;
     end);
 
   FFilters.Add('singular',
-    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): TValue
     begin
       // Stub: singularization not implemented
       Result := Input.ToString;
     end);
 
   FFilters.Add('slice',
-    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): TValue
     var
       StartIdx, Count, LenInput: Integer;
       Arr: TArray<TValue>;
@@ -4474,7 +4439,7 @@ begin
     end);
 
   FFilters.Add('slug',
-    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): TValue
     var
       I: Integer;
       S: String;
@@ -4492,14 +4457,14 @@ begin
     end);
 
   FFilters.Add('sort',
-    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): TValue
     begin
       // Stub: sorting not implemented
       Result := Input.ToString;
     end);
 
   FFilters.Add('spaceless',
-    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): TValue
     begin
       if Input.Kind in [tkString, tkUString] then
         Result := StringReplace(Input.AsString, ' ', '', [rfReplaceAll])
@@ -4508,7 +4473,7 @@ begin
     end);
 
   FFilters.Add('split',
-    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): TValue
     var
       Delim: String;
       Parts: TArray<String>;
@@ -4536,7 +4501,7 @@ begin
     end);
 
   FFilters.Add('striptags',
-    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): TValue
     var
       Regex: TRegEx;
     begin
@@ -4550,14 +4515,14 @@ begin
     end);
 
   FFilters.Add('timezone_name',
-    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): TValue
     begin
       // Stub: timezone name lookup not implemented
       Result := Input.ToString;
     end);
 
   FFilters.Add('title',
-    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): TValue
     var
       I: Integer;
       Words: TArray<String>;
@@ -4575,7 +4540,7 @@ begin
     end);
 
   FFilters.Add('trim',
-    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): TValue
     begin
       if Input.Kind in [tkString, tkUString] then
         Result := Trim(Input.AsString)
@@ -4584,14 +4549,14 @@ begin
     end);
 
   FFilters.Add('u',
-    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): TValue
     begin
       // Twig u filter is Unicode string conversion
       Result := Input.ToString;
     end);
 
   FFilters.Add('upper',
-    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): TValue
     begin
       if Input.Kind in [tkString, tkUString] then
         Result := UpperCase(Input.AsString)
@@ -4600,7 +4565,7 @@ begin
     end);
 
   FFilters.Add('url_encode',
-    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): String
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): TValue
     begin
       if Input.Kind in [tkString, tkUString] then
         Result := TNetEncoding.URL.Encode(Input.AsString)
@@ -4739,8 +4704,8 @@ end;
 /// Processes the template sequentially, handling tags in order.
 /// </summary>
 /// <param name="Template">The template string to process.</param>
-/// <param name="Context">The context dictionary.</param>
-/// <returns>The rendered output.</returns>
+/// <param name="LocalContext">The context dictionary.</param>
+/// <param name="Result">The rendered output.</param>
 /// <remarks>
 /// Handles set, if/elseif/else, for, include, with, macro blocks sequentially.
 /// Updates context for sets and evaluates variables at the time of encounter.
@@ -4748,10 +4713,12 @@ end;
 /// Supports 'only' option in with blocks and nested structures.
 /// Handles TJSONArray for JSON array iteration in for loops.
 /// Recurses for nested structures.
-/// Updated to support array appending with set var[] = value syntax, fixing variable naming and adding type conversion for integers.
-/// Fixed context persistence for scalar variables in for loops to ensure updates (e.g., some_var = some_var + 1) persist across iterations by updating LocalContext before each iteration.
+/// Supports array appending with set var[] = value syntax, with type conversion for integers.
+/// Supports dictionary merging for set assignments, handling outputs from merge filter.
+/// Fixed context persistence for scalar variables in for loops to ensure updates persist across iterations.
+/// Updated to suppress output of complex types in {{ }} tags, aligning with Twig behavior.
 /// </remarks>
-function TTina4Twig.ProcessTemplate(const Template: String; var Context: TDictionary<String, TValue>): String;
+procedure TTina4Twig.ProcessTemplate(const Template: String; var LocalContext: TDictionary<String, TValue>; var Result: String);
 type
   TBranch = record
     Condition: String;
@@ -4761,7 +4728,6 @@ var
   SB: TStringBuilder;
   CurrentPos, EndPos, TagStart: Integer;
   Tag, Current: String;
-  LocalContext: TDictionary<String, TValue>;
   IfDepth, ForDepth, WithDepth, MacroDepth: Integer;
   BodyStart: Integer;
   Body: String;
@@ -4783,7 +4749,6 @@ var
   ParamParts: TArray<String>;
   UseOnly: Boolean;
 begin
-  LocalContext := TDictionary<String, TValue>.Create(Context);
   try
     SB := TStringBuilder.Create;
     try
@@ -4825,7 +4790,11 @@ begin
           end
           else
           begin
-            Current := EvaluateExpression(Tag, LocalContext).ToString;
+            var ExprVal := EvaluateExpression(Tag, LocalContext);
+            if ExprVal.IsEmpty or (ExprVal.Kind in [tkDynArray, tkArray, tkClass, tkRecord]) then
+              Current := ''
+            else
+              Current := ExprVal.ToString;
             SB.Append(Current);
           end;
           CurrentPos := EndPos + 2;
@@ -4840,26 +4809,26 @@ begin
             raise Exception.Create('Unclosed {%');
           Tag := Trim(Copy(Template, CurrentPos, EndPos - CurrentPos));
           CurrentPos := EndPos + 2;
-
           if Tag.StartsWith('set ') then
           begin
             if FDebug then
-               WriteLn('Debug: Set: Tag passed is = ', Tag);
+              WriteLn('Debug: Set: Tag passed is = ', Tag);
             var SetStr := Trim(Copy(Tag, 4, MaxInt));
             var EqPos := FindTopLevelPos(SetStr, '=');
             if EqPos <= 0 then
               raise Exception.Create('Invalid set: ' + Tag);
             var VarName := Trim(Copy(SetStr, 1, EqPos - 1));
             var Expr := Trim(Copy(SetStr, EqPos + 1, MaxInt));
+            var Val := EvaluateExpression(Expr, LocalContext);
+
             if VarName.EndsWith('[]') then
             begin
               VarName := Trim(Copy(VarName, 1, Length(VarName) - 2));
               if VarName.IsEmpty then
                 raise Exception.Create('Invalid array variable name in set: ' + Tag);
-              var Val := EvaluateExpression(Expr, LocalContext);
               if FDebug then
                 WriteLn('Debug: VarName = ' + VarName + ' Val = ' + Val.ToString);
-              // Ensure Val is converted to appropriate type (e.g., integer for range values)
+              // Convert string to integer if possible
               if Val.Kind in [tkString, tkUString] then
               begin
                 var IntVal: Int64;
@@ -4867,6 +4836,7 @@ begin
                   Val := TValue.From<Int64>(IntVal);
               end;
               var ExistingVal: TValue;
+
               if LocalContext.TryGetValue(VarName, ExistingVal) then
               begin
                 if ExistingVal.IsType<TArray<TValue>> then
@@ -4909,12 +4879,38 @@ begin
                 WriteLn('Debug: Set array ' + VarName + ' = [' + String.Join(',', ArrStr) + ']');
               end;
             end
+            else if Val.IsType<TDictionary<String, TValue>> then
+            begin
+              var NewDict := Val.AsType<TDictionary<String, TValue>>;
+              var ExistingVal: TValue;
+              if LocalContext.TryGetValue(VarName, ExistingVal) and ExistingVal.IsType<TDictionary<String, TValue>> then
+              begin
+                var ExistingDict := ExistingVal.AsType<TDictionary<String, TValue>>;
+                for var Pair in NewDict do
+                  ExistingDict.AddOrSetValue(Pair.Key, Pair.Value);
+                LocalContext.AddOrSetValue(VarName, TValue.From<TDictionary<String, TValue>>(ExistingDict));
+                if FDebug then
+                  WriteLn('Debug: Merged dictionary into ' + VarName + ' with ' + IntToStr(NewDict.Count) + ' entries');
+              end
+              else
+              begin
+                LocalContext.AddOrSetValue(VarName, Val);
+                if FDebug then
+                  WriteLn('Debug: Set new dictionary ' + VarName + ' with ' + IntToStr(NewDict.Count) + ' entries');
+              end;
+            end
+            else if Val.IsType<TJSONArray> then
+            begin
+              var JsonArr := Val.AsType<TJSONArray>;
+              SetLength(Arr, JsonArr.Count);
+              for var I := 0 to JsonArr.Count - 1 do
+                Arr[I] := TValue.FromVariant(JsonArr.Items[I].Value);
+              LocalContext.AddOrSetValue(VarName, TValue.From<TArray<TValue>>(Arr));
+              if FDebug then
+                WriteLn('Debug: Set array from JSONArray ' + VarName + ' with length ' + IntToStr(Length(Arr)));
+            end
             else
             begin
-              if FDebug then
-                WriteLn('Debug: Evaluating set expression: ' + Expr);
-              var Val := EvaluateExpression(Expr, LocalContext);
-              // Explicitly handle empty array initialization
               if Expr.Trim = '[]' then
               begin
                 Val := TValue.From<TArray<TValue>>([]);
@@ -4996,14 +4992,18 @@ begin
                 if Done then Break;
                 if Branch.Condition = '' then
                 begin
-                  SB.Append(ProcessTemplate(Branch.Body, LocalContext));
+                  var ABody := '';
+                  ProcessTemplate(Branch.Body, LocalContext, ABody);
+                  SB.Append(ABody);
                   Done := True;
                 end
                 else
                 begin
                   if ToBool(EvaluateExpression(Branch.Condition, LocalContext)) then
                   begin
-                    SB.Append(ProcessTemplate(Branch.Body, LocalContext));
+                    var ABody := '';
+                    ProcessTemplate(Branch.Body, LocalContext, ABody);
+                    SB.Append(ABody);
                     Done := True;
                   end;
                 end;
@@ -5084,18 +5084,12 @@ begin
                       HasItems := True;
                     for Item in Arr do
                     begin
-                      LoopContext := TDictionary<String, TValue>.Create;
+                      LoopContext := TDictionary<String, TValue>.Create(LocalContext);
                       try
-                        // Copy all current LocalContext values to LoopContext
-                        for var Pair in LocalContext do
-                          LoopContext.AddOrSetValue(Pair.Key, Pair.Value);
-
                         // Set the loop variable
                         LoopContext.AddOrSetValue(LoopVar, Item);
-
                         if FDebug then
-                          WriteLn('Debug: Loop var ', LoopVar, ' = ', Item.ToString, ' ==== ',  LoopCondition);
-
+                          WriteLn('Debug: Loop var ', LoopVar, ' = ', Item.ToString, ' ==== ', LoopCondition);
                         if (LoopCondition = '') or ToBool(EvaluateExpression(LoopCondition, LoopContext)) then
                         begin
                           var ForBody: String;
@@ -5103,27 +5097,21 @@ begin
                             ForBody := Copy(Template, BodyStart, ElsePos - BodyStart - Length('{% else %}'))
                           else
                             ForBody := Copy(Template, BodyStart, TagStart - BodyStart);
-
                           if FDebug then
-                              WriteLn('Debug: Loop Body ', ForBody, LoopContext.ToString);
-
-                          var BodyResult := ProcessTemplate(ForBody, LoopContext);
-
-                          if BodyResult <> '' then
-                              SB.Append(BodyResult);
-
-                          if FDebug then
-                            WriteLn('Debug: For body result = ', BodyResult);
-                          // Update LocalContext with all changes from LoopContext to persist changes across iterations
-                        end;
-
-                        for var Pair in LoopContext do
-                        begin
+                            WriteLn('Debug: Loop Body ', ForBody, LoopContext.ToString);
+                          var BodyResult := '';
+                          ProcessTemplate(ForBody, LoopContext, BodyResult);
+                          for var Pair in LoopContext do
+                          begin
                             if FDebug then
                               WriteLn('Reading: ', Pair.Key, ' = ', Pair.Value.ToString);
                             LocalContext.AddOrSetValue(Pair.Key, Pair.Value);
+                          end;
+                          if BodyResult <> '' then
+                            SB.Append(BodyResult);
+                          if FDebug then
+                            WriteLn('Debug: For body result = ', BodyResult);
                         end;
-
                       finally
                         LoopContext.Free;
                       end;
@@ -5151,12 +5139,12 @@ begin
                             ForBody := Copy(Template, BodyStart, ElsePos - BodyStart - Length('{% else %}'))
                           else
                             ForBody := Copy(Template, BodyStart, TagStart - BodyStart);
-                          var BodyResult := ProcessTemplate(ForBody, LoopContext);
+                          var BodyResult := '';
+                          ProcessTemplate(ForBody, LoopContext, BodyResult);
                           SB.Append(BodyResult);
                           if FDebug then
                             WriteLn('Debug: For body result = ', BodyResult);
                           // Update LocalContext with all changes from LoopContext to persist changes across iterations
-                          LocalContext.Clear;
                           for var Pair2 in LoopContext do
                             LocalContext.AddOrSetValue(Pair2.Key, Pair2.Value);
                         end;
@@ -5190,12 +5178,12 @@ begin
                             ForBody := Copy(Template, BodyStart, ElsePos - BodyStart - Length('{% else %}'))
                           else
                             ForBody := Copy(Template, BodyStart, TagStart - BodyStart);
-                          var BodyResult := ProcessTemplate(ForBody, LoopContext);
+                          var BodyResult := '';
+                          ProcessTemplate(ForBody, LoopContext, BodyResult);
                           SB.Append(BodyResult);
                           if FDebug then
                             WriteLn('Debug: For body result = ', BodyResult);
                           // Update LocalContext with all changes from LoopContext to persist changes across iterations
-                          LocalContext.Clear;
                           for var Pair in LoopContext do
                             LocalContext.AddOrSetValue(Pair.Key, Pair.Value);
                         end;
@@ -5207,7 +5195,8 @@ begin
                   if not HasItems and HasElse then
                   begin
                     Body := Copy(Template, ElsePos, TagStart - ElsePos);
-                    var ElseBody := ProcessTemplate(Body, LocalContext);
+                    var ElseBody := '';
+                    ProcessTemplate(Body, LocalContext, ElseBody);
                     SB.Append(ElseBody);
                     if FDebug then
                       WriteLn('Debug: For else body result = ', ElseBody);
@@ -5288,7 +5277,8 @@ begin
                       end;
                     end;
                     Body := Copy(Template, BodyStart, TagStart - BodyStart);
-                    var BodyResult := ProcessTemplate(Body, LoopContext);
+                    var BodyResult := '';
+                    ProcessTemplate(Body, LoopContext, BodyResult);
                     SB.Append(BodyResult);
                     // Update LocalContext with all changes from LoopContext
                     for var Pair in LoopContext do
@@ -5385,7 +5375,7 @@ begin
                             else
                               LocalMacroContext.AddOrSetValue(FMacroParams[MName][I], TValue.Empty);
                           end;
-                          Result := ProcessTemplate(FMacroBodies[MName], LocalMacroContext);
+                          ProcessTemplate(FMacroBodies[MName], LocalMacroContext, Result);
                         finally
                           LocalMacroContext.Free;
                         end;
@@ -5429,7 +5419,7 @@ begin
       SB.Free;
     end;
   finally
-    LocalContext.Free;
+    //LocalContext.Free;
   end;
 end;
 
@@ -5444,7 +5434,7 @@ end;
 /// Processes comments, macros, extends, and delegates to ProcessTemplate.
 /// Loads file if name provided, else treats as content.
 /// </remarks>
-function TTina4Twig.RenderInternal(const TemplateOrContent: String; Context: TStringDict): String;
+function TTina4Twig.RenderInternal(const TemplateOrContent: String; var Context: TStringDict): String;
 var
   TemplateText, FullPath: String;
 begin
@@ -5453,10 +5443,13 @@ begin
     TemplateText := LoadTemplate(TemplateOrContent)
   else
     TemplateText := TemplateOrContent;
+
   TemplateText := RemoveComments(TemplateText);
   TemplateText := EvaluateMacroBlocks(TemplateText, Context);
+  TemplateText := EvaluateIncludes(TemplateText, Context);
   TemplateText := EvaluateExtends(TemplateText, Context);
-  Result := StringReplace(ProcessTemplate(TemplateText, Context), #$D#$A, '', []);
+  ProcessTemplate(TemplateText, Context, Result);
+  Result := StringReplace(Result, #$D#$A, '', []);
 end;
 
 procedure TTina4Twig.SetDateFormat(FormatDate, FormatDays: String);

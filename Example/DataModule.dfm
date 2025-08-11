@@ -149,7 +149,6 @@ object frmDataModule: TfrmDataModule
   object Tina4RESTRequest1: TTina4RESTRequest
     SyncMode = Clear
     RequestType = Get
-    StatusCode = 0
     SourceIgnoreBlanks = False
     Tina4REST = Tina4REST1
     Left = 408

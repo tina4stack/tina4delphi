@@ -313,7 +313,6 @@
             <Form>Form2</Form>
             <FormType>fmx</FormType>
         </DCCReference>
-        <DCCReference Include="TwigParser.pas"/>
         <BuildConfiguration Include="Base">
             <Key>Base</Key>
         </BuildConfiguration>

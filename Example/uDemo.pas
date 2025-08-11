@@ -6,7 +6,7 @@ uses
   System.SysUtils, System.Types, System.UITypes, System.Classes, System.Variants,
   FMX.Types, FMX.Controls, FMX.Forms, FMX.Graphics, FMX.Dialogs, Tina4Twig,
   FMX.Layouts, fmx.fhtmlcomp, FMX.Controls.Presentation, FMX.StdCtrls,
-  FMX.Memo.Types, FMX.ScrollBox, FMX.Memo, TwigParser;
+  FMX.Memo.Types, FMX.ScrollBox, FMX.Memo;
 
 type
   TForm2 = class(TForm)

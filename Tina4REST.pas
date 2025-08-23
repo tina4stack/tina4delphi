@@ -194,6 +194,10 @@ begin
     if (StatusCode = 200) then
     begin
       Result := StrToJSONObject(JSONString);
+      if Result = nil then
+      begin
+        Result := StrToJSONObject('{"result":"'+JSONString+'"}');
+      end;
     end
       else
     begin

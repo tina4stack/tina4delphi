@@ -2544,29 +2544,32 @@ begin
 
     // Collect blocks from base template
     BaseBlocks := TDictionary<String, String>.Create;
-    BlockMatch := BlockRegex.Match(BaseTemplate);
-    while BlockMatch.Success do
-    begin
-      BlockName := BlockMatch.Groups[1].Value;
-      BlockContent := BlockMatch.Groups[2].Value.Trim;
-      BaseBlocks.AddOrSetValue(BlockName, BlockContent);
-      BlockMatch := BlockMatch.NextMatch;
-    end;
+    try
+      BlockMatch := BlockRegex.Match(BaseTemplate);
+      while BlockMatch.Success do
+      begin
+        BlockName := BlockMatch.Groups[1].Value;
+        BlockContent := BlockMatch.Groups[2].Value.Trim;
+        BaseBlocks.AddOrSetValue(BlockName, BlockContent);
+        BlockMatch := BlockMatch.NextMatch;
+      end;
 
-    // Replace blocks in base template with child's block content if available, otherwise use base default
-    for BlockName in BaseBlocks.Keys do
-    begin
-      if ChildBlocks.ContainsKey(BlockName) then
-        BlockContent := ChildBlocks[BlockName]
-      else
-        BlockContent := BaseBlocks[BlockName];
-      BaseTemplate := ReplaceBlockInTemplate(BaseTemplate, BlockName, BlockContent);
-    end;
+      // Replace blocks in base template with child's block content if available, otherwise use base default
+      for BlockName in BaseBlocks.Keys do
+      begin
+        if ChildBlocks.ContainsKey(BlockName) then
+          BlockContent := ChildBlocks[BlockName]
+        else
+          BlockContent := BaseBlocks[BlockName];
+        BaseTemplate := ReplaceBlockInTemplate(BaseTemplate, BlockName, BlockContent);
+      end;
 
-    Result := BaseTemplate;
+      Result := BaseTemplate;
+    finally
+      BaseBlocks.Free;
+    end;
   finally
     ChildBlocks.Free;
-    BaseBlocks.Free;
   end;
 end;
 
@@ -2787,6 +2790,13 @@ begin
 
         if UpperCase(fmt) <> 'U' then
           fmt := ResolveVariablePath(fmt, Context).ToString;
+
+        if fmt = '(empty)' then
+        begin
+          fmt := Args[0];
+          if fmt.StartsWith('''') or fmt.StartsWith('"') then
+            fmt := Copy(fmt, 2, Length(fmt) - 2); // Remove quotes
+        end;
       end
       else
         fmt := FDateFormat;

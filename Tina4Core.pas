@@ -8,6 +8,7 @@ uses JSON, System.SysUtils, FireDAC.DApt, FireDAC.Stan.Intf, System.RegularExpre
   FireDAC.Phys, FireDAC.ConsoleUI.Wait, FireDAC.Comp.DataSet,
   Data.DB, FireDAC.Comp.Client, FireDAC.Stan.Param, System.NetEncoding, System.DateUtils,
   System.Classes, System.Generics.Collections, System.Net.HttpClientComponent, System.Net.URLClient, System.Net.HttpClient,
+  System.Variants,
   {$IFNDEF LINUX}
   FMX.Graphics,
   {$ENDIF}
@@ -51,6 +52,7 @@ type
 
 
   function GetGUID : String;
+  function IsDate(const AValue: Variant): Boolean;
   function CamelCase(FieldName: String): String;
   function SnakeCase(FieldName: String): String;
   function DecodeBase64(const Base64String: String): String;
@@ -71,8 +73,8 @@ type
   function GetJSONFieldName(FieldName: String) : String;
   function GetJSONDate(const ADate: TDateTime) : String;
   function JSONDateToDateTime(const ADateString: String) : TDateTime;
-  procedure GetFieldDefsFromJSONObject(JSONObject: TJSONObject; var MemTable: TFDMemTable);
-  procedure PopulateMemTableFromJSON(var MemTable: TFDMemTable; DataKey: String; JSON: String; IndexedFieldNames: String = ''; SyncMode: TTina4RestSyncMode = Clear; Component: TComponent = nil);
+  procedure GetFieldDefsFromJSONObject(JSONObject: TJSONObject; var MemTable: TFDMemTable; TransformToSnakeCase: Boolean);
+  procedure PopulateMemTableFromJSON(var MemTable: TFDMemTable; DataKey: String; JSON: String; IndexedFieldNames: String = ''; SyncMode: TTina4RestSyncMode = Clear; Component: TComponent = nil; TransformFieldNamesToSnakeCase: Boolean = False);
   function PopulateTableFromJSON(Connection: TFDConnection; TableName:String; JSON:String; DataKey: String = 'response'; PrimaryKey:String = 'id') : TJSONObject;
   {$IFDEF MSWINDOWS}
   function ExecuteShellCommand(const ACmdLine: string; var AOutput: string): Integer;
@@ -84,6 +86,77 @@ implementation
 
 uses Tina4RESTRequest;
 
+
+function IsDate(const AValue: Variant): Boolean;
+const
+  ISO8601Format = 'yyyy-mm-dd"T"hh:nn:ss'; // Base ISO8601 without milliseconds
+  ISO8601FormatMs = 'yyyy-mm-dd"T"hh:nn:ss.zzz'; // ISO8601 with milliseconds
+  NormalFormat = 'yyyy-mm-dd hh:nn:ss'; // YYYY-MM-DD HH:MM:SS
+  ShortDateFormat = 'yyyy-mm-dd'; // YYYY-MM-DD
+  USDateFormat = 'mm/dd/yyyy'; // MM/DD/YYYY
+var
+  DateValue: TDateTime;
+  InputStr: string;
+begin
+
+  Result := False;
+  try
+  // Handle non-string values (e.g., TDateTime)
+  if VarIsType(AValue, varDate) then
+  begin
+    Result := True;
+    Exit;
+  end;
+
+  if (VarIsType(AValue, varInteger) or VarIsType(AValue, varSingle) or VarIsType(AValue, varDouble) or VarIsType(AValue, varCurrency)) then
+  begin
+    Exit;
+  end;
+
+  // Convert input to string for parsing
+  InputStr := VarToStr(AValue);
+
+  // Check if empty or null
+  if (InputStr = '') or (Length(InputStr) < 6)  then
+  begin
+    Exit;
+  end;
+
+  // Try parsing as ISO8601 (with or without milliseconds)
+  if TryISO8601ToDate(InputStr, DateValue) then
+  begin
+    Result := True;
+    Exit;
+  end;
+
+  // Try parsing as YYYY-MM-DD HH:MM:SS
+  FormatSettings.LongDateFormat := 'YYYY-MM-DD HH:MM:SS';
+  if TryStrToDateTime(InputStr, DateValue) then
+  begin
+    Result := True;
+    Exit;
+  end;
+
+  // Try parsing as YYYY-MM-DD
+  FormatSettings.ShortDateFormat := 'YYYY-MM-DD';
+  if TryStrToDate(InputStr, DateValue) then
+  begin
+    Result := True;
+    Exit;
+  end;
+
+  // Try parsing as MM/DD/YYYY
+  FormatSettings.ShortDateFormat := 'MM/DD/YYYY';
+  if TryStrToDate(InputStr, DateValue) then
+  begin
+    Result := True;
+    Exit;
+  end;
+
+  except
+    Result := False;
+  end;
+end;
 
 /// <summary> Gets a GUID
 /// </summary>
@@ -267,8 +340,7 @@ end;
 /// <returns>
 /// JSON Object with an Array of records
 /// </returns>
-function GetJSONFromDB(Connection: TFDConnection; SQL: String;
-   Params: TFDParams = nil; DataSetName: String = 'records'): TJSONObject;
+function GetJSONFromDB(Connection: TFDConnection; SQL: String; Params: TFDParams = nil; DataSetName: String = 'records'): TJSONObject;
 var
   Query: TFDQuery;
   DataRecord: TJSONObject;
@@ -930,7 +1002,7 @@ end;
 /// <returns>
 /// A TFieldDefs object or nil if it fails
 /// </returns>
-procedure GetFieldDefsFromJSONObject(JSONObject: TJSONObject; var MemTable: TFDMemTable);
+procedure GetFieldDefsFromJSONObject(JSONObject: TJSONObject; var MemTable: TFDMemTable; TransformToSnakeCase: Boolean);
 begin
   if (MemTable.FieldDefs.Count > 0) then Exit;
 
@@ -938,6 +1010,11 @@ begin
     for var Index : Integer := 0 to JSONObject.Count-1 do
     begin
       var FieldName: String := JSONObject.Pairs[Index].JsonString.Value;
+
+      if TransformToSnakeCase then
+      begin
+        FieldName := SnakeCase(FieldName);
+      end;
 
       try
         if MemTable.FieldDefs.IndexOf(FieldName) = -1 then
@@ -981,7 +1058,7 @@ end;
 /// <remarks>
 /// Populates a Mem Table from a JSON object using the data from the DataKey
 /// </remarks>
-procedure PopulateMemTableFromJSON(var MemTable: TFDMemTable; DataKey: String; JSON: String; IndexedFieldNames: String = ''; SyncMode: TTina4RestSyncMode = Clear; Component: TComponent = nil);
+procedure PopulateMemTableFromJSON(var MemTable: TFDMemTable; DataKey: String; JSON: String; IndexedFieldNames: String = ''; SyncMode: TTina4RestSyncMode = Clear; Component: TComponent = nil; TransformFieldNamesToSnakeCase: Boolean = False );
 var
   Response : TJSONObject;
   Initialized: Boolean;
@@ -1009,7 +1086,7 @@ begin
 
         if MemTable.Fields.Count = 0 then
         begin
-          GetFieldDefsFromJSONObject(TJSONObject(JSONInfo), TFDMemTable(MemTable));
+          GetFieldDefsFromJSONObject(TJSONObject(JSONInfo), TFDMemTable(MemTable), TransformFieldNamesToSnakeCase);
           MemTable.CreateDataSet;
         end;
       end;
@@ -1090,34 +1167,45 @@ begin
           PairValue := JSONRecord.Pairs[Index].JsonValue.Value;
         end;
 
-        var KeyIndex := MemTable.FieldDefs.IndexOf(JSONRecord.Pairs[Index].JsonString.Value);
+        var FieldName : String := JSONRecord.Pairs[Index].JsonString.Value;
+
+        if TransformFieldNamesToSnakeCase then
+        begin
+          FieldName := SnakeCase(FieldName);
+        end;
+
+        var KeyIndex := MemTable.FieldDefs.IndexOf(FieldName);
 
         if KeyIndex >= 0 then
         begin
-          if MemTable.FieldDefs[KeyIndex].DataType = TFieldType.ftDateTime then
+          if (MemTable.FieldDefs[KeyIndex].DataType = TFieldType.ftDateTime) or IsDate(PairValue) then
           begin
             if (PairValue <> '') then
             begin
-              MemTable.FieldByName(JSONRecord.Pairs[Index].JsonString.Value).AsDateTime := JSONDateToDateTime(PairValue);
+              try
+                MemTable.FieldByName(FieldName).AsDateTime := JSONDateToDateTime(PairValue);
+              except
+                MemTable.FieldByName(FieldName).AsString := PairValue;
+              end;
             end
               else
             begin
-              MemTable.FieldByName(JSONRecord.Pairs[Index].JsonString.Value).AsString := '';
+              MemTable.FieldByName(FieldName).AsString := '';
             end;
           end
             else
           if MemTable.FieldDefs[KeyIndex].DataType = TFieldType.ftString then
           begin
-            MemTable.FieldByName(JSONRecord.Pairs[Index].JsonString.Value).AsString := PairValue;
+            MemTable.FieldByName(FieldName).AsString := PairValue;
           end
             else
           if MemTable.FieldDefs[KeyIndex].DataType = TFieldType.ftBlob then
           begin
-            MemTable.FieldByName(JSONRecord.Pairs[Index].JsonString.Value).AsBytes := TNetEncoding.Base64.DecodeStringToBytes(PairValue);
+            MemTable.FieldByName(FieldName).AsBytes := TNetEncoding.Base64.DecodeStringToBytes(PairValue);
           end
             else
           begin
-            MemTable.FieldByName(JSONRecord.Pairs[Index].JsonString.Value).AsString := PairValue;
+            MemTable.FieldByName(FieldName).AsString := PairValue;
           end;
         end;
       end;

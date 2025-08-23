@@ -31,6 +31,7 @@ type
     FSyncMode: TTina4RestSyncMode;
     FIndexFieldNames: String;
     FStatusCode: Integer;
+    FTransformResultToSnakeCase: Boolean;
     procedure SetMasterSource(const Source: TTina4RESTRequest);
     procedure SetResponseBody(List: TStringList);
     procedure SetRequestBody(List: TStringList);
@@ -44,6 +45,7 @@ type
     destructor Destroy; override;
   published
     { Published declarations }
+    property TransformResultToSnakeCase: Boolean read FTransformResultToSnakeCase write FTransformResultToSnakeCase;
     property SyncMode: TTina4RestSyncMode read FSyncMode write FSyncMode;
     property IndexFieldNames: String read FIndexFieldNames write FIndexFieldNames;
     property RequestType: TTina4RequestType read FRequestType write FRequestType;
@@ -183,7 +185,7 @@ begin
       FResponseBody.Text := Response.ToString;
       if FMemTable <> nil then
       begin
-        PopulateMemTableFromJSON(FMemTable, DataKey, Self.FResponseBody.Text, Self.FIndexFieldNames, SyncMode, Self);
+        PopulateMemTableFromJSON(FMemTable, DataKey, Self.FResponseBody.Text, Self.FIndexFieldNames, SyncMode, Self, Self.FTransformResultToSnakeCase);
       end
         else
       if (Assigned(Self.FOnExecuteDone)) then

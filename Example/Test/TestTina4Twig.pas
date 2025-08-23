@@ -21,6 +21,7 @@ type
     // TestSetVariable
     procedure TestSetVariablePeopleArray;
     procedure TestSetVariableSimpleName;
+    procedure TestSetVariableSimpleNameInline;
     procedure TestSetVariableDateFunction;
     procedure TestSetVariableDateFormat;
     procedure TestSetVariableArrayWithMerge;
@@ -246,6 +247,15 @@ begin
   Check(ReturnValue = 'Andre', TemplateOrContent + ' - Should be Andre, got ' + ReturnValue);
 end;
 
+procedure TestTTina4Twig.TestSetVariableSimpleNameInline;
+var
+  ReturnValue, TemplateOrContent: string;
+begin
+  TemplateOrContent := '{% set name = "Cris" %}{{name}}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = 'Cris', TemplateOrContent + ' - Should be Cris, got ' + ReturnValue);
+end;
+
 procedure TestTTina4Twig.TestSetVariableDateFunction;
 var
   ReturnValue, TemplateOrContent: string;
@@ -279,9 +289,9 @@ procedure TestTTina4Twig.TestSetVariableDateFormat;
 var
   ReturnValue, TemplateOrContent: string;
 begin
-  TemplateOrContent := '{% set date_format = ''yyyy-mm-dd'' %}{% set current_date = "now" | date(date_format) %}{% set current_date = current_date | date_modify(''+1 day'') %}{{current_date}}';
+  TemplateOrContent := '{% set date_format = '''+FormatSettings.ShortDateFormat+''' %}{% set current_date = "now" | date(date_format) %}{% set current_date = current_date | date_modify(''+1 day'') %}{{current_date}}';
   ReturnValue := FTina4Twig.Render(TemplateOrContent);
-  Check(ReturnValue = '2025-08-12', TemplateOrContent + ' - Should be 2025-08-12, got ' + ReturnValue);
+  Check(ReturnValue = DateToStr(Now), TemplateOrContent + ' - Should be '+DateToStr(Now)+', got ' + ReturnValue);
 end;
 
 // TestTags

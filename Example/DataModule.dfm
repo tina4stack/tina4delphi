@@ -148,6 +148,8 @@ object frmDataModule: TfrmDataModule
     Top = 360
   end
   object Tina4RESTRequest1: TTina4RESTRequest
+    TransformResultToSnakeCase = False
+    FreeOnAsyncExecute = False
     SyncMode = Clear
     RequestType = Get
     StatusCode = 0

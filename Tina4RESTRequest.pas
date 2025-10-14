@@ -3,8 +3,7 @@ unit Tina4RESTRequest;
 interface
 
 uses
-  System.SysUtils, System.Variants, System.Generics.Collections, System.Classes, Data.DB, FireDAC.Comp.DataSet,
-  FireDAC.Comp.Client, Tina4Core, Tina4REST, JSON, System.RegularExpressions
+  System.SysUtils, System.Classes, System.RegularExpressions, JSON, Tina4Core, System.Net.URLClient, System.StrUtils,FireDAC.Comp.Client, Tina4REST
   {$IFDEF MSWINDOWS}
   ,FMX.Dialogs
   {$ENDIF}
@@ -32,9 +31,11 @@ type
     FIndexFieldNames: String;
     FStatusCode: Integer;
     FTransformResultToSnakeCase: Boolean;
+    FFreeOnAsyncExecute: Boolean;
     procedure SetMasterSource(const Source: TTina4RESTRequest);
     procedure SetResponseBody(List: TStringList);
     procedure SetRequestBody(List: TStringList);
+
   protected
     { Protected declarations }
   public
@@ -46,6 +47,7 @@ type
   published
     { Published declarations }
     property TransformResultToSnakeCase: Boolean read FTransformResultToSnakeCase write FTransformResultToSnakeCase;
+    property FreeOnAsyncExecute: Boolean read FFreeOnAsyncExecute write FFreeOnAsyncExecute;
     property SyncMode: TTina4RestSyncMode read FSyncMode write FSyncMode;
     property IndexFieldNames: String read FIndexFieldNames write FIndexFieldNames;
     property RequestType: TTina4RequestType read FRequestType write FRequestType;
@@ -65,9 +67,46 @@ type
     property OnExecuteDone: TTina4Event read FOnExecuteDone write FOnExecuteDone;
   end;
 
+function SubmitJSONObjectToEndPoint(const Tina4REST: TTina4REST; EndPoint: String; JSONObject: TJSONObject): String; overload;
+function SubmitJSONObjectToEndPoint(const Tina4REST: TTina4REST; EndPoint: String; JSONObject: TJSONObject; OnExecuteDone: TTina4Event): String; overload;
+
 procedure Register;
 
 implementation
+
+function SubmitJSONObjectToEndPoint(const Tina4REST: TTina4REST; EndPoint: String; JSONObject: TJSONObject): String; overload;
+begin
+  var RestRequest: TTina4RESTRequest := TTina4RESTRequest.Create(nil);
+  try
+    RestRequest.Tina4REST := Tina4REST;
+    RestRequest.RequestBody.Text := JSONObject.ToJSON;
+    RestRequest.RequestType := TTina4RequestType.Post;
+    RestRequest.EndPoint := EndPoint;
+    RestRequest.ExecuteRESTCall;
+
+    Result := RestRequest.ResponseBody.Text;
+  finally
+    RestRequest.Free;
+  end;
+end;
+
+function SubmitJSONObjectToEndPoint(const Tina4REST: TTina4REST; EndPoint: String; JSONObject: TJSONObject; OnExecuteDone: TTina4Event): String; overload;
+begin
+  var RestRequest: TTina4RESTRequest := TTina4RESTRequest.Create(nil);
+  try
+    RestRequest.Tina4REST := Tina4REST;
+    RestRequest.RequestBody.Text := JSONObject.ToJSON;
+    RestRequest.RequestType := TTina4RequestType.Post;
+    RestRequest.EndPoint := EndPoint;
+    RestRequest.FreeOnAsyncExecute := True;
+    RestRequest.ExecuteRESTCallAsync;
+
+    RestRequest.OnExecuteDone := OnExecuteDone;
+  finally
+    RestRequest.Free;
+  end;
+end;
+
 
 procedure Register;
 begin
@@ -78,7 +117,7 @@ end;
 
 constructor TTina4RESTRequest.Create(AOwner: TComponent);
 begin
-  inherited Create(AOwner);
+  inherited;
   FResponseBody := TStringList.Create;
   FRequestBody := TStringList.Create;
 end;
@@ -93,8 +132,6 @@ end;
 procedure TTina4RESTRequest.ExecuteRESTCall;
 var
   Response: TJSONObject;
-  StatusCode: Integer;
-
 
 procedure InjectMasterSourceParams(const MasterSource: TTina4RestRequest; var EndPoint:String; var RequestBody: String; var QueryParams: String);
 var RegEx: TRegEx;
@@ -119,6 +156,8 @@ begin
   if Assigned(Self.FTina4REST) then
   begin
     FResponseBody.Clear;
+
+
     Response := nil;
 
     var EndPoint : String := Self.EndPoint;
@@ -212,11 +251,16 @@ begin
   procedure
   begin
     Self.ExecuteRESTCall;
+    if Self.FreeOnAsyncExecute then
+    begin
+      Self.Free;
+    end;
   end
   );
   Thread.FreeOnTerminate := True;
   Thread.Start;
 end;
+
 
 procedure TTina4RESTRequest.SetMasterSource(const Source: TTina4RESTRequest);
 begin

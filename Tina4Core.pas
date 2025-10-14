@@ -12,6 +12,9 @@ uses JSON, System.SysUtils, FireDAC.DApt, FireDAC.Stan.Intf, System.RegularExpre
   {$IFNDEF LINUX}
   FMX.Graphics,
   {$ENDIF}
+  {$IFDEF SKIA}
+  FMX.Skia, System.Skia,
+  {$ENDIF}
   {$IFDEF MSWINDOWS}
   Winapi.ShellAPI, Winapi.Windows;
   {$ELSE}
@@ -59,6 +62,9 @@ type
   {$IFNDEF LINUX}
   function BitmapToBase64EncodedString(Bitmap: FMX.Graphics.TBitmap; Resize: Boolean = True; Width: Integer = 256; Height: Integer = 256): String;
   {$ENDIF}
+  {$IFDEF SKIA}
+  function BitmapToSkiaWepPEncodedString(Bitmap: FMX.Graphics.TBitmap; Quality: Integer=80) : String;
+  {$ENDIF}
   function GetJSONFromDB(Connection: TFDConnection; SQL: String;
      Params: TFDParams = nil; DataSetName: String = 'records'): TJSONObject;
   function GetJSONFromTable(var Table: TFDMemTable; DataSetName: String = 'records'; IgnoreFields: String = ''; IgnoreBlanks: Boolean = False): TJSONObject; overload;
@@ -97,62 +103,66 @@ const
 var
   DateValue: TDateTime;
   InputStr: string;
+  ExistingFormat : TFormatSettings;
+
 begin
+  ExistingFormat := FormatSettings;
 
   Result := False;
   try
-  // Handle non-string values (e.g., TDateTime)
-  if VarIsType(AValue, varDate) then
-  begin
-    Result := True;
-    Exit;
-  end;
+    // Handle non-string values (e.g., TDateTime)
+    if VarIsType(AValue, varDate) then
+    begin
+      Result := True;
+      Exit;
+    end;
 
-  if (VarIsType(AValue, varInteger) or VarIsType(AValue, varSingle) or VarIsType(AValue, varDouble) or VarIsType(AValue, varCurrency)) then
-  begin
-    Exit;
-  end;
+    if (VarIsType(AValue, varInteger) or VarIsType(AValue, varSingle) or VarIsType(AValue, varDouble) or VarIsType(AValue, varCurrency)) then
+    begin
+      Exit;
+    end;
 
-  // Convert input to string for parsing
-  InputStr := VarToStr(AValue);
+    // Convert input to string for parsing
+    InputStr := VarToStr(AValue);
 
-  // Check if empty or null
-  if (InputStr = '') or (Length(InputStr) < 6)  then
-  begin
-    Exit;
-  end;
+    // Check if empty or null
+    if (InputStr = '') or (Length(InputStr) < 6)  then
+    begin
+      Exit;
+    end;
 
-  // Try parsing as ISO8601 (with or without milliseconds)
-  if TryISO8601ToDate(InputStr, DateValue) then
-  begin
-    Result := True;
-    Exit;
-  end;
+    // Try parsing as ISO8601 (with or without milliseconds)
+    if TryISO8601ToDate(InputStr, DateValue) then
+    begin
+      Result := True;
+      Exit;
+    end;
 
-  // Try parsing as YYYY-MM-DD HH:MM:SS
-  FormatSettings.LongDateFormat := 'YYYY-MM-DD HH:MM:SS';
-  if TryStrToDateTime(InputStr, DateValue) then
-  begin
-    Result := True;
-    Exit;
-  end;
+    // Try parsing as YYYY-MM-DD HH:MM:SS
+    FormatSettings.LongDateFormat := 'YYYY-MM-DD hh:nn:ss';
+    if TryStrToDateTime(InputStr, DateValue) then
+    begin
+      Result := True;
+      Exit;
+    end;
 
-  // Try parsing as YYYY-MM-DD
-  FormatSettings.ShortDateFormat := 'YYYY-MM-DD';
-  if TryStrToDate(InputStr, DateValue) then
-  begin
-    Result := True;
-    Exit;
-  end;
+    // Try parsing as YYYY-MM-DD
+    FormatSettings.ShortDateFormat := 'YYYY-MM-DD';
+    if TryStrToDate(InputStr, DateValue) then
+    begin
+      Result := True;
+      Exit;
+    end;
 
-  // Try parsing as MM/DD/YYYY
-  FormatSettings.ShortDateFormat := 'MM/DD/YYYY';
-  if TryStrToDate(InputStr, DateValue) then
-  begin
-    Result := True;
-    Exit;
-  end;
+    // Try parsing as MM/DD/YYYY
+    FormatSettings.ShortDateFormat := 'MM/DD/YYYY';
+    if TryStrToDate(InputStr, DateValue) then
+    begin
+      Result := True;
+      Exit;
+    end;
 
+    FormatSettings := ExistingFormat;
   except
     Result := False;
   end;
@@ -225,7 +235,7 @@ begin
   end;
 end;
 
-function SnakeCase(FieldName: String): String;
+
 /// <summary> Converts a JSON camel cased field to a snake case for updating a database
 /// </summary>
 /// <param name="FieldName">The field name to snake case
@@ -236,7 +246,7 @@ function SnakeCase(FieldName: String): String;
 /// <returns>
 /// Snake cased field name
 /// </returns>
-
+function SnakeCase(FieldName: String): String;
 var
   NewName: String;
   I : Integer;
@@ -319,6 +329,38 @@ begin
     Result := Base64EncodedStream.DataString;
   finally
     Base64EncodedStream.Free;
+    ByteStream.Free;
+  end;
+end;
+{$ENDIF}
+
+
+{$IFDEF SKIA}
+function BitmapToSkiaWepPEncodedString(Bitmap: FMX.Graphics.TBitmap; Quality: Integer=80) : String;
+var
+  LStream: TMemorystream;
+  ByteStream: TBytesStream;
+  SkImage: ISkImage;
+  Base64EncodedStream: TStringStream;
+
+begin
+  ByteStream := TBytesStream.Create();
+  LStream := TMemorystream.Create;
+  try
+    Bitmap.SaveToStream(LStream);
+    LStream.Position := 0;
+    SkImage := TSkImage.MakeFromEncodedStream(LStream);
+    SkImage.EncodeToStream(ByteStream, tskEncodedImageFormat.WebP, Quality);
+    Base64EncodedStream := TStringStream.Create();
+    try
+      ByteStream.Position := 0;
+      TNetEncoding.Base64.Encode(ByteStream, Base64EncodedStream);
+      Result := Base64EncodedStream.DataString;
+    finally
+      Base64EncodedStream.Free;
+    end;
+  finally
+    LStream.Free;
     ByteStream.Free;
   end;
 end;
@@ -870,7 +912,6 @@ end;
 function StrToJSONObject(JSON:String): TJSONObject;
 begin
   try
-
     Result := TJSONObject.ParseJSONValue(JSON) as TJSONObject;
   except
     Result := nil;

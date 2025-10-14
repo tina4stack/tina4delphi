@@ -38,6 +38,8 @@ type
     procedure ReadHeaderData(AStream: TStream);
     procedure WriteHeaderData(AStream: TStream);
 
+    procedure SetBearer(Token: String);
+
     function Get(var StatusCode: Integer; EndPoint: String; QueryParams: String=''; ContentType: String= 'application/json'; ContentEncoding: String = 'utf-8'): TJSONObject;
     function Delete(var StatusCode: Integer; EndPoint: String; QueryParams: String=''; ContentType: String= 'application/json'; ContentEncoding: String = 'utf-8'): TJSONObject;
     function Post(var StatusCode: Integer; EndPoint: String; QueryParams: String=''; Body: String = ''; ContentType: String= 'application/json'; ContentEncoding: String = 'utf-8'): TJSONObject;
@@ -193,10 +195,16 @@ begin
   begin
     if (StatusCode = 200) then
     begin
-      Result := StrToJSONObject(JSONString);
-      if Result = nil then
+      var AResult := StrToJSONObject(JSONString);
+      if AResult = nil then
       begin
-        Result := StrToJSONObject('{"result":"'+JSONString+'"}');
+        Result := TJSONObject.Create;
+        Result.AddPair('statusCode', StatusCode);
+        Result.AddPair('response', JSONString);
+      end
+        else
+      begin
+        Result := AResult;
       end;
     end
       else
@@ -221,6 +229,11 @@ begin
     Writer.WriteString(FCustomHeaders.Headers[I].Name+'~'+FCustomHeaders.Headers[I].Value);
   end;
   Writer.WriteListEnd;
+end;
+
+procedure TTina4REST.SetBearer(Token: String);
+begin
+  Self.CustomHeaders.Add('Authorization', 'Bearer '+Token);
 end;
 
 procedure TTina4REST.SetCustomHeaders(const List: TURLHeaders);

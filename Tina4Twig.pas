@@ -2373,104 +2373,88 @@ end;
 /// <remarks>
 /// Supports {% include "file" with {vars} %}, merging contexts.
 /// </remarks>
+/// <summary>
+/// Replaces {% include %} tags with the content of the included templates.
+/// </summary>
+/// <param name="Template">The template string containing include tags.</param>
+/// <param name="Context">The context dictionary for evaluating include expressions.</param>
+/// <returns>The template with includes evaluated and replaced.</returns>
+/// <remarks>
+/// Recursively renders included templates using the current context.
+/// Supports dynamic include names via expressions.
+/// Handles optional 'with' and 'only' options, but simplified here.
+/// </remarks>
 function TTina4Twig.EvaluateIncludes(const Template: String; Context: TDictionary<String, TValue>): String;
 var
-  Regex: TRegEx;
-  Match: TMatch;
-  FullMatch, IncludeName, WithRaw, IncludeContent: String;
-  IncludeContext, ParsedDict: TDictionary<String, TValue>;
-  Pair: TPair<String, TValue>;
-
-  function ParseVariableDict(const DictStr: String; BaseContext: TDictionary<String, TValue>): TDictionary<String, TValue>;
-  var
-    CleanStr: String;
-    Pairs, KeyVal: TArray<String>;
-    I: Integer;
-    Key, ValStr: String;
-    Val: TValue;
-    Int64Val: Int64;
-    FloatVal: Double;
-  begin
-    Result := TDictionary<String, TValue>.Create;
-    CleanStr := DictStr.Trim;
-    if CleanStr.StartsWith('{') and CleanStr.EndsWith('}') then
-      CleanStr := CleanStr.Substring(1, CleanStr.Length - 2).Trim
-    else
-      Exit;
-
-    if CleanStr = '' then Exit;
-
-    Pairs := CleanStr.Split([','], TStringSplitOptions.ExcludeEmpty);
-    for I := 0 to High(Pairs) do
-    begin
-      KeyVal := Pairs[I].Split([':'], 2);
-      if Length(KeyVal) = 2 then
-      begin
-        Key := KeyVal[0].Trim;
-        ValStr := KeyVal[1].Trim;
-
-        // Try resolve ValStr from BaseContext (e.g. variable name)
-        if BaseContext.TryGetValue(ValStr, Val) then
-          Result.Add(Key, Val)
-        else if TryStrToInt64(ValStr, Int64Val) then
-          Result.Add(Key, TValue.From<Int64>(Int64Val))
-        else if TryStrToFloat(ValStr, FloatVal) then
-          Result.Add(Key, TValue.From<Double>(FloatVal))
-        else
-        begin
-          // Remove quotes if any
-          if (ValStr.StartsWith('"') and ValStr.EndsWith('"')) or
-             (ValStr.StartsWith('''') and ValStr.EndsWith('''')) then
-            ValStr := ValStr.Substring(1, ValStr.Length - 2);
-          Result.Add(Key, TValue.From<String>(ValStr));
-        end;
-      end;
-    end;
-  end;
-
+  SB: TStringBuilder;
+  CurrentPos, EndPos, TagStart: Integer;
+  Tag, IncludeExpr, IncludeName, IncludedText: String;
+  IncludeDict: TDictionary<String, TValue>;
+  UseOnly: Boolean;
 begin
-  Result := Template;
-  Regex := TRegEx.Create('{%\s*include\s+["'']([^"''}]+)["''](?:\s+with\s+(\{[^\}]*\}))?\s*%}', [roIgnoreCase]);
-
-  while True do
-  begin
-    Match := Regex.Match(Result);
-    if not Match.Success then
-      Break;
-
-    FullMatch := Match.Value;
-    IncludeName := Match.Groups[1].Value;
-    WithRaw := '';
-    if Match.Groups.Count > 2 then
-      WithRaw := Match.Groups[2].Value;
-
-    IncludeContext := TDictionary<String, TValue>.Create;
-    try
-      // Copy current context
-      for Pair in Context do
-        IncludeContext.AddOrSetValue(Pair.Key, Pair.Value);
-
-      // Merge variables from with { ... }
-      if WithRaw <> '' then
+  SB := TStringBuilder.Create;
+  try
+    CurrentPos := 1;
+    while CurrentPos <= Length(Template) do
+    begin
+      EndPos := CurrentPos;
+      while (EndPos <= Length(Template)) and not ((Template[EndPos] = '{') and (EndPos + 1 <= Length(Template)) and (Template[EndPos + 1] = '%')) do
+        Inc(EndPos);
+      if EndPos > CurrentPos then
+        SB.Append(Copy(Template, CurrentPos, EndPos - CurrentPos));
+      if EndPos > Length(Template) then
+        Break;
+      TagStart := EndPos;
+      CurrentPos := EndPos + 2;
+      EndPos := CurrentPos;
+      while (EndPos <= Length(Template)) and not ((Template[EndPos] = '%') and (EndPos + 1 <= Length(Template)) and (Template[EndPos + 1] = '}')) do
+        Inc(EndPos);
+      if EndPos > Length(Template) then
+        raise Exception.Create('Unclosed {%');
+      Tag := Trim(Copy(Template, CurrentPos, EndPos - CurrentPos));
+      CurrentPos := EndPos + 2;
+      if Tag.StartsWith('include ') then
       begin
-        ParsedDict := ParseVariableDict(WithRaw, Context);
-        try
-          for Pair in ParsedDict do
-            IncludeContext.AddOrSetValue(Pair.Key, Pair.Value);
-        finally
-          ParsedDict.Free;
+        IncludeExpr := Trim(Copy(Tag, 9, MaxInt));
+        UseOnly := False;
+        IncludeDict := nil;
+        if IncludeExpr.Contains(' with ') then
+        begin
+          var WithPos := Pos(' with ', IncludeExpr);
+          var WithExpr := Trim(Copy(IncludeExpr, WithPos + 6, MaxInt));
+          IncludeExpr := Trim(Copy(IncludeExpr, 1, WithPos - 1));
+          if WithExpr.EndsWith(' only') then
+          begin
+            UseOnly := True;
+            WithExpr := Trim(Copy(WithExpr, 1, Length(WithExpr) - 5));
+          end;
+          IncludeDict := ParseVariableDict(WithExpr, Context);
         end;
-      end;
-
-      IncludeContent := LoadTemplate(IncludeName);
-      IncludeContent := RenderInternal(IncludeContent, IncludeContext);
-    except
-      on E: Exception do
-        IncludeContent := '';
+        IncludeName := EvaluateExpression(IncludeExpr, Context).ToString;
+        if ((IncludeName.StartsWith('"') and IncludeName.EndsWith('"')) or (IncludeName.StartsWith('''') and IncludeName.EndsWith(''''))) and (Length(IncludeName) >= 2) then
+          IncludeName := Copy(IncludeName, 2, Length(IncludeName) - 2);
+        var LocalContext: TDictionary<String, TValue> := TDictionary<String, TValue>.Create;
+        try
+          if not UseOnly then
+            for var Pair in Context do
+              LocalContext.AddOrSetValue(Pair.Key, Pair.Value);
+          if Assigned(IncludeDict) then
+            for var Pair in IncludeDict do
+              LocalContext.AddOrSetValue(Pair.Key, Pair.Value);
+          IncludedText := RenderInternal(IncludeName, LocalContext);
+        finally
+          LocalContext.Free;
+          if Assigned(IncludeDict) then
+            IncludeDict.Free;
+        end;
+        SB.Append(IncludedText);
+      end
+      else
+        SB.Append('{% ' + Tag + ' %}');
     end;
-    IncludeContext.Free;
-
-    Result := StringReplace(Result, FullMatch, IncludeContent, [rfReplaceAll]);
+    Result := SB.ToString;
+  finally
+    SB.Free;
   end;
 end;
 
@@ -2478,98 +2462,168 @@ end;
 
 
 /// <summary>
-/// Evaluates extends statements for template inheritance.
+/// Processes {% extends %} tags to integrate the parent template with child template blocks.
 /// </summary>
-/// <param name="Template">The child template string.</param>
-/// <param name="Context">The context dictionary.</param>
-/// <returns>
-/// The rendered base template with child blocks overridden.
-/// </returns>
+/// <param name="Template">The child template containing extends and block tags.</param>
+/// <param name="Context">The context dictionary for variable resolution.</param>
+/// <returns>The fully rendered template with parent content and child blocks.</returns>
 /// <remarks>
-/// Replaces blocks in parent with child content, falls back to parent defaults.
+/// Loads the parent template, extracts blocks from the child template, and replaces corresponding
+/// blocks in the parent. Ensures includes in the parent template are processed correctly.
 /// </remarks>
 function TTina4Twig.EvaluateExtends(const Template: String; Context: TDictionary<String, TValue>): String;
 var
-  ExtendRegex, BlockRegex: TRegEx;
-  Match, BlockMatch: TMatch;
-  ParentTemplateName, BaseTemplate, BlockName, BlockContent: String;
-  ChildBlocks, BaseBlocks: TDictionary<String, String>;
-
-  function ReplaceBlockInTemplate(const TemplateText, BlockName, NewContent: String): String;
-  var
-    Regex: TRegEx;
-    MatchBlock: TMatch;
-  begin
-    // Replace {% block blockname %} ... {% endblock %} with NewContent, fall back to default if no match
-    Regex := TRegEx.Create(
-      '{%\s*block\s+' + TRegEx.Escape(BlockName) + '\s*%}(.*?){%\s*endblock\s*%}',
-      [roSingleLine, roIgnoreCase]
-    );
-    MatchBlock := Regex.Match(TemplateText);
-    if MatchBlock.Success then
-      Result := Regex.Replace(TemplateText, NewContent)
-    else
-      Result := TemplateText; // Retain original template with default content
-  end;
-
+  SB: TStringBuilder;
+  CurrentPos, EndPos, TagStart, BlockStart: Integer;
+  Tag, ExtendsExpr, ParentTemplateName, ParentTemplate, BlockName, BlockContent: String;
+  Blocks: TDictionary<String, String>;
+  BlockDepth: Integer;
 begin
-  Result := Template;
-
-  // Find {% extends "base.twig" %}
-  ExtendRegex := TRegEx.Create('{%\s*extends\s+["'']([^"''}]+)["'']\s*%}', [roIgnoreCase]);
-  Match := ExtendRegex.Match(Template);
-  if not Match.Success then
-    Exit(Template); // no extends, return as-is
-
-  ParentTemplateName := Match.Groups[1].Value;
-
-  // Remove extends tag from child's template content
-  var ChildTemplateWithoutExtends := ExtendRegex.Replace(Template, '');
-
-  // Load parent/base template
-  BaseTemplate := LoadTemplate(ParentTemplateName);
-
-  // Collect blocks from child template (without extends)
-  ChildBlocks := TDictionary<String, String>.Create;
+  Blocks := TDictionary<String, String>.Create;
   try
-    BlockRegex := TRegEx.Create('{%\s*block\s+(\w+)\s*%}(.*?){%\s*endblock\s*%}', [roSingleLine, roIgnoreCase]);
-    BlockMatch := BlockRegex.Match(ChildTemplateWithoutExtends);
-    while BlockMatch.Success do
-    begin
-      BlockName := BlockMatch.Groups[1].Value;
-      BlockContent := BlockMatch.Groups[2].Value.Trim;
-      ChildBlocks.AddOrSetValue(BlockName, BlockContent);
-      BlockMatch := BlockMatch.NextMatch;
-    end;
-
-    // Collect blocks from base template
-    BaseBlocks := TDictionary<String, String>.Create;
+    SB := TStringBuilder.Create;
     try
-      BlockMatch := BlockRegex.Match(BaseTemplate);
-      while BlockMatch.Success do
+      CurrentPos := 1;
+      while CurrentPos <= Length(Template) do
       begin
-        BlockName := BlockMatch.Groups[1].Value;
-        BlockContent := BlockMatch.Groups[2].Value.Trim;
-        BaseBlocks.AddOrSetValue(BlockName, BlockContent);
-        BlockMatch := BlockMatch.NextMatch;
-      end;
+        EndPos := CurrentPos;
+        while (EndPos <= Length(Template)) and not ((Template[EndPos] = '{') and (EndPos + 1 <= Length(Template)) and (Template[EndPos + 1] = '%')) do
+          Inc(EndPos);
+        if EndPos > CurrentPos then
+          SB.Append(Copy(Template, CurrentPos, EndPos - CurrentPos));
+        if EndPos > Length(Template) then
+          Break;
+        TagStart := EndPos;
+        CurrentPos := EndPos + 2;
+        EndPos := CurrentPos;
+        while (EndPos <= Length(Template)) and not ((Template[EndPos] = '%') and (EndPos + 1 <= Length(Template)) and (Template[EndPos + 1] = '}')) do
+          Inc(EndPos);
+        if EndPos > Length(Template) then
+          raise Exception.Create('Unclosed {%');
+        Tag := Trim(Copy(Template, CurrentPos, EndPos - CurrentPos));
+        CurrentPos := EndPos + 2;
 
-      // Replace blocks in base template with child's block content if available, otherwise use base default
-      for BlockName in BaseBlocks.Keys do
-      begin
-        if ChildBlocks.ContainsKey(BlockName) then
-          BlockContent := ChildBlocks[BlockName]
+        if Tag.StartsWith('extends ') then
+        begin
+          ExtendsExpr := Trim(Copy(Tag, 8, MaxInt));
+          ParentTemplateName := EvaluateExpression(ExtendsExpr, Context).ToString;
+          if ((ParentTemplateName.StartsWith('"') and ParentTemplateName.EndsWith('"')) or
+              (ParentTemplateName.StartsWith('''') and ParentTemplateName.EndsWith(''''))) and
+             (Length(ParentTemplateName) >= 2) then
+            ParentTemplateName := Copy(ParentTemplateName, 2, Length(ParentTemplateName) - 2);
+          ParentTemplate := LoadTemplate(ParentTemplateName);
+        end
+        else if Tag.StartsWith('block ') then
+        begin
+          BlockName := Trim(Copy(Tag, 6, MaxInt));
+          BlockDepth := 1;
+          BlockStart := CurrentPos;
+          while (CurrentPos <= Length(Template)) and (BlockDepth > 0) do
+          begin
+            EndPos := CurrentPos;
+            while (EndPos <= Length(Template)) and not ((Template[EndPos] = '{') and (EndPos + 1 <= Length(Template)) and (Template[EndPos + 1] = '%')) do
+              Inc(EndPos);
+            if EndPos > Length(Template) then
+              raise Exception.Create('Unclosed block');
+            TagStart := EndPos;
+            CurrentPos := EndPos + 2;
+            EndPos := CurrentPos;
+            while (EndPos <= Length(Template)) and not ((Template[EndPos] = '%') and (EndPos + 1 <= Length(Template)) and (Template[EndPos + 1] = '}')) do
+              Inc(EndPos);
+            Tag := Trim(Copy(Template, CurrentPos, EndPos - CurrentPos));
+            CurrentPos := EndPos + 2;
+            if Tag.StartsWith('block ') then
+              Inc(BlockDepth)
+            else if Tag = 'endblock' then
+              Dec(BlockDepth);
+          end;
+          BlockContent := Copy(Template, BlockStart, TagStart - BlockStart);
+          Blocks.AddOrSetValue(BlockName, BlockContent);
+        end
         else
-          BlockContent := BaseBlocks[BlockName];
-        BaseTemplate := ReplaceBlockInTemplate(BaseTemplate, BlockName, BlockContent);
+        begin
+          SB.Append('{% ' + Tag + ' %}');
+        end;
       end;
 
-      Result := BaseTemplate;
+      // If no extends tag was found, return the original template
+      if ParentTemplateName = '' then
+      begin
+        Result := SB.ToString;
+        Exit;
+      end;
+
+      // Process parent template, replacing blocks with child blocks
+      CurrentPos := 1;
+      SB.Clear;
+      while CurrentPos <= Length(ParentTemplate) do
+      begin
+        EndPos := CurrentPos;
+        while (EndPos <= Length(ParentTemplate)) and not ((ParentTemplate[EndPos] = '{') and (EndPos + 1 <= Length(ParentTemplate)) and (ParentTemplate[EndPos + 1] = '%')) do
+          Inc(EndPos);
+        if EndPos > CurrentPos then
+          SB.Append(Copy(ParentTemplate, CurrentPos, EndPos - CurrentPos));
+        if EndPos > Length(ParentTemplate) then
+          Break;
+        TagStart := EndPos;
+        CurrentPos := EndPos + 2;
+        EndPos := CurrentPos;
+        while (EndPos <= Length(ParentTemplate)) and not ((ParentTemplate[EndPos] = '%') and (EndPos + 1 <= Length(ParentTemplate)) and (ParentTemplate[EndPos + 1] = '}')) do
+          Inc(EndPos);
+        if EndPos > Length(ParentTemplate) then
+          raise Exception.Create('Unclosed {% in parent template');
+        Tag := Trim(Copy(ParentTemplate, CurrentPos, EndPos - CurrentPos));
+        CurrentPos := EndPos + 2;
+
+        if Tag.StartsWith('block ') then
+        begin
+          BlockName := Trim(Copy(Tag, 6, MaxInt));
+          BlockDepth := 1;
+          BlockStart := CurrentPos;
+          while (CurrentPos <= Length(ParentTemplate)) and (BlockDepth > 0) do
+          begin
+            EndPos := CurrentPos;
+            while (EndPos <= Length(ParentTemplate)) and not ((ParentTemplate[EndPos] = '{') and (EndPos + 1 <= Length(ParentTemplate)) and (ParentTemplate[EndPos + 1] = '%')) do
+              Inc(EndPos);
+            if EndPos > Length(ParentTemplate) then
+              raise Exception.Create('Unclosed block in parent template');
+            TagStart := EndPos;
+            CurrentPos := EndPos + 2;
+            EndPos := CurrentPos;
+            while (EndPos <= Length(ParentTemplate)) and not ((ParentTemplate[EndPos] = '%') and (EndPos + 1 <= Length(ParentTemplate)) and (ParentTemplate[EndPos + 1] = '}')) do
+              Inc(EndPos);
+            Tag := Trim(Copy(ParentTemplate, CurrentPos, EndPos - CurrentPos));
+            CurrentPos := EndPos + 2;
+            if Tag.StartsWith('block ') then
+              Inc(BlockDepth)
+            else if Tag = 'endblock' then
+              Dec(BlockDepth);
+          end;
+          if Blocks.ContainsKey(BlockName) then
+            SB.Append(Blocks[BlockName])
+          else
+            SB.Append(Copy(ParentTemplate, BlockStart, TagStart - BlockStart));
+        end
+        else
+        begin
+          SB.Append('{% ' + Tag + ' %}');
+        end;
+      end;
+
+      // Render the resulting template to process any includes (like default.css)
+      var LocalContext := TDictionary<String, TValue>.Create;
+      try
+        for var Pair in Context do
+          LocalContext.AddOrSetValue(Pair.Key, Pair.Value);
+        Result := RenderInternal(SB.ToString, LocalContext);
+      finally
+        LocalContext.Free;
+      end;
     finally
-      BaseBlocks.Free;
+      SB.Free;
     end;
   finally
-    ChildBlocks.Free;
+    Blocks.Free;
   end;
 end;
 
@@ -3420,7 +3474,7 @@ begin
         Result := TJSONValue(Input.AsObject).ToString
       else if Input.Kind in [tkString, tkUString] then
       begin
-        JsonValue := TJSONObject.ParseJSONValue(Input.AsString);
+        JsonValue := TJSONObject.ParseJSONValue(Input.AsString) as TJSONObject;
         try
           if Assigned(JsonValue) then
             Result := JsonValue.ToString
@@ -3432,6 +3486,25 @@ begin
       end
       else
         Result := Input.ToString;
+    end);
+
+  FFilters.Add('json_decode',
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): TValue
+    var
+      JsonValue: TJSONValue;
+    begin
+      if Input.IsObject and (Input.AsObject is TJSONValue) then
+        Result := 'Input must be a string'
+      else if Input.Kind in [tkString, tkUString] then
+      begin
+        try
+          Result := TJSONObject.ParseJSONValue(Input.AsString) as TJSONObject;
+        except
+          Result := nil;
+        end;
+      end
+      else
+        Result := nil;
     end);
 
   FFilters.Add('keys',
@@ -5526,6 +5599,11 @@ var
   jsonPair: TJSONPair;
   val: TValue;
 begin
+  if AValue.IsEmpty then
+  begin
+     FContext.Remove(AName);
+  end
+    else
   if AValue.Kind = tkRecord then
   begin
     recDict := TDictionary<String, TValue>.Create;

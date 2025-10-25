@@ -46,6 +46,7 @@ type
     function InfixToRPN(const Tokens: TArray<String>): TArray<String>;
     function EvaluateRPN(const RPN: TArray<String>; const Context: TDictionary<String, TValue>): TValue;
     function Tokenize(const Expr: String): TArray<String>;
+    function ConvertJSONToTValue(const JSON: TJSONValue): TValue;
     procedure DumpValue(const Value: TValue; List: TStringList; const Indent: String);
     procedure RegisterDefaultFilters;
     procedure RegisterDefaultFunctions;
@@ -1315,13 +1316,13 @@ begin
 
   FFunctions := TDictionary<String, TFunctionFunc>.Create;
   RegisterDefaultFunctions;
-  
+
   FMacros := TDictionary<String, TMacroFunc>.Create;
   FMacroParams := TDictionary<String, TArray<String>>.Create;
   FMacroDefaults := TDictionary<String, TDictionary<String, String>>.Create;
   FMacroBodies := TDictionary<String, String>.Create;
 
-  
+
 
 end;
 
@@ -1620,6 +1621,58 @@ begin
     if Left.Kind in [tkString, tkUString] then
       Result := Dict.ContainsKey(Left.AsString);
   end;
+end;
+
+function TTina4Twig.ConvertJSONToTValue(const JSON: TJSONValue): TValue;
+var
+  Dict: TDictionary<String, TValue>;
+  Arr: TArray<TValue>;
+  I: Integer;
+  Obj: TJSONObject;
+  JArr: TJSONArray;
+  NumStr: String;
+begin
+  if JSON is TJSONObject then
+  begin
+    Obj := TJSONObject(JSON);
+    Dict := TDictionary<String, TValue>.Create;
+    try
+      for var Pair in Obj do
+      begin
+        Dict.Add(Pair.JsonString.Value, ConvertJSONToTValue(Pair.JsonValue));
+      end;
+      Result := TValue.From<TDictionary<String, TValue>>(Dict);
+    except
+      Dict.Free;
+      raise;
+    end;
+  end
+  else if JSON is TJSONArray then
+  begin
+    JArr := TJSONArray(JSON);
+    SetLength(Arr, JArr.Count);
+    for I := 0 to JArr.Count - 1 do
+      Arr[I] := ConvertJSONToTValue(JArr.Items[I]);
+    Result := TValue.From<TArray<TValue>>(Arr);
+  end
+  else if JSON is TJSONNumber then
+  begin
+    NumStr := JSON.Value;
+    if (Pos('.', NumStr) > 0) or (Pos('e', LowerCase(NumStr)) > 0) then
+      Result := TValue.From<Double>(TJSONNumber(JSON).AsDouble)
+    else
+      Result := TValue.From<Int64>(TJSONNumber(JSON).AsInt64);
+  end
+  else if JSON is TJSONString then
+    Result := TValue.From<String>(JSON.Value)
+  else if JSON is TJSONTrue then
+    Result := TValue.From<Boolean>(True)
+  else if JSON is TJSONFalse then
+    Result := TValue.From<Boolean>(False)
+  else if JSON is TJSONNull then
+    Result := TValue.Empty
+  else
+    Result := TValue.From<String>(JSON.ToString);
 end;
 
 /// <summary>
@@ -2866,7 +2919,7 @@ begin
         begin
           S := DateTimeToStr(Now);
         end;
-        
+
         if not TryStrToDateTime(S, dt) then
         begin
           FormatSettings := SavedFormatSettings; // Restore original settings
@@ -3489,23 +3542,23 @@ begin
     end);
 
   FFilters.Add('json_decode',
-    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): TValue
-    var
-      JsonValue: TJSONValue;
-    begin
-      if Input.IsObject and (Input.AsObject is TJSONValue) then
-        Result := 'Input must be a string'
-      else if Input.Kind in [tkString, tkUString] then
-      begin
-        try
-          Result := TJSONObject.ParseJSONValue(Input.AsString) as TJSONObject;
-        except
-          Result := nil;
-        end;
-      end
-      else
-        Result := nil;
-    end);
+  function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): TValue
+  var
+    JSONValue: TJSONValue;
+  begin
+    if not (Input.Kind in [tkString, tkUString]) then
+      Exit(Input);
+
+    JSONValue := TJSONObject.ParseJSONValue(Input.AsString);
+    if JSONValue = nil then
+      Exit(TValue.Empty);
+
+    try
+      Result := Self.ConvertJSONToTValue(JSONValue);
+    finally
+      JSONValue.Free;
+    end;
+  end);
 
   FFilters.Add('keys',
     function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): TValue
@@ -4750,7 +4803,7 @@ begin
      Input := Now()
       else
     Input := ResolveVariablePath(Args[0], Context);
-        
+
     if Length(Args) > 1 then
       FormatStr := Args[1]
     else
@@ -5017,15 +5070,11 @@ begin
                   WriteLn('Debug: Set new dictionary ' + VarName + ' with ' + IntToStr(NewDict.Count) + ' entries');
               end;
             end
-            else if Val.IsType<TJSONArray> then
+            else if Val.IsObject and (Val.AsObject is TJSONArray) then
             begin
-              var JsonArr := Val.AsType<TJSONArray>;
-              SetLength(Arr, JsonArr.Count);
-              for var I := 0 to JsonArr.Count - 1 do
-                Arr[I] := TValue.FromVariant(JsonArr.Items[I].Value);
-              LocalContext.AddOrSetValue(VarName, TValue.From<TArray<TValue>>(Arr));
+              LocalContext.AddOrSetValue(VarName, ConvertJSONToTValue(Val.AsObject as TJSONArray));
               if FDebug then
-                WriteLn('Debug: Set array from JSONArray ' + VarName + ' with length ' + IntToStr(Length(Arr)));
+                WriteLn('Debug: Set array from JSONArray ' + VarName);
             end
             else
             begin
@@ -5035,6 +5084,7 @@ begin
                 if FDebug then
                   WriteLn('Debug: Initialized empty array for ', VarName);
               end;
+
               LocalContext.AddOrSetValue(VarName, Val);
               if FDebug then
                 WriteLn('Debug: Set ' + VarName + ' = ' + Val.ToString);
@@ -5310,6 +5360,7 @@ begin
                       end;
                     end;
                   end;
+
                   if not HasItems and HasElse then
                   begin
                     Body := Copy(Template, ElsePos, TagStart - ElsePos);

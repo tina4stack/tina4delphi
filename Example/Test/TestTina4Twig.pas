@@ -173,6 +173,8 @@ type
     procedure TestRoundNegativeZeroPrecision;
 
     procedure TestMergeTwoArrays;
+    procedure TestJSONDecode;
+    procedure TestDumpJSONDecode;
   end;
 
 implementation
@@ -578,6 +580,19 @@ begin
   Check(ReturnValue = '2023-10-15 15:30:00', TemplateOrContent + ' - Should be 2023-10-15 15:30:00, got ' + ReturnValue);
 end;
 
+procedure TestTTina4Twig.TestDumpJSONDecode;
+var
+  ReturnValue, TemplateOrContent: string;
+
+begin
+  FTina4Twig.SetVariable('text', '{"something": "Hello", "messages": [{"id": 1, "message": "Hello 1"}, {"id": 2, "message": "Hello 2"}], "complex": {"name": "Test", "colors": ["red", "green", "yellow"]}}');
+  FTina4Twig.SetDebug(True);
+  TemplateOrContent := '{% set data = text | json_decode %} {{ dump(data) }}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(Pos('Hello 1', ReturnValue) <> 0 , TemplateOrContent + ' - Should be a dump, got ' + ReturnValue);
+end;
+
+
 // TestFilters
 procedure TestTTina4Twig.TestFiltersLastArray;
 var
@@ -665,7 +680,7 @@ procedure TestTTina4Twig.TestForLoopsJsonArray;
 var
   ReturnValue, TemplateOrContent: string;
 begin
-  TemplateOrContent := '{%for name in names%}{{name}} {%endfor%}';
+  TemplateOrContent := '{% for name in names %}{{name}} {% endfor %}';
   ReturnValue := FTina4Twig.Render(TemplateOrContent);
   Check(ReturnValue = 'Alice Bob ', TemplateOrContent + ' - Should be Alice Bob , got ' + ReturnValue);
 end;
@@ -1045,6 +1060,18 @@ begin
   TemplateOrContent := '{% set some_var = 1 %}{% for i in 0..5 %}{% set some_var = some_var + 1 %}{% endfor %}{{some_var}}';
   ReturnValue := FTina4Twig.Render(TemplateOrContent);
   Check(ReturnValue = '7', TemplateOrContent + ' - Should be 7, got ' + ReturnValue);
+end;
+
+procedure TestTTina4Twig.TestJSONDecode;
+var
+  ReturnValue, TemplateOrContent: string;
+
+begin
+  FTina4Twig.SetVariable('text', '{"something": "Hello", "messages": [{"id": 1, "message": "Hello 1"}, {"id": 2, "message": "Hello 2"}], "complex": {"name": "Test", "colors": ["red", "green", "yellow"]}}');
+  FTina4Twig.SetDebug(True);
+  TemplateOrContent := '{% set data = text | json_decode %}{{data.something}} {% for message in data.messages %}1{{message.id}} {% endfor %}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = 'Hello 11 12 ', TemplateOrContent + ' - Should be Hello 11 12, got ' + ReturnValue);
 end;
 
 procedure TestTTina4Twig.TestIfWithMatches;

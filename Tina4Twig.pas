@@ -2,6 +2,8 @@ unit Tina4Twig;
 
 interface
 
+
+
 uses
   System.SysUtils, System.Classes, System.Generics.Collections, System.RegularExpressions,
   System.Rtti, JSON, System.NetEncoding, System.Math, Variants, System.TypInfo, System.DateUtils;
@@ -54,7 +56,8 @@ type
     constructor Create(const TemplatePath: String = '');
     destructor Destroy; override;
     function Render(const TemplateOrContent: String; Variables: TStringDict = nil): String;
-    procedure SetVariable(AName: string; AValue: TValue);
+    procedure SetVariable(AName: String; AValue: TValue);
+    function GetVariable(AName: String): TValue;
     procedure SetDebug(Value: Boolean=True);
   end;
 
@@ -607,12 +610,13 @@ var
 begin
   Precedence := TDictionary<String, Integer>.Create;
   try
-    Precedence.Add('+', 2);
-    Precedence.Add('-', 2);
-    Precedence.Add('*', 3);
-    Precedence.Add('/', 3);
-    Precedence.Add('%', 3);
-    Precedence.Add('~', 1);
+    Precedence.Add('+', 6);
+    Precedence.Add('-', 6);
+    Precedence.Add('*', 7);
+    Precedence.Add('/', 7);
+    Precedence.Add('%', 7);
+    Precedence.Add('~', 8);
+    Precedence.Add('|', 2);
     Precedence.Add('==', 0);
     Precedence.Add('!=', 0);
     Precedence.Add('<', 0);
@@ -638,7 +642,7 @@ begin
       FilterChain := '';
       LastAppended := '';
       // Debug: Log input tokens
-      if FDebug then WriteLn('Debug: InfixToRPN Input=', String.Join(' ', Tokens));
+      //if FDebug then WriteLn('Debug: InfixToRPN Input=', String.Join(' ', Tokens));
       while I <= High(Tokens) do
       begin
         Token := Tokens[I];
@@ -687,7 +691,7 @@ begin
             Output.Add(FilterChain);
             InFilter := False;
             // Debug: Log filter chain
-            if FDebug then WriteLn('Debug: Added FilterChain=', FilterChain, ' Output=', String.Join(' ', Output.ToArray));
+            //if FDebug then WriteLn('Debug: Added FilterChain=', FilterChain, ' Output=', String.Join(' ', Output.ToArray));
             Continue;
           end;
           Continue;
@@ -704,7 +708,7 @@ begin
           Output.Add(Token);
           Inc(I);
           // Debug: Log operand
-          if FDebug then WriteLn('Debug: Added Operand=', Token, ' Output=', String.Join(' ', Output.ToArray));
+          //if FDebug then WriteLn('Debug: Added Operand=', Token, ' Output=', String.Join(' ', Output.ToArray));
           Continue;
         end;
         // Handle parentheses
@@ -713,7 +717,7 @@ begin
           OpStack.Push(Token);
           Inc(I);
           // Debug: Log push to stack
-          if FDebug then WriteLn('Debug: Pushed to OpStack=', Token, ' OpStack=', String.Join(' ', OpStack.ToArray));
+          //if FDebug then WriteLn('Debug: Pushed to OpStack=', Token, ' OpStack=', String.Join(' ', OpStack.ToArray));
           Continue;
         end;
         if Token = ')' then
@@ -725,7 +729,7 @@ begin
           OpStack.Pop; // Remove '('
           Inc(I);
           // Debug: Log after parentheses
-          if FDebug then WriteLn('Debug: Processed ) Output=', String.Join(' ', Output.ToArray), ' OpStack=', String.Join(' ', OpStack.ToArray));
+          //if FDebug then WriteLn('Debug: Processed ) Output=', String.Join(' ', Output.ToArray), ' OpStack=', String.Join(' ', OpStack.ToArray));
           Continue;
         end;
         // Handle comma (used in filter arguments, e.g., date('U'))
@@ -735,7 +739,7 @@ begin
             Output.Add(OpStack.Pop);
           Inc(I);
           // Debug: Log after comma
-          if FDebug then WriteLn('Debug: Processed , Output=', String.Join(' ', Output.ToArray), ' OpStack=', String.Join(' ', OpStack.ToArray));
+          //if FDebug then WriteLn('Debug: Processed , Output=', String.Join(' ', Output.ToArray), ' OpStack=', String.Join(' ', OpStack.ToArray));
           Continue;
         end;
         // Handle operators
@@ -750,12 +754,12 @@ begin
             Break;
           Output.Add(OpStack.Pop);
           // Debug: Log operator pop
-          if FDebug then WriteLn('Debug: Popped Operator=', Top, ' Output=', String.Join(' ', Output.ToArray));
+          //if FDebug then WriteLn('Debug: Popped Operator=', Top, ' Output=', String.Join(' ', Output.ToArray));
         end;
         OpStack.Push(Token);
         Inc(I);
         // Debug: Log operator push
-        if FDebug then WriteLn('Debug: Pushed Operator=', Token, ' OpStack=', String.Join(' ', OpStack.ToArray));
+        //if FDebug then WriteLn('Debug: Pushed Operator=', Token, ' OpStack=', String.Join(' ', OpStack.ToArray));
       end;
       // Pop remaining operators
       while OpStack.Count > 0 do
@@ -765,11 +769,11 @@ begin
           raise Exception.Create('Mismatched parentheses');
         Output.Add(Top);
         // Debug: Log final operator pop
-        if FDebug then WriteLn('Debug: Final Pop Operator=', Top, ' Output=', String.Join(' ', Output.ToArray));
+        //if FDebug then WriteLn('Debug: Final Pop Operator=', Top, ' Output=', String.Join(' ', Output.ToArray));
       end;
       Result := Output.ToArray;
       // Debug: Log final RPN output
-      if FDebug then WriteLn('Debug: InfixToRPN Final Output=', String.Join(' ', Result));
+      //if FDebug then WriteLn('Debug: InfixToRPN Final Output=', String.Join(' ', Result));
     finally
       Output.Free;
       OpStack.Free;
@@ -814,12 +818,12 @@ var
 begin
   Stack := TStack<TValue>.Create;
   try
-    if FDebug then WriteLn('Debug: EvaluateRPN Input=', String.Join(' ', RPN));
+    //if FDebug then WriteLn('Debug: EvaluateRPN Input=', String.Join(' ', RPN));
     I := 0;
     while I < Length(RPN) do
     begin
       Token := RPN[I];
-      if FDebug then WriteLn('Debug: Processing Token=', Token, ' StackCount=', Stack.Count);
+      //if FDebug then WriteLn('Debug: Processing Token=', Token, ' StackCount=', Stack.Count);
       if Token.Contains('|') then
       begin
         Parts := SplitOnTopLevel(Token, '|');
@@ -863,7 +867,7 @@ begin
             CurrentVal := TValue.From<String>('(filter ' + FuncName + ' not found)');
         end;
         Stack.Push(CurrentVal);
-        if FDebug then WriteLn('Debug: After Filter=', Token, ' StackCount=', Stack.Count);
+        //if FDebug then WriteLn('Debug: After Filter=', Token, ' StackCount=', Stack.Count);
         Inc(I);
         Continue;
       end;
@@ -880,7 +884,7 @@ begin
           begin
             CurrentVal := TValue.From<String>(Func(Args, Context));
             Stack.Push(CurrentVal);
-            if FDebug then WriteLn('Debug: After Function=', Token, ' Args=', String.Join(',', Args), ' Result=', CurrentVal.ToString, ' StackCount=', Stack.Count);
+            //if FDebug then WriteLn('Debug: After Function=', Token, ' Args=', String.Join(',', Args), ' Result=', CurrentVal.ToString, ' StackCount=', Stack.Count);
           end
           else
             raise Exception.Create('Function ' + Token + ' not found');
@@ -893,17 +897,17 @@ begin
       if TryStrToInt64(Token, IA) then
       begin
         Stack.Push(TValue.From<Int64>(IA));
-        if FDebug then WriteLn('Debug: Pushed Int=', Token, ' StackCount=', Stack.Count);
+        //if FDebug then WriteLn('Debug: Pushed Int=', Token, ' StackCount=', Stack.Count);
       end
       else if TryStrToFloat(Token, FA) then
       begin
         Stack.Push(TValue.From<Double>(FA));
-        if FDebug then WriteLn('Debug: Pushed Float=', Token, ' StackCount=', Stack.Count);
+        //if FDebug then WriteLn('Debug: Pushed Float=', Token, ' StackCount=', Stack.Count);
       end
       else if (Token.StartsWith('''') or Token.StartsWith('"')) and (Token.EndsWith(Token[1])) then
       begin
         Stack.Push(TValue.From<String>(Copy(Token, 2, Length(Token) - 2)));
-        if FDebug then WriteLn('Debug: Pushed String=', Token, ' StackCount=', Stack.Count);
+        //if FDebug then WriteLn('Debug: Pushed String=', Token, ' StackCount=', Stack.Count);
       end
       else if not CharInSet(Token[1], ['+', '-', '*', '/', '%', '~', '<', '>', '=', '!']) and
               (Token <> 'in') and (Token <> 'starts with') and (Token <> 'matches') and (Token <> '..') and
@@ -915,7 +919,7 @@ begin
         else if CurrentVal.IsType<Double> and (Frac(CurrentVal.AsExtended) = 0) then
           CurrentVal := TValue.From<Int64>(Trunc(CurrentVal.AsExtended));
         Stack.Push(CurrentVal);
-        if FDebug then WriteLn('Debug: Pushed Variable=', Token, ' Value=', CurrentVal.ToString, ' StackCount=', Stack.Count);
+        //if FDebug then WriteLn('Debug: Pushed Variable=', Token, ' Value=', CurrentVal.ToString, ' StackCount=', Stack.Count);
       end
       else
       begin
@@ -924,7 +928,7 @@ begin
           A := Stack.Pop;
           FA := GetAsExtendedLenient(A);
           Stack.Push(TValue.From<Double>(-FA));
-          if FDebug then WriteLn('Debug: After Unary Minus=', Token, ' StackCount=', Stack.Count);
+          //if FDebug then WriteLn('Debug: After Unary Minus=', Token, ' StackCount=', Stack.Count);
           Inc(I);
           Continue;
         end;
@@ -932,7 +936,7 @@ begin
           raise Exception.Create('Invalid expression: insufficient operands for ' + Token + ', StackCount=' + IntToStr(Stack.Count));
         B := Stack.Pop;
         A := Stack.Pop;
-        if FDebug then WriteLn('Debug: Popped A=', A.ToString, ' B=', B.ToString, ' for Operator=', Token);
+        //if FDebug then WriteLn('Debug: Popped A=', A.ToString, ' B=', B.ToString, ' for Operator=', Token);
         if (A.Kind in [tkString, tkUString]) and TryStrToInt64(A.AsString, IA) then
           A := TValue.From<Int64>(IA)
         else if A.IsType<Double> and (Frac(A.AsExtended) = 0) then
@@ -1029,7 +1033,7 @@ begin
             Cur := Cur + Step;
           end;
           Stack.Push(TValue.From<TArray<TValue>>(Arr));
-          if FDebug then WriteLn('Debug: Range ', Start, '..', Finish, ' produced array length=', Length(Arr));
+          //if FDebug then WriteLn('Debug: Range ', Start, '..', Finish, ' produced array length=', Length(Arr));
         end
         else if Token = 'and' then
           Stack.Push(TValue.From<Boolean>(ToBool(A) and ToBool(B)))
@@ -1042,7 +1046,7 @@ begin
           A := Stack.Pop;
           Stack.Push(TValue.From<Boolean>(not ToBool(A)));
         end;
-        if FDebug then WriteLn('Debug: After Operation=', Token, ' StackCount=', Stack.Count);
+        //if FDebug then WriteLn('Debug: After Operation=', Token, ' StackCount=', Stack.Count);
       end;
       Inc(I);
     end;
@@ -1054,7 +1058,7 @@ begin
       raise Exception.Create('Invalid expression: stack imbalance, StackCount=' + IntToStr(Stack.Count) + ', Items=[' + StackItems + ']');
     end;
     Result := Stack.Pop;
-    if FDebug then WriteLn('Debug: EvaluateRPN Result=', Result.ToString);
+    //if FDebug then WriteLn('Debug: EvaluateRPN Result=', Result.ToString);
   finally
     Stack.Free;
   end;
@@ -1282,6 +1286,15 @@ begin
   begin
     Result := ResolveVariablePath(CleanExpr, Context);
     //WriteLn('Debug: GetExpressionValue Result ('+CleanExpr+')=', Result.ToString); // Debug: Log variable path result
+  end;
+end;
+
+function TTina4Twig.GetVariable(AName: String): TValue;
+begin
+  try
+    Result := FContext[AName];
+  except
+    Result := AName+' not found';
   end;
 end;
 
@@ -2691,19 +2704,19 @@ begin
   FFilters.Clear;
 
   FFilters.Add('abs',
-    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): TValue
-    var
-      Val: Double;
-    begin
-      if Input.IsOrdinal and Input.IsType<Int64> then
-        Result := IntToStr(Abs(Input.AsInt64))
-      else if Input.IsType<Real> then
-        Result := FloatToStr(Abs(Input.AsExtended))
-      else if Input.Kind in [tkString, tkUString] then
-        Result := FloatToStr(Abs(Val))
-      else
-        Result := Input.ToString;
-    end);
+  function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): TValue
+  var
+    Val: Double;
+  begin
+    if Input.IsOrdinal then
+      Result := TValue.From<Int64>(Abs(Input.AsInt64))
+    else if Input.IsType<Double> then
+      Result := TValue.From<Double>(Abs(Input.AsExtended))
+    else if (Input.Kind in [tkString, tkUString]) and TryStrToFloat(Input.AsString, Val) then
+      Result := TValue.From<Double>(Abs(Val))
+    else
+      Result := Input;
+  end);
 
   FFilters.Add('batch',
     function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): TValue
@@ -4341,52 +4354,171 @@ begin
         Result := Input.ToString;
     end);
 
+
+
   FFilters.Add('number_format',
   function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): TValue
   var
-    Val: Double;
+    Val: Extended;
     Decimals: Integer;
-    DecPoint, ThousandsSep: String;
-    ArgValue: String;
+    DecimalSep, ThousandSep: String;
+    CustomFS: TFormatSettings;
     FormatStr: String;
+    InvariantFS: TFormatSettings;
+    Sign: String;
+    AbsVal: Extended;
+    FormattedAbs: String;
   begin
+    InvariantFS := TFormatSettings.Invariant;
+
     Decimals := 0;
-    DecPoint := '.';
-    ThousandsSep := ',';
+    DecimalSep := '.';
+    ThousandSep := ',';
+
     if Length(Args) > 0 then
-      Decimals := StrToIntDef(GetExpressionValue(Args[0], Context).ToString, 0);
+      Decimals := StrToIntDef(Args[0], 0);
     if Length(Args) > 1 then
-    begin
-      DecPoint := GetExpressionValue(Args[1], Context).ToString;
-    end;
+      DecimalSep := Args[1];
     if Length(Args) > 2 then
-    begin
-      ArgValue := GetExpressionValue(Args[2], Context).ToString;
-      // Remove quotes from string literal if present
-      if ((ArgValue.StartsWith('"') and ArgValue.EndsWith('"')) or
-          (ArgValue.StartsWith('''') and ArgValue.EndsWith(''''))) and (Length(ArgValue) >= 2) then
-        ThousandsSep := Copy(ArgValue, 2, Length(ArgValue) - 2)
-      else
-        ThousandsSep := ArgValue;
-    end;
+      ThousandSep := Args[2];
+
+    // Safe conversion (handles string input from variables)
     if Input.IsOrdinal then
       Val := Input.AsInt64
-    else if Input.IsType<Real> then
+    else if Input.IsType<Extended> or Input.IsType<Double> or Input.IsType<Single> then
       Val := Input.AsExtended
-    else if (Input.Kind in [tkString, tkUString]) and TryStrToFloat(Input.AsString, Val) then
-      // Val already set
+    else if (Input.Kind in [tkString, tkUString]) then
+    begin
+      if not TryStrToFloat(Input.AsString, Val, InvariantFS) then
+        Exit(TValue.From<String>(Input.AsString));
+    end
     else
-      Exit(Input.ToString);
-    // Construct format string explicitly
-    if Decimals > 0 then
-      FormatStr := '0.' + StringOfChar('0', Decimals)
+      Exit(TValue.From<String>(Input.ToString));
+
+    // Separate sign for correct thousands grouping on negatives
+    if Val < 0 then
+    begin
+      Sign := '-';
+      AbsVal := -Val;
+    end
     else
-      FormatStr := '0';
-    Result := FormatFloat(FormatStr, Val);
-    if Decimals > 0 then
-      Result := TValue.From<String>(StringReplace(Result.ToString, '.', DecPoint, [rfReplaceAll]));
-    // Note: Thousands separator not implemented due to lack of direct support in FormatFloat
+    begin
+      Sign := '';
+      AbsVal := Val;
+    end;
+
+    // Custom settings
+    CustomFS := TFormatSettings.Create('');
+    if DecimalSep <> '' then
+      CustomFS.DecimalSeparator := DecimalSep[1]
+    else
+      CustomFS.DecimalSeparator := '.';  // will strip decimal if empty later
+    if ThousandSep <> '' then
+      CustomFS.ThousandSeparator := ThousandSep[1]
+    else
+      CustomFS.ThousandSeparator := #0;
+
+    // Build format
+    if Decimals = 0 then
+    begin
+      if (ThousandSep = '') then
+      begin
+        FormatStr := '0';
+      end
+        else
+      begin
+        FormatStr := '#,0';
+      end;
+    end
+      else
+    begin
+      if (ThousandSep = '') then
+      begin
+        FormatStr := '0.';
+      end
+        else
+      begin
+        FormatStr := '#,0.'+ StringOfChar('0', Decimals);
+      end;
+    end;
+    FormattedAbs := FormatFloat(FormatStr, AbsVal, CustomFS);
+
+    // If no decimal point requested, remove decimal part
+    if (DecimalSep = '') and (Decimals > 0) and (Pos(CustomFS.DecimalSeparator, FormattedAbs) > 0) then
+      FormattedAbs := Copy(FormattedAbs, 1, Pos(CustomFS.DecimalSeparator, FormattedAbs) - 1);
+
+    Result := TValue.From<String>(Sign + FormattedAbs);
   end);
+
+  FFilters.Add('round',
+  function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): TValue
+  var
+    Val: Extended;
+    Decimals: Integer;
+    Method: String;
+    Multiplier, Rounded: Extended;
+    InvariantFS: TFormatSettings;
+    Formatted: String;
+  begin
+    InvariantFS := TFormatSettings.Invariant;
+
+    Decimals := 0;
+    Method := 'common';
+
+    if Length(Args) > 0 then
+      Decimals := StrToIntDef(Args[0], 0);
+    if Length(Args) > 1 then
+      Method := LowerCase(Trim(Args[1]));
+
+    // Safe conversion to Extended
+    if Input.IsOrdinal then
+      Val := Input.AsInt64
+    else if Input.IsType<Extended> or Input.IsType<Double> or Input.IsType<Single> then
+      Val := Input.AsExtended
+    else if (Input.Kind in [tkString, tkUString, tkLString, tkWString]) then
+    begin
+      if not TryStrToFloat(Input.AsString, Val, InvariantFS) then
+        Exit(TValue.From<String>(Input.AsString));
+    end
+    else
+      Exit(TValue.From<String>(Input.ToString));
+
+    // Perform rounding
+    if Decimals = 0 then
+    begin
+      if Method = 'floor' then
+        Rounded := Floor(Val)
+      else if Method = 'ceil' then
+        Rounded := Ceil(Val)
+      else // common
+        Rounded := Round(Val);  // Delphi Round is half away from zero, matching Twig 'common'
+    end
+    else
+    begin
+      Multiplier := Power(10.0, Decimals);
+      if Method = 'floor' then
+        Rounded := Floor(Val * Multiplier) / Multiplier
+      else if Method = 'ceil' then
+        Rounded := Ceil(Val * Multiplier) / Multiplier
+      else // common
+        Rounded := Round(Val * Multiplier) / Multiplier;  // half away from zero
+    end;
+
+    // Format output with invariant locale to use '.' decimal
+    // Always show fixed decimals if precision > 0, no trailing zeros trim (matches test expectations like 5.00)
+    if Decimals <= 0 then
+    begin
+      // For integer result, output as integer string (no .00)
+      Formatted := IntToStr(Trunc(Rounded));
+    end
+    else
+    begin
+      Formatted := FloatToStrF(Rounded, ffFixed, 15, Decimals, InvariantFS);
+    end;
+
+    Result := TValue.From<String>(Formatted);
+  end);
+
 
   FFilters.Add('plural',
     function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): TValue
@@ -4463,40 +4595,7 @@ begin
       Result := TValue.From<String>(OutputStr);
     end);
 
-  FFilters.Add('round',
-  function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): TValue
-  var
-    Val: Double;
-    Decimals: Integer;
-    Method: String;
-    Multiplier: Double; // Changed from Single to Double
-  begin
-    Decimals := 0;
-    Method := 'common';
-    if Length(Args) > 0 then
-      Decimals := StrToIntDef(Args[0], 0);
-    if Length(Args) > 1 then
-      Method := Args[1].ToLower;
-    if Input.IsOrdinal then
-      Val := Input.AsInt64
-    else if Input.IsType<Real> then
-      Val := Input.AsExtended
-    else if (Input.Kind in [tkString, tkUString]) and TryStrToFloat(Input.AsString, Val) then
-      // Val set
-    else
-      Exit(Input.ToString);
-    Multiplier := Power(10, Decimals);
-    if Method = 'floor' then
-      Val := Trunc(Val * Multiplier) / Multiplier // Use Trunc directly
-    else if Method = 'ceil' then
-      Val := Ceil(Val * Multiplier) / Multiplier
-    else // 'common' or default
-      Val := RoundTo(Val, -Decimals);
-    if Decimals = 0 then
-      Result := IntToStr(Trunc(Val))
-    else
-      Result := FloatToStrF(Val, ffFixed, 15, Decimals);
-  end);
+  
 
   FFilters.Add('shuffle',
     function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): TValue
@@ -4959,8 +5058,7 @@ begin
               for var I := 0 to High(Arr) do
                 ArrStr[I] := Arr[I].ToString;
               Current := String.Join('', ArrStr);
-              if FDebug then
-                WriteLn('Debug: Array output for ', Tag, ' = ', Current);
+              //if FDebug then WriteLn('Debug: Array output for ', Tag, ' = ', Current);
             end
             else if ExprVal.Kind in [tkClass, tkRecord] then
               Current := ''
@@ -4982,8 +5080,7 @@ begin
           CurrentPos := EndPos + 2;
           if Tag.StartsWith('set ') then
           begin
-            if FDebug then
-              WriteLn('Debug: Set: Tag passed is = ', Tag);
+            //if FDebug then WriteLn('Debug: Set: Tag passed is = ', Tag);
             var SetStr := Trim(Copy(Tag, 4, MaxInt));
             var EqPos := FindTopLevelPos(SetStr, '=');
             if EqPos <= 0 then
@@ -4997,8 +5094,7 @@ begin
               VarName := Trim(Copy(VarName, 1, Length(VarName) - 2));
               if VarName.IsEmpty then
                 raise Exception.Create('Invalid array variable name in set: ' + Tag);
-              if FDebug then
-                WriteLn('Debug: VarName = ' + VarName + ' Val = ' + Val.ToString);
+              //if FDebug then WriteLn('Debug: VarName = ' + VarName + ' Val = ' + Val.ToString);
               // Convert string to integer if possible
               if Val.Kind in [tkString, tkUString] then
               begin
@@ -5013,8 +5109,7 @@ begin
                 if ExistingVal.IsType<TArray<TValue>> then
                 begin
                   Arr := ExistingVal.AsType<TArray<TValue>>;
-                  if FDebug then
-                    WriteLn('Debug: Found existing array for ', VarName, ' with length ', Length(Arr));
+                  //if FDebug then WriteLn('Debug: Found existing array for ', VarName, ' with length ', Length(Arr));
                 end
                 else if ExistingVal.IsType<TJSONArray> then
                 begin
@@ -5022,33 +5117,31 @@ begin
                   SetLength(Arr, JsonArr.Count);
                   for var I := 0 to JsonArr.Count - 1 do
                     Arr[I] := TValue.FromVariant(JsonArr.Items[I].Value);
-                  if FDebug then
-                    WriteLn('Debug: Converted JSONArray to array for ', VarName, ' with length ', Length(Arr));
+                  //if FDebug then WriteLn('Debug: Converted JSONArray to array for ', VarName, ' with length ', Length(Arr));
                 end
                 else
                 begin
                   SetLength(Arr, 0);
-                  if FDebug then
-                    WriteLn('Debug: Initialized empty array for ', VarName, ' due to invalid type: ', ExistingVal.TypeInfo.Name);
+                  //if FDebug then WriteLn('Debug: Initialized empty array for ', VarName, ' due to invalid type: ', ExistingVal.TypeInfo.Name);
                 end;
               end
               else
               begin
                 SetLength(Arr, 0);
-                if FDebug then
-                  WriteLn('Debug: Initialized empty array for ', VarName, ' as it was not found');
+                //if FDebug then WriteLn('Debug: Initialized empty array for ', VarName, ' as it was not found');
               end;
               SetLength(Arr, Length(Arr) + 1);
               Arr[High(Arr)] := Val;
               LocalContext.AddOrSetValue(VarName, TValue.From<TArray<TValue>>(Arr));
-              if FDebug then
+
+              (*if FDebug then
               begin
                 var ArrStr: TArray<String>;
                 SetLength(ArrStr, Length(Arr));
                 for var I := 0 to High(Arr) do
                   ArrStr[I] := Arr[I].ToString;
                 WriteLn('Debug: Set array ' + VarName + ' = [' + String.Join(',', ArrStr) + ']');
-              end;
+              end;*)
             end
             else if Val.IsType<TDictionary<String, TValue>> then
             begin
@@ -5060,21 +5153,18 @@ begin
                 for var Pair in NewDict do
                   ExistingDict.AddOrSetValue(Pair.Key, Pair.Value);
                 LocalContext.AddOrSetValue(VarName, TValue.From<TDictionary<String, TValue>>(ExistingDict));
-                if FDebug then
-                  WriteLn('Debug: Merged dictionary into ' + VarName + ' with ' + IntToStr(NewDict.Count) + ' entries');
+                //if FDebug then WriteLn('Debug: Merged dictionary into ' + VarName + ' with ' + IntToStr(NewDict.Count) + ' entries');
               end
               else
               begin
                 LocalContext.AddOrSetValue(VarName, Val);
-                if FDebug then
-                  WriteLn('Debug: Set new dictionary ' + VarName + ' with ' + IntToStr(NewDict.Count) + ' entries');
+                //if FDebug then WriteLn('Debug: Set new dictionary ' + VarName + ' with ' + IntToStr(NewDict.Count) + ' entries');
               end;
             end
             else if Val.IsObject and (Val.AsObject is TJSONArray) then
             begin
               LocalContext.AddOrSetValue(VarName, ConvertJSONToTValue(Val.AsObject as TJSONArray));
-              if FDebug then
-                WriteLn('Debug: Set array from JSONArray ' + VarName);
+              //if FDebug then WriteLn('Debug: Set array from JSONArray ' + VarName);
             end
             else
             begin
@@ -5086,8 +5176,7 @@ begin
               end;
 
               LocalContext.AddOrSetValue(VarName, Val);
-              if FDebug then
-                WriteLn('Debug: Set ' + VarName + ' = ' + Val.ToString);
+              //if FDebug then WriteLn('Debug: Set ' + VarName + ' = ' + Val.ToString);
             end;
           end
           else if Tag.StartsWith('if ') then
@@ -5231,7 +5320,8 @@ begin
                   if LoopExpr = '' then
                     LoopExpr := String.Join(' ', Copy(ForParts, 2, MaxInt));
                   Iterable := EvaluateExpression(LoopExpr, LocalContext);
-                  if FDebug then
+
+                  (*if FDebug then
                   begin
                     if Iterable.IsType<TArray<TValue>> then
                     begin
@@ -5243,7 +5333,8 @@ begin
                     end
                     else
                       WriteLn('Debug: For loop iterable ', LoopExpr, ' = ', Iterable.ToString);
-                  end;
+                  end;*)
+
                   var HasItems := False;
                   if Iterable.IsType<TArray<TValue>> then
                   begin
@@ -5256,8 +5347,7 @@ begin
                       try
                         // Set the loop variable
                         LoopContext.AddOrSetValue(LoopVar, Item);
-                        if FDebug then
-                          WriteLn('Debug: Loop var ', LoopVar, ' = ', Item.ToString, ' ==== ', LoopCondition);
+                        //if FDebug then  WriteLn('Debug: Loop var ', LoopVar, ' = ', Item.ToString, ' ==== ', LoopCondition);
                         if (LoopCondition = '') or ToBool(EvaluateExpression(LoopCondition, LoopContext)) then
                         begin
                           var ForBody: String;
@@ -5265,20 +5355,17 @@ begin
                             ForBody := Copy(Template, BodyStart, ElsePos - BodyStart - Length('{% else %}'))
                           else
                             ForBody := Copy(Template, BodyStart, TagStart - BodyStart);
-                          if FDebug then
-                            WriteLn('Debug: Loop Body ', ForBody, LoopContext.ToString);
+                          //if FDebug then WriteLn('Debug: Loop Body ', ForBody, LoopContext.ToString);
                           var BodyResult := '';
                           ProcessTemplate(ForBody, LoopContext, BodyResult);
                           for var Pair in LoopContext do
                           begin
-                            if FDebug then
-                              WriteLn('Reading: ', Pair.Key, ' = ', Pair.Value.ToString);
+                            //if FDebug then WriteLn('Reading: ', Pair.Key, ' = ', Pair.Value.ToString);
                             LocalContext.AddOrSetValue(Pair.Key, Pair.Value);
                           end;
                           if BodyResult <> '' then
                             SB.Append(BodyResult);
-                          if FDebug then
-                            WriteLn('Debug: For body result = ', BodyResult);
+                          //if FDebug then WriteLn('Debug: For body result = ', BodyResult);
                         end;
                       finally
                         LoopContext.Free;
@@ -5298,8 +5385,7 @@ begin
                         for var Pair2 in LocalContext do
                           LoopContext.AddOrSetValue(Pair2.Key, Pair2.Value);
                         LoopContext.AddOrSetValue(LoopVar, Pair.Value);
-                        if FDebug then
-                          WriteLn('Debug: Loop var ', LoopVar, ' = ', Pair.Value.ToString);
+                        //if FDebug then WriteLn('Debug: Loop var ', LoopVar, ' = ', Pair.Value.ToString);
                         if (LoopCondition = '') or ToBool(EvaluateExpression(LoopCondition, LoopContext)) then
                         begin
                           var ForBody: String;
@@ -5310,8 +5396,7 @@ begin
                           var BodyResult := '';
                           ProcessTemplate(ForBody, LoopContext, BodyResult);
                           SB.Append(BodyResult);
-                          if FDebug then
-                            WriteLn('Debug: For body result = ', BodyResult);
+                          //if FDebug then WriteLn('Debug: For body result = ', BodyResult);
                           // Update LocalContext with all changes from LoopContext to persist changes across iterations
                           for var Pair2 in LoopContext do
                             LocalContext.AddOrSetValue(Pair2.Key, Pair2.Value);
@@ -5337,8 +5422,7 @@ begin
                         for var Pair in LocalContext do
                           LoopContext.AddOrSetValue(Pair.Key, Pair.Value);
                         LoopContext.AddOrSetValue(LoopVar, Item);
-                        if FDebug then
-                          WriteLn('Debug: Loop var ', LoopVar, ' = ', Item.ToString);
+                        //if FDebug then WriteLn('Debug: Loop var ', LoopVar, ' = ', Item.ToString);
                         if (LoopCondition = '') or ToBool(EvaluateExpression(LoopCondition, LoopContext)) then
                         begin
                           var ForBody: String;
@@ -5349,8 +5433,7 @@ begin
                           var BodyResult := '';
                           ProcessTemplate(ForBody, LoopContext, BodyResult);
                           SB.Append(BodyResult);
-                          if FDebug then
-                            WriteLn('Debug: For body result = ', BodyResult);
+                          //if FDebug then WriteLn('Debug: For body result = ', BodyResult);
                           // Update LocalContext with all changes from LoopContext to persist changes across iterations
                           for var Pair in LoopContext do
                             LocalContext.AddOrSetValue(Pair.Key, Pair.Value);
@@ -5367,8 +5450,7 @@ begin
                     var ElseBody := '';
                     ProcessTemplate(Body, LocalContext, ElseBody);
                     SB.Append(ElseBody);
-                    if FDebug then
-                      WriteLn('Debug: For else body result = ', ElseBody);
+                    //if FDebug then WriteLn('Debug: For else body result = ', ElseBody);
                   end;
                   Break;
                 end;

@@ -27,6 +27,7 @@ type
     procedure TestSetVariableArrayWithMerge;
     procedure TestSetVariableArray;
     procedure TestIncrementingVariable;
+    procedure TestComplexStringJSON;
 
     // TestTags
     procedure TestTagsWithBlockEmpty;
@@ -175,6 +176,9 @@ type
     procedure TestMergeTwoArrays;
     procedure TestJSONDecode;
     procedure TestDumpJSONDecode;
+
+    //Test Number format
+    procedure TestNumberFormat;
   end;
 
 implementation
@@ -505,6 +509,19 @@ begin
   TemplateOrContent := '{% set trees = [{"name": "Beech"}, {"name": "Oak"}, {"name": "Poplar"}]%}{%for a in trees%}{% if a.name == "Oak" %}OK{% else %}NO{% endif %}{%endfor%}';
   ReturnValue := FTina4Twig.Render(TemplateOrContent);
   Check(ReturnValue = 'NOOKNO', TemplateOrContent + ' - Should be NOOKNO, got ' + ReturnValue);
+end;
+
+procedure TestTTina4Twig.TestComplexStringJSON;
+var
+  ReturnValue, TemplateOrContent: string;
+begin
+  FTina4Twig.SetVariable('error', '{"statusCode":"0","response":"{\"error\": \"Error sending data: (12029) A connection with the server could not be established\"}"}');
+  ReturnValue := FTina4Twig.Render(
+  '{% if error %}{% set message = error | json_decode %}{% if message.response %}{% set message = message.response | json_decode %}{% endif %}{% if message.error %}<h3 class="error-message">{{ message.error }}</h3>{% endif %}{% if message.message.error_description %}<h3 class="error-message">{{ message.message.error_description }}</h3>{% endif %}{% endif %}');
+
+  Check(ReturnValue = '<h3 class="error-message">Error sending data: (12029) A connection with the server could not be established</h3>', TemplateOrContent + ' - Should be <h3 class="error-message">Error sending data: (12029) A connection with the server could not be established</h3>, got ' + ReturnValue);
+
+
 end;
 
 procedure TestTTina4Twig.TestComplexDateOffsetDependencies;
@@ -1243,6 +1260,15 @@ begin
   TemplateOrContent := '{% set numbers = [5, 2, 8, 1] %}{{ numbers|min }}';
   ReturnValue := FTina4Twig.Render(TemplateOrContent);
   Check(ReturnValue = '1', TemplateOrContent + ' - Should be 1, got ' + ReturnValue);
+end;
+
+procedure TestTTina4Twig.TestNumberFormat;
+var
+  ReturnValue, TemplateOrContent: string;
+begin
+  TemplateOrContent := '{{ -9800.333|number_format(2, ".", ",") }}{{ (-9800.333)|number_format(2, ".", ",")}}';
+  ReturnValue := FTina4Twig.Render(TemplateOrContent);
+  Check(ReturnValue = '-9-9,800.33', TemplateOrContent + ' - Should be -9-9,800.33, got ' + ReturnValue);
 end;
 
 procedure TestTTina4Twig.TestMinMaxNumericMax;

@@ -7,7 +7,11 @@ uses JSON, System.SysUtils, FireDAC.DApt, FireDAC.Stan.Intf, System.RegularExpre
   FireDAC.Phys.Intf, FireDAC.Stan.Def, FireDAC.Stan.Pool, FireDAC.Stan.Async,
   FireDAC.Phys, FireDAC.ConsoleUI.Wait, FireDAC.Comp.DataSet,
   Data.DB, FireDAC.Comp.Client, FireDAC.Stan.Param, System.NetEncoding, System.DateUtils,
-  System.Classes, System.Generics.Collections, System.Net.HttpClientComponent, System.Net.URLClient, System.Net.HttpClient,
+  System.Classes, System.Generics.Collections, System.Net.HttpClientComponent,
+  System.IOUtils,
+  System.Net.Mime,
+  System.Net.URLClient,
+  System.Net.HttpClient,
   System.Variants,
   {$IFNDEF LINUX}
   FMX.Graphics,
@@ -62,6 +66,7 @@ type
   {$IFNDEF LINUX}
   function BitmapToBase64EncodedString(Bitmap: FMX.Graphics.TBitmap; Resize: Boolean = True; Width: Integer = 256; Height: Integer = 256): String;
   {$ENDIF}
+  function FileToBase64(const FilePath: string): string;
   {$IFDEF SKIA}
   function BitmapToSkiaWepPEncodedString(Bitmap: FMX.Graphics.TBitmap; Quality: Integer=80) : String;
   {$ENDIF}
@@ -71,7 +76,9 @@ type
   function GetJSONFromTable(Table: TFDTable; DataSetName: String = 'records'; IgnoreFields: String = ''; IgnoreBlanks: Boolean = False): TJSONObject; overload;
   function SendHttpRequest(var StatusCode: Integer; BaseURL: String; EndPoint: String = ''; QueryParams: String = ''; Body: String=''; ContentType: String = 'application/json';
     ContentEncoding : String = 'utf-8'; Username:String = ''; Password: String = ''; CustomHeaders: TURLHeaders = nil; UserAgent: String = 'Tina4Delphi'; RequestType: TTina4RequestType = Get;
-    ReadTimeOut: Integer = 10000; ConnectTimeOut: Integer = 5000): TBytes;
+    ReadTimeOut: Integer = 10000; ConnectTimeOut: Integer = 5000; RequestContentType: String = ''): TBytes;
+  function SendMultipartFormData(var StatusCode: Integer;  const BaseURL, EndPoint: string;  const FormFields: array of string; const Files: array of string;  QueryParams: string = '';  Username: string = '';  Password: string = '';
+      CustomHeaders: TURLHeaders = nil; UserAgent: string = 'Tina4Delphi';  ReadTimeout: Integer = 30000; ConnectTimeout: Integer = 10000 ): TBytes;
   function StrToJSONObject(JSON:String): TJSONObject;
   function StrToJSONValue(JSON:String): TJSONValue;
   function BytesToJSONObject(JSON:TBytes): TJSONObject;
@@ -167,6 +174,10 @@ begin
     Result := False;
   end;
 end;
+
+
+
+
 
 /// <summary> Gets a GUID
 /// </summary>
@@ -333,6 +344,75 @@ begin
   end;
 end;
 {$ENDIF}
+
+
+/// <summary>
+/// Converts the contents of a file to a Base64-encoded string.
+/// </summary>
+/// <param name="FilePath">
+/// Full path to the file that should be encoded (local file system).
+/// The file must exist and be readable by the current process.
+/// </param>
+/// <returns>
+/// A string containing the complete Base64-encoded representation of the file's binary content.
+/// The output uses standard Base64 alphabet (A-Z, a-z, 0-9, +, /) with padding (=) as needed.
+/// No line breaks are inserted (single continuous string).
+/// </returns>
+/// <remarks>
+/// <para>
+/// This function reads the entire file into memory to perform the encoding.
+/// It is suitable for small to medium-sized files (typically < 50–100 MB depending on available RAM).
+/// For very large files (>200 MB), consider a streaming approach that writes chunks incrementally.
+/// </para>
+/// <para>
+/// Uses <c>System.NetEncoding.TNetEncoding.Base64.Encode</c> which is cross-platform
+/// (works in both VCL and FireMonkey applications on Windows, macOS, iOS, Android).
+/// </para>
+/// <para>
+/// Exceptions:
+/// - <c>EFileNotFoundException</c> – if the file does not exist
+/// - <c>EStreamError</c> or other I/O exceptions – if the file cannot be opened or read
+/// </para>
+/// </remarks>
+/// <exception cref="EFileNotFoundException">
+/// Raised when the specified file does not exist.
+/// </exception>
+/// <example>
+/// <code>
+/// var
+///   Base64Data: string;
+/// begin
+///   try
+///     Base64Data := FileToBase64('C:\Users\Andre\Documents\profile.jpg');
+///     Memo1.Lines.Add('Base64 length: ' + Length(Base64Data).ToString);
+///     // Optional: save to text file
+///     TFile.WriteAllText('profile.base64.txt', Base64Data);
+///   except
+///     on E: Exception do
+///       ShowMessage('Error encoding file: ' + E.Message);
+///   end;
+/// end;
+/// </code>
+/// </example>
+/// <seealso cref="System.NetEncoding.TNetEncoding.Base64"/>
+/// <seealso cref="TFileStream"/>
+function FileToBase64(const FilePath: string): string;
+var
+  FileStream: TFileStream;
+  Base64EncodedStream: TStringStream;
+begin
+  if not FileExists(FilePath) then
+    raise EFileNotFoundException.CreateFmt('File not found: %s', [FilePath]);
+
+  try
+    FileStream := TFileStream.Create(FilePath, fmOpenRead or fmShareDenyWrite);
+    TNetEncoding.Base64.Encode(FileStream, Base64EncodedStream);
+    Result := Base64EncodedStream.DataString;
+  finally
+    Base64EncodedStream.Free;
+    FileStream.Free;
+  end;
+end;
 
 
 {$IFDEF SKIA}
@@ -768,7 +848,7 @@ end;
 /// </returns>
 function SendHttpRequest(var StatusCode: Integer; BaseURL: String; EndPoint: String = ''; QueryParams: String = ''; Body: String=''; ContentType: String = 'application/json';
   ContentEncoding : String = 'utf-8'; Username:String = ''; Password: String = ''; CustomHeaders: TURLHeaders = nil; UserAgent: String = 'Tina4Delphi';
-  RequestType: TTina4RequestType = Get; ReadTimeOut: Integer = 10000; ConnectTimeOut: Integer = 5000): TBytes;
+  RequestType: TTina4RequestType = Get; ReadTimeOut: Integer = 10000; ConnectTimeOut: Integer = 5000; RequestContentType: String = ''): TBytes;
 var
   HttpClient: TNetHTTPClient;
   HTTPRequest: TNetHTTPRequest;
@@ -838,7 +918,11 @@ begin
 
 
       HTTPRequest.Client := HttpClient;
-      HTTPRequest.Client.ContentType := ContentType;
+      if RequestContentType = '' then
+      begin
+        RequestContentType := ContentType;
+      end;
+      HTTPRequest.Client.ContentType := RequestContentType;
       HTTPRequest.Client.Accept := ContentType;
       HTTPRequest.Client.AcceptEncoding := ContentEncoding;
       HTTPRequest.Client.AutomaticDecompression  := [THTTPCompressionMethod.Any];
@@ -898,6 +982,213 @@ begin
     end;
   end;
 end;
+
+/// <summary>
+/// Sends a multipart/form-data HTTP POST request to a REST endpoint, suitable for file uploads
+/// combined with regular form fields.
+/// </summary>
+/// <param name="StatusCode">
+/// Output parameter that receives the HTTP status code returned by the server
+/// (e.g. 200 for success, 400/401/500 for errors).
+/// </param>
+/// <param name="BaseURL">
+/// The base URL of the REST service (e.g. https://api.example.com/v1).
+/// Must not end with a slash unless the endpoint expects it.
+/// </param>
+/// <param name="EndPoint">
+/// The specific endpoint path to append to BaseURL (e.g. upload or files/create).
+/// Can be empty if the full path is already in BaseURL.
+/// </param>
+/// <param name="FormFields">
+/// Open array of strings containing name-value pairs for regular form fields.
+/// Even indices (0, 2, 4, ...) = field names<br/>
+/// Odd indices (1, 3, 5, ...) = field values<br/>
+/// Example: ['userId', '123', 'description', 'My document']
+/// Must contain an even number of elements.
+/// </param>
+/// <param name="Files">
+/// Open array of strings containing file field names and their corresponding file paths.
+/// Even indices = form field name for the file (e.g. 'photo', 'document')<br/>
+/// Odd indices = full local file path (e.g. 'C:\temp\image.jpg')<br/>
+/// Example: ['photo', 'C:\temp\photo.jpg', 'attachment', 'D:\files\report.pdf']
+/// Must contain an even number of elements.
+/// </param>
+/// <param name="QueryParams">
+/// Optional query string to append to the URL (without the leading ?).
+/// Format: key1=value1&key2=value2
+/// </param>
+/// <param name="Username">
+/// Optional username for HTTP Basic Authentication.
+/// </param>
+/// <param name="Password">
+/// Optional password for HTTP Basic Authentication (used together with Username).
+/// </param>
+/// <param name="CustomHeaders">
+/// Optional list of additional HTTP headers in the form "Header-Name: value".
+/// Can be nil.
+/// </param>
+/// <param name="UserAgent">
+/// The User-Agent string to send in the request header.
+/// Default: 'Tina4Delphi'
+/// </param>
+/// <param name="ReadTimeout">
+/// Read/response timeout in milliseconds.
+/// Default: 30000 (30 seconds)
+/// </param>
+/// <param name="ConnectTimeout">
+/// Connection timeout in milliseconds.
+/// Default: 10000 (10 seconds)
+/// </param>
+/// <returns>
+/// The raw response body as a byte array (TBytes).<br/>
+/// On success: usually the JSON/text/binary content returned by the server.<br/>
+/// On error: UTF-8 encoded JSON string in the form {"error": "message"}
+/// </returns>
+/// <remarks>
+/// <para>
+/// This function performs an HTTP POST with multipart/form-data content type.
+/// It automatically handles boundary generation, field encoding, and file attachment.
+/// </para>
+/// <para>
+/// The function uses TMultipartFormData internally (System.Net.Mime) and is cross-platform
+/// (works in both VCL and FMX applications).
+/// </para>
+/// <para>
+/// If an exception occurs during the request (network error, invalid URL, file not found, etc.),
+/// the returned TBytes contains a simple JSON error message.
+/// </para>
+/// <para>
+/// Authentication is handled via preemptive Basic Auth when Username is provided.
+/// Bearer tokens or other auth methods should be added via CustomHeaders.
+/// </para>
+/// </remarks>
+/// <example>
+/// <code>
+/// var
+///   Status: Integer;
+///   Response: TBytes;
+/// begin
+///   Response := SendMultipartFormData(
+///     Status,
+///     'https://api.example.com',
+///     'upload/profile',
+///     ['userId', '1001', 'caption', 'New avatar'],
+///     ['avatar', 'C:\Users\Andre\Pictures\avatar.jpg'],
+///     'api_key=xyz123',
+///     'myuser',
+///     'secretpass'
+///   );
+///
+///   if Status = 200 then
+///     Memo1.Lines.Text := TEncoding.UTF8.GetString(Response)
+///   else
+///     ShowMessage('Upload failed: ' + Status.ToString);
+/// end;
+/// </code>
+/// </example>
+function SendMultipartFormData(
+  var StatusCode: Integer;
+  const BaseURL, EndPoint: string;
+  const FormFields: array of string;           // even indices = names, odd = values
+  const Files: array of string;                // even = field name, odd = full file path
+  QueryParams: string = '';
+  Username: string = '';
+  Password: string = '';
+  CustomHeaders: TURLHeaders = nil;
+  UserAgent: string = 'Tina4Delphi';
+  ReadTimeout: Integer = 30000;
+  ConnectTimeout: Integer = 10000
+): TBytes;
+var
+  HttpClient: TNetHTTPClient;
+  Request: TNetHTTPRequest;
+  Response: IHTTPResponse;
+  FormData: TMultipartFormData;
+  Url: string;
+  Header: TNetHeader;
+  ResponseStream: TBytesStream;
+begin
+  Result := nil;
+  StatusCode := 0;
+
+  FormData := TMultipartFormData.Create;
+  try
+    // Add regular form fields (name-value pairs)
+    var i := Low(FormFields);
+    while i <= High(FormFields) - 1 do
+    begin
+      FormData.AddField(FormFields[i], FormFields[i + 1]);
+      Inc(i, 2);
+    end;
+
+    // Add files (same pattern)
+    i := Low(Files);
+    while i <= High(Files) - 1 do
+    begin
+      FormData.AddFile(Files[i], Files[i + 1]);  // field name, file path
+      Inc(i, 2);
+    end;
+
+    // Build URL
+    Url := BaseURL;
+    if (EndPoint <> '') then
+      Url := Url + '/' + EndPoint.Trim(['/']);
+    if QueryParams <> '' then
+      Url := Url + '?' + QueryParams;
+
+    HttpClient := TNetHTTPClient.Create(nil);
+    try
+      //HttpClient.ContentType := 'multipart/form-data';
+      HttpClient.ConnectionTimeout := ConnectTimeout;
+      HttpClient.ResponseTimeout   := ReadTimeout;
+      HttpClient.HandleRedirects   := True;
+      HttpClient.UserAgent         := UserAgent;
+
+      if Username <> '' then
+      begin
+        HttpClient.CredentialsStorage.AddCredential(
+          TCredentialsStorage.TCredential.Create(
+            TAuthTargetType.Server, '', Url, Username, Password));
+        HttpClient.PreemptiveAuthentication := True;
+      end;
+
+      if Assigned(CustomHeaders) then
+      begin
+        for Header in CustomHeaders do
+        begin
+          HttpClient.CustHeaders.Add(Header);
+        end;
+      end;
+
+      Request := TNetHTTPRequest.Create(nil);
+      try
+        Request.Client := HttpClient;
+
+        ResponseStream := TBytesStream.Create;
+        try
+          Response := Request.Post(Url, FormData, ResponseStream);
+          StatusCode := Response.StatusCode;
+
+          ResponseStream.Position := 0;
+          SetLength(Result, ResponseStream.Size);
+          if Result <> nil then
+            Move(ResponseStream.Bytes[0], Result[0], ResponseStream.Size);
+
+        except
+          on E: Exception do
+            Result := TEncoding.UTF8.GetBytes('{"error": "' + E.Message + '"}');
+        end;
+      finally
+        Request.Free;
+      end;
+    finally
+      HttpClient.Free;
+    end;
+  finally
+    FormData.Free;
+  end;
+end;
+
 
 /// <summary> Converts a String into a TJSONObject
 /// </summary>

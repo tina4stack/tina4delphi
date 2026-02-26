@@ -1401,38 +1401,47 @@ begin
         try
           IndexStringList.DelimitedText := IndexedFieldNames;
 
-          MemTable.Filtered := False;
-          MemTable.Filter := '';
+          // Build parallel arrays of field names and values for Locate
+          var LocateFields: String := '';
+          var LocateValues: Variant;
 
-          for var I := 0 to IndexStringList.Count-1 do
+          if IndexStringList.Count = 1 then
           begin
-            if (MemTable.Filter <> '') then
-            begin
-              MemTable.Filter := MemTable.Filter +' and ';
-            end;
-
+            LocateFields := IndexStringList[0];
             var JSONKeyValue: String := '';
-            // Try the field name directly first
-            if not JSONRecord.TryGetValue<string>(IndexStringList[I], JSONKeyValue) then
+            if not JSONRecord.TryGetValue<string>(IndexStringList[0], JSONKeyValue) then
             begin
-              // If not found and we're transforming to snake_case, try the camelCase version
               if TransformFieldNamesToSnakeCase then
-                JSONRecord.TryGetValue<string>(CamelCase(IndexStringList[I]), JSONKeyValue);
+                JSONRecord.TryGetValue<string>(CamelCase(IndexStringList[0]), JSONKeyValue);
             end;
-
-            MemTable.Filter := MemTable.Filter + IndexStringList[I] +' = '+QuotedStr(JSONKeyValue);
-          end;
-
-          MemTable.Filtered := True;
-
-          if MemTable.IsEmpty then   //No record found
-          begin
-            MemTable.Filtered := False;
-            MemTable.Append;
+            LocateValues := JSONKeyValue;
           end
             else
           begin
+            LocateValues := VarArrayCreate([0, IndexStringList.Count - 1], varVariant);
+            for var I := 0 to IndexStringList.Count-1 do
+            begin
+              if LocateFields <> '' then
+                LocateFields := LocateFields + ';';
+              LocateFields := LocateFields + IndexStringList[I];
+
+              var JSONKeyValue: String := '';
+              if not JSONRecord.TryGetValue<string>(IndexStringList[I], JSONKeyValue) then
+              begin
+                if TransformFieldNamesToSnakeCase then
+                  JSONRecord.TryGetValue<string>(CamelCase(IndexStringList[I]), JSONKeyValue);
+              end;
+              LocateValues[I] := JSONKeyValue;
+            end;
+          end;
+
+          if MemTable.Locate(LocateFields, LocateValues, []) then
+          begin
             MemTable.Edit;
+          end
+            else
+          begin
+            MemTable.Append;
           end;
         finally
           IndexStringList.Free;

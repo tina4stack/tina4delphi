@@ -152,6 +152,7 @@ type
     ExplicitHeight: Single;
     Display: string;
     WhiteSpace: string;
+    BoxSizing: string;
     class function Default: TComputedStyle; static;
     class function ForTag(Tag: THTMLTag; const ParentStyle: TComputedStyle; StyleSheet: TCSSStyleSheet = nil): TComputedStyle; static;
     class procedure ApplyDeclarations(Decls: TCSSDeclarations; var Style: TComputedStyle; const ParentStyle: TComputedStyle); static;
@@ -1097,7 +1098,8 @@ end;
 
 class function THTMLParser.IsBlockTag(const Name: string): Boolean;
 begin
-  Result := SameText(Name, 'div') or SameText(Name, 'p') or
+  Result := SameText(Name, 'html') or SameText(Name, 'body') or
+    SameText(Name, 'div') or SameText(Name, 'p') or
     SameText(Name, 'h1') or SameText(Name, 'h2') or SameText(Name, 'h3') or
     SameText(Name, 'h4') or SameText(Name, 'h5') or SameText(Name, 'h6') or
     SameText(Name, 'blockquote') or SameText(Name, 'pre') or
@@ -1381,6 +1383,7 @@ begin
   Result.ExplicitHeight := -1;
   Result.Display := 'block';
   Result.WhiteSpace := 'normal';
+  Result.BoxSizing := 'content-box';
 end;
 
 class function TComputedStyle.ParseColor(const S: string): TAlphaColor;
@@ -1558,6 +1561,7 @@ begin
   Result.ExplicitWidth := -1;
   Result.ExplicitHeight := -1;
   Result.Display := 'inline';
+  Result.BoxSizing := 'content-box';
 
   if Tag = nil then Exit;
   TN := Tag.TagName.ToLower;
@@ -1824,6 +1828,8 @@ begin
     Style.VerticalAlign := Temp.ToLower;
   if Decls.TryGetValue('white-space', Temp) then
     Style.WhiteSpace := Temp.ToLower;
+  if Decls.TryGetValue('box-sizing', Temp) then
+    Style.BoxSizing := Temp.ToLower;
 end;
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -2165,20 +2171,59 @@ begin
   end;
 end;
 
+function IsPercentageValue(Value: Single): Boolean; inline;
+begin
+  // Percentages are stored as negative values < -1 (e.g., -100 = 100%, -50 = 50%)
+  // The sentinel -1 means 'auto' / unset, so only values below -1 are percentages
+  Result := Value < -1.01;
+end;
+
+function ResolvePercentage(Value, Reference: Single): Single;
+begin
+  if IsPercentageValue(Value) then
+    Result := (-Value / 100) * Reference
+  else
+    Result := Value;
+end;
+
 procedure TLayoutEngine.LayoutBlock(Box: TLayoutBox; AvailWidth: Single);
 var
   ContentW, CursorY: Single;
   HasInline: Boolean;
+  ExplW: Single;
 begin
   // Calculate content width
   ContentW := AvailWidth - Box.Style.Margin.Left - Box.Style.Margin.Right -
     Box.Style.BorderWidth * 2 - Box.Style.Padding.Left - Box.Style.Padding.Right;
-  if Box.Style.ExplicitWidth > 0 then
-    ContentW := Box.Style.ExplicitWidth;
+
+  // Resolve explicit width (may be percentage of available width)
+  ExplW := Box.Style.ExplicitWidth;
+  if IsPercentageValue(ExplW) then
+  begin
+    // Percentage: resolve against available width
+    ExplW := ResolvePercentage(ExplW, AvailWidth);
+    // Percentage widths behave like border-box: value includes padding + border
+    ContentW := ExplW - Box.Style.BorderWidth * 2 -
+      Box.Style.Padding.Left - Box.Style.Padding.Right;
+  end
+  else if ExplW > 0 then
+  begin
+    if SameText(Box.Style.BoxSizing, 'border-box') then
+      // border-box: explicit width includes padding and border
+      ContentW := ExplW - Box.Style.BorderWidth * 2 -
+        Box.Style.Padding.Left - Box.Style.Padding.Right
+    else
+      // content-box (default): explicit width IS the content width
+      ContentW := ExplW;
+  end;
+
   if ContentW < 0 then ContentW := 0;
 
   Box.ContentWidth := ContentW;
   CursorY := 0;
+
+  // Resolve explicit height (may be percentage — but no reference, ignore for now)
+  // Percentages on height are complex in CSS; we skip them
 
   // Check if we have any inline children
   HasInline := False;
@@ -2220,7 +2265,13 @@ begin
   end;
 
   if Box.Style.ExplicitHeight > 0 then
-    Box.ContentHeight := Box.Style.ExplicitHeight;
+  begin
+    if SameText(Box.Style.BoxSizing, 'border-box') then
+      Box.ContentHeight := Box.Style.ExplicitHeight - Box.Style.BorderWidth * 2 -
+        Box.Style.Padding.Top - Box.Style.Padding.Bottom
+    else
+      Box.ContentHeight := Box.Style.ExplicitHeight;
+  end;
 end;
 
 procedure TLayoutEngine.LayoutInlineChildren(Box: TLayoutBox; AvailWidth: Single);
@@ -2458,8 +2509,20 @@ begin
     // Calculate content width
     var TableContentW := AvailWidth - Box.Style.Margin.Left - Box.Style.Margin.Right -
       Box.Style.BorderWidth * 2 - Box.Style.Padding.Left - Box.Style.Padding.Right;
-    if Box.Style.ExplicitWidth > 0 then
-      TableContentW := Box.Style.ExplicitWidth;
+    if IsPercentageValue(Box.Style.ExplicitWidth) then
+    begin
+      // Percentage width — resolved value includes padding + border
+      TableContentW := ResolvePercentage(Box.Style.ExplicitWidth, AvailWidth) -
+        Box.Style.BorderWidth * 2 - Box.Style.Padding.Left - Box.Style.Padding.Right;
+    end
+    else if Box.Style.ExplicitWidth > 0 then
+    begin
+      if SameText(Box.Style.BoxSizing, 'border-box') then
+        TableContentW := Box.Style.ExplicitWidth -
+          Box.Style.BorderWidth * 2 - Box.Style.Padding.Left - Box.Style.Padding.Right
+      else
+        TableContentW := Box.Style.ExplicitWidth;
+    end;
 
     // Equal column widths (simple approach)
     var CellBorderW := BorderW;
@@ -2614,7 +2677,7 @@ end;
 procedure TLayoutEngine.LayoutImage(Box: TLayoutBox; AvailWidth: Single);
 var
   Bmp: TBitmap;
-  W, H: Single;
+  W, H, ExplW, ExplH: Single;
 begin
   W := 100;
   H := 100;
@@ -2629,18 +2692,26 @@ begin
     end;
   end;
 
-  if Box.Style.ExplicitWidth > 0 then
+  // Resolve explicit dimensions (may be percentages)
+  ExplW := Box.Style.ExplicitWidth;
+  ExplH := Box.Style.ExplicitHeight;
+  if IsPercentageValue(ExplW) then
+    ExplW := ResolvePercentage(ExplW, AvailWidth);
+  if IsPercentageValue(ExplH) then
+    ExplH := 0; // Percentage height on images is not meaningful without container height
+
+  if ExplW > 0 then
   begin
-    var Ratio := Box.Style.ExplicitWidth / W;
-    W := Box.Style.ExplicitWidth;
-    if Box.Style.ExplicitHeight <= 0 then
+    var Ratio := ExplW / W;
+    W := ExplW;
+    if ExplH <= 0 then
       H := H * Ratio;
   end;
-  if Box.Style.ExplicitHeight > 0 then
+  if ExplH > 0 then
   begin
-    var Ratio := Box.Style.ExplicitHeight / H;
-    H := Box.Style.ExplicitHeight;
-    if Box.Style.ExplicitWidth <= 0 then
+    var Ratio := ExplH / H;
+    H := ExplH;
+    if ExplW <= 0 then
       W := W * Ratio;
   end;
 
@@ -2659,19 +2730,31 @@ end;
 procedure TLayoutEngine.LayoutFormControl(Box: TLayoutBox; AvailWidth: Single);
 var
   TN: string;
+  ExplW: Single;
 begin
   TN := '';
   if Assigned(Box.Tag) then
     TN := Box.Tag.TagName.ToLower;
 
+  // Check for explicit/percentage width
+  ExplW := Box.Style.ExplicitWidth;
+  if IsPercentageValue(ExplW) then
+    ExplW := ResolvePercentage(ExplW, AvailWidth);
+
   if TN = 'textarea' then
   begin
-    Box.ContentWidth := Min(300, AvailWidth);
+    if ExplW > 0 then
+      Box.ContentWidth := Min(ExplW, AvailWidth)
+    else
+      Box.ContentWidth := Min(300, AvailWidth);
     Box.ContentHeight := 60;
   end
   else if TN = 'select' then
   begin
-    Box.ContentWidth := Min(150, AvailWidth);
+    if ExplW > 0 then
+      Box.ContentWidth := Min(ExplW, AvailWidth)
+    else
+      Box.ContentWidth := Min(150, AvailWidth);
     Box.ContentHeight := 24;
   end
   else if TN = 'button' then
@@ -2709,7 +2792,10 @@ begin
     end
     else
     begin
-      Box.ContentWidth := Min(200, AvailWidth);
+      if ExplW > 0 then
+        Box.ContentWidth := Min(ExplW, AvailWidth)
+      else
+        Box.ContentWidth := Min(200, AvailWidth);
       Box.ContentHeight := 24;
     end;
   end;

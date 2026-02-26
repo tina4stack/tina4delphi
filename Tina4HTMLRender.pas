@@ -3470,38 +3470,40 @@ begin
 end;
 
 procedure TTina4HTMLRender.PositionFormControls;
-var
-  AbsX, AbsY: Single;
 
-  function FindBox(Parent, Target: TLayoutBox; var PX, PY: Single): Boolean;
+  function FindBoxAbsPos(Box, Target: TLayoutBox; OffX, OffY: Single;
+    out AX, AY: Single): Boolean;
+  var
+    AbsX, AbsY, CX, CY: Single;
   begin
-    if Parent = Target then Exit(True);
-    var CX := PX + Parent.ContentLeft;
-    var CY := PY + Parent.ContentTop;
-    for var C in Parent.Children do
+    AbsX := OffX + Box.X;
+    AbsY := OffY + Box.Y;
+    if Box = Target then
     begin
-      var SX := CX + C.X;
-      var SY := CY + C.Y;
-      if FindBox(C, Target, SX, SY) then
-      begin
-        PX := SX;
-        PY := SY;
-        Exit(True);
-      end;
+      AX := AbsX;
+      AY := AbsY;
+      Exit(True);
     end;
+    CX := AbsX + Box.ContentLeft;
+    CY := AbsY + Box.ContentTop;
+    for var C in Box.Children do
+      if FindBoxAbsPos(C, Target, CX, CY, AX, AY) then
+        Exit(True);
     Result := False;
   end;
 
+var
+  AX, AY: Single;
 begin
   if not Assigned(FLayoutEngine.Root) then Exit;
   for var I := 0 to FFormControls.Count - 1 do
   begin
     var Rec := FFormControls[I];
-    AbsX := 0;
-    AbsY := 0;
-    FindBox(FLayoutEngine.Root, Rec.Box, AbsX, AbsY);
-    Rec.Control.Position.X := AbsX;
-    Rec.Control.Position.Y := AbsY - FScrollY;
+    AX := 0;
+    AY := 0;
+    FindBoxAbsPos(FLayoutEngine.Root, Rec.Box, 0, 0, AX, AY);
+    Rec.Control.Position.X := AX;
+    Rec.Control.Position.Y := AY - FScrollY;
     Rec.Control.Width := Rec.Box.ContentWidth + Rec.Box.Style.Padding.Left + Rec.Box.Style.Padding.Right;
     Rec.Control.Height := Rec.Box.ContentHeight + Rec.Box.Style.Padding.Top + Rec.Box.Style.Padding.Bottom;
     Rec.Control.Visible := (Rec.Control.Position.Y + Rec.Control.Height > 0) and

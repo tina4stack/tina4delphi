@@ -1804,33 +1804,33 @@ class procedure TComputedStyle.ApplyDeclarations(Decls: TCSSDeclarations; var St
 var
   Temp: string;
 
-  function HasVar(const V: string): Boolean; inline;
+  function ShouldSkip(const V: string): Boolean; inline;
   begin
-    Result := V.Contains('var(');
+    Result := V.Contains('var(') or SameText(V.Trim, 'inherit');
   end;
 
 begin
-  if Decls.TryGetValue('color', Temp) and not HasVar(Temp) then
+  if Decls.TryGetValue('color', Temp) and not ShouldSkip(Temp) then
     Style.Color := ParseColor(Temp);
-  if Decls.TryGetValue('background-color', Temp) and not HasVar(Temp) then
+  if Decls.TryGetValue('background-color', Temp) and not ShouldSkip(Temp) then
     Style.BackgroundColor := ParseColor(Temp);
-  if Decls.TryGetValue('background', Temp) and not HasVar(Temp) then
+  if Decls.TryGetValue('background', Temp) and not ShouldSkip(Temp) then
   begin
     if not Temp.Contains('url') then
       Style.BackgroundColor := ParseColor(Temp);
   end;
-  if Decls.TryGetValue('font-family', Temp) and not HasVar(Temp) then
+  if Decls.TryGetValue('font-family', Temp) and not ShouldSkip(Temp) then
     Style.FontFamily := Temp.DeQuotedString('''').DeQuotedString('"');
-  if Decls.TryGetValue('font-size', Temp) and not HasVar(Temp) then
+  if Decls.TryGetValue('font-size', Temp) and not ShouldSkip(Temp) then
     Style.FontSize := ParseLength(Temp, ParentStyle.FontSize);
-  if Decls.TryGetValue('font-weight', Temp) and not HasVar(Temp) then
+  if Decls.TryGetValue('font-weight', Temp) and not ShouldSkip(Temp) then
     Style.Bold := SameText(Temp, 'bold') or SameText(Temp, 'bolder') or
       (StrToIntDef(Temp, 400) >= 500);
-  if Decls.TryGetValue('font-style', Temp) and not HasVar(Temp) then
+  if Decls.TryGetValue('font-style', Temp) and not ShouldSkip(Temp) then
     Style.Italic := SameText(Temp, 'italic') or SameText(Temp, 'oblique');
-  if Decls.TryGetValue('text-decoration', Temp) and not HasVar(Temp) then
+  if Decls.TryGetValue('text-decoration', Temp) and not ShouldSkip(Temp) then
     Style.TextDecoration := Temp.ToLower;
-  if Decls.TryGetValue('text-align', Temp) and not HasVar(Temp) then
+  if Decls.TryGetValue('text-align', Temp) and not ShouldSkip(Temp) then
   begin
     Temp := Temp.ToLower;
     if Temp = 'center' then Style.TextAlign := TTextAlign.Center
@@ -1838,7 +1838,7 @@ begin
     else if Temp = 'justify' then Style.TextAlign := TTextAlign.Leading
     else Style.TextAlign := TTextAlign.Leading;
   end;
-  if Decls.TryGetValue('line-height', Temp) and not HasVar(Temp) then
+  if Decls.TryGetValue('line-height', Temp) and not ShouldSkip(Temp) then
   begin
     var LH := StrToFloatDef(Temp.Replace('px', '').Replace('em', ''), 0);
     if LH > 0 then
@@ -1849,27 +1849,27 @@ begin
         Style.LineHeight := LH;
     end;
   end;
-  if Decls.TryGetValue('margin', Temp) and not HasVar(Temp) then
+  if Decls.TryGetValue('margin', Temp) and not ShouldSkip(Temp) then
     ParseEdgeShorthand(Temp, Style.Margin, Style.FontSize);
-  if Decls.TryGetValue('margin-top', Temp) and not HasVar(Temp) then
+  if Decls.TryGetValue('margin-top', Temp) and not ShouldSkip(Temp) then
     Style.Margin.Top := ParseLength(Temp, Style.FontSize);
-  if Decls.TryGetValue('margin-right', Temp) and not HasVar(Temp) then
+  if Decls.TryGetValue('margin-right', Temp) and not ShouldSkip(Temp) then
     Style.Margin.Right := ParseLength(Temp, Style.FontSize);
-  if Decls.TryGetValue('margin-bottom', Temp) and not HasVar(Temp) then
+  if Decls.TryGetValue('margin-bottom', Temp) and not ShouldSkip(Temp) then
     Style.Margin.Bottom := ParseLength(Temp, Style.FontSize);
-  if Decls.TryGetValue('margin-left', Temp) and not HasVar(Temp) then
+  if Decls.TryGetValue('margin-left', Temp) and not ShouldSkip(Temp) then
     Style.Margin.Left := ParseLength(Temp, Style.FontSize);
-  if Decls.TryGetValue('padding', Temp) and not HasVar(Temp) then
+  if Decls.TryGetValue('padding', Temp) and not ShouldSkip(Temp) then
     ParseEdgeShorthand(Temp, Style.Padding, Style.FontSize);
-  if Decls.TryGetValue('padding-top', Temp) and not HasVar(Temp) then
+  if Decls.TryGetValue('padding-top', Temp) and not ShouldSkip(Temp) then
     Style.Padding.Top := ParseLength(Temp, Style.FontSize);
-  if Decls.TryGetValue('padding-right', Temp) and not HasVar(Temp) then
+  if Decls.TryGetValue('padding-right', Temp) and not ShouldSkip(Temp) then
     Style.Padding.Right := ParseLength(Temp, Style.FontSize);
-  if Decls.TryGetValue('padding-bottom', Temp) and not HasVar(Temp) then
+  if Decls.TryGetValue('padding-bottom', Temp) and not ShouldSkip(Temp) then
     Style.Padding.Bottom := ParseLength(Temp, Style.FontSize);
-  if Decls.TryGetValue('padding-left', Temp) and not HasVar(Temp) then
+  if Decls.TryGetValue('padding-left', Temp) and not ShouldSkip(Temp) then
     Style.Padding.Left := ParseLength(Temp, Style.FontSize);
-  if Decls.TryGetValue('border', Temp) and not HasVar(Temp) then
+  if Decls.TryGetValue('border', Temp) and not ShouldSkip(Temp) then
   begin
     var BParts := Temp.Split([' ']);
     for var BP in BParts do
@@ -1889,21 +1889,21 @@ begin
         Style.BorderColor := ParseColor(BT);
     end;
   end;
-  if Decls.TryGetValue('border-color', Temp) and not HasVar(Temp) then
+  if Decls.TryGetValue('border-color', Temp) and not ShouldSkip(Temp) then
     Style.BorderColor := ParseColor(Temp);
-  if Decls.TryGetValue('border-width', Temp) and not HasVar(Temp) then
+  if Decls.TryGetValue('border-width', Temp) and not ShouldSkip(Temp) then
     Style.BorderWidth := ParseLength(Temp, Style.FontSize);
-  if Decls.TryGetValue('width', Temp) and not HasVar(Temp) then
+  if Decls.TryGetValue('width', Temp) and not ShouldSkip(Temp) then
     Style.ExplicitWidth := ParseLength(Temp, Style.FontSize);
-  if Decls.TryGetValue('height', Temp) and not HasVar(Temp) then
+  if Decls.TryGetValue('height', Temp) and not ShouldSkip(Temp) then
     Style.ExplicitHeight := ParseLength(Temp, Style.FontSize);
-  if Decls.TryGetValue('display', Temp) and not HasVar(Temp) then
+  if Decls.TryGetValue('display', Temp) and not ShouldSkip(Temp) then
     Style.Display := Temp.ToLower;
-  if Decls.TryGetValue('vertical-align', Temp) and not HasVar(Temp) then
+  if Decls.TryGetValue('vertical-align', Temp) and not ShouldSkip(Temp) then
     Style.VerticalAlign := Temp.ToLower;
-  if Decls.TryGetValue('white-space', Temp) and not HasVar(Temp) then
+  if Decls.TryGetValue('white-space', Temp) and not ShouldSkip(Temp) then
     Style.WhiteSpace := Temp.ToLower;
-  if Decls.TryGetValue('box-sizing', Temp) and not HasVar(Temp) then
+  if Decls.TryGetValue('box-sizing', Temp) and not ShouldSkip(Temp) then
     Style.BoxSizing := Temp.ToLower;
 end;
 

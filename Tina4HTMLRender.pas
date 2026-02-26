@@ -1480,10 +1480,38 @@ end;
 class function TComputedStyle.ParseLength(const S: string; EmSize: Single): Single;
 var
   Str: string;
+  CalcInner: string;
+  Terms: TArray<string>;
+  Term: string;
+  I: Integer;
 begin
   Str := S.Trim.ToLower;
   if Str = '' then Exit(0);
   if Str = 'auto' then Exit(-1);
+
+  // Handle calc() — sum all terms with units we support (rem, em, px, pt),
+  // ignore viewport-relative units (vw, vh, vmin, vmax) we can't resolve.
+  if Str.StartsWith('calc(') and Str.EndsWith(')') then
+  begin
+    CalcInner := Copy(Str, 6, Length(Str) - 6).Trim;
+    // Normalize: replace '-' with '+-' so we can split on '+'
+    CalcInner := CalcInner.Replace(' - ', ' + -');
+    Terms := CalcInner.Split(['+']);
+    Result := 0;
+    for I := 0 to High(Terms) do
+    begin
+      Term := Terms[I].Trim;
+      if Term = '' then Continue;
+      // Skip viewport-relative units and percentages we can't resolve in calc
+      if Term.EndsWith('vw') or Term.EndsWith('vh') or
+         Term.EndsWith('vmin') or Term.EndsWith('vmax') or
+         Term.EndsWith('%') then
+        Continue;
+      // Recursively parse each supported term
+      Result := Result + ParseLength(Term, EmSize);
+    end;
+    Exit;
+  end;
 
   if Str.EndsWith('rem') then
   begin
@@ -2523,7 +2551,9 @@ var
         Child.ContentWidth := AvailWidth - Child.Style.Margin.Left - Child.Style.Margin.Right -
           Child.Style.BorderWidth * 2 - Child.Style.Padding.Left - Child.Style.Padding.Right;
 
-      Child.ContentHeight := (CursorY + LineH) - StartY;
+      // Use the inline container's own line height for its content height,
+      // not the parent's LineH which may have grown from previous inline siblings.
+      Child.ContentHeight := (CursorY + GetLineHeight(Child.Style)) - StartY;
 
       // Make grandchild coordinates relative to the inline container's content area
       // (so PaintBox's ContentLeft/ContentTop offset works correctly).

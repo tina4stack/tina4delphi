@@ -16,7 +16,9 @@ program Tina4DelphiExampleTests;
 
 uses
   DUnitTestRunner,
-  TestTina4Twig in 'TestTina4Twig.pas';
+  TestTina4Twig in 'TestTina4Twig.pas',
+  TestTina4Core in 'TestTina4Core.pas',
+  TestTina4Components in 'TestTina4Components.pas';
 
 {$R *.RES}
 

@@ -8,7 +8,8 @@ uses
   System.UITypes, System.UIConsts,
   System.NetEncoding, System.Net.HttpClient,
   System.IOUtils, System.Hash,
-  FMX.Types, FMX.Controls, FMX.Graphics, FMX.TextLayout;
+  FMX.Types, FMX.Controls, FMX.Graphics, FMX.TextLayout,
+  FMX.Edit, FMX.StdCtrls, FMX.Memo, FMX.ListBox, FMX.Layouts;
 
 type
   // ─────────────────────────────────────────────────────────────────────────
@@ -243,6 +244,17 @@ type
   end;
 
   // ─────────────────────────────────────────────────────────────────────────
+  // Form Control Support Types
+  // ─────────────────────────────────────────────────────────────────────────
+
+  THTMLFormControlEvent = procedure(Sender: TObject; const Name, Value: string) of object;
+
+  TNativeFormControl = record
+    Control: TControl;
+    Box: TLayoutBox;
+  end;
+
+  // ─────────────────────────────────────────────────────────────────────────
   // HTML Render Control
   // ─────────────────────────────────────────────────────────────────────────
 
@@ -265,6 +277,11 @@ type
     FMouseDownOnScroll: Boolean;
     FScrollDragStart: Single;
     FScrollDragThumbStart: Single;
+    FFormControls: TList<TNativeFormControl>;
+    FOnChange: THTMLFormControlEvent;
+    FOnClick: THTMLFormControlEvent;
+    FOnEnter: THTMLFormControlEvent;
+    FOnExit: THTMLFormControlEvent;
     procedure SetHTML(const Value: TStringList);
     function GetHTML: TStringList;
     procedure SetCacheEnabled(Value: Boolean);
@@ -272,12 +289,19 @@ type
     procedure FHTMLChange(Sender: TObject);
     procedure OnImageLoaded(Sender: TObject);
     procedure DoLayout;
+    procedure ClearFormControls;
+    procedure CreateFormControls(Box: TLayoutBox; OffX, OffY: Single);
+    procedure PositionFormControls;
+    procedure HandleFormControlChange(Sender: TObject);
+    procedure HandleFormControlClick(Sender: TObject);
+    procedure HandleFormControlEnter(Sender: TObject);
+    procedure HandleFormControlExit(Sender: TObject);
+    function GetFormControlNameValue(Control: TControl; out AName, AValue: string): Boolean;
     procedure PaintBox(Canvas: TCanvas; Box: TLayoutBox; OffX, OffY: Single);
     procedure PaintBackground(Canvas: TCanvas; Box: TLayoutBox; X, Y: Single);
     procedure PaintBorder(Canvas: TCanvas; Box: TLayoutBox; X, Y: Single);
     procedure PaintText(Canvas: TCanvas; Box: TLayoutBox; X, Y: Single);
     procedure PaintImage(Canvas: TCanvas; Box: TLayoutBox; X, Y: Single);
-
     procedure PaintHR(Canvas: TCanvas; Box: TLayoutBox; X, Y: Single);
     procedure PaintListMarker(Canvas: TCanvas; Box: TLayoutBox; X, Y: Single);
     procedure PaintTableCellBorders(Canvas: TCanvas; Box: TLayoutBox; CX, CY: Single);
@@ -303,6 +327,10 @@ type
     property Debug: TStringList read FDebug write FDebug;
     property CacheEnabled: Boolean read FCacheEnabled write SetCacheEnabled default False;
     property CacheDir: string read FCacheDir write SetCacheDir;
+    property OnFormControlChange: THTMLFormControlEvent read FOnChange write FOnChange;
+    property OnFormControlClick: THTMLFormControlEvent read FOnClick write FOnClick;
+    property OnFormControlEnter: THTMLFormControlEvent read FOnEnter write FOnEnter;
+    property OnFormControlExit: THTMLFormControlEvent read FOnExit write FOnExit;
     property Align;
     property Position;
     property Width;
@@ -3141,12 +3169,15 @@ begin
   FMouseDownOnScroll := False;
   Width := 320;
   Height := 240;
+  FFormControls := TList<TNativeFormControl>.Create;
   ClipChildren := True;
   HitTest := True;
 end;
 
 destructor TTina4HTMLRender.Destroy;
 begin
+  ClearFormControls;
+  FFormControls.Free;
   FStyleSheet.Free;
   FLayoutEngine.Free;
   FParser.Free;

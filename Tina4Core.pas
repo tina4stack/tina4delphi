@@ -58,9 +58,7 @@ type
   TTina4AddRecordEvent = procedure (Sender: TObject; var MemTable: TFDMemTable) of object;
 
 
-
   function GetGUID : String;
-  procedure CreateLog(FileName: String; Text: String; LogPrefix: String = 'Default');
   function IsDate(const AValue: Variant): Boolean;
   function CamelCase(FieldName: String): String;
   function SnakeCase(FieldName: String): String;
@@ -78,9 +76,9 @@ type
   function GetJSONFromTable(Table: TFDTable; DataSetName: String = 'records'; IgnoreFields: String = ''; IgnoreBlanks: Boolean = False): TJSONObject; overload;
   function SendHttpRequest(var StatusCode: Integer; BaseURL: String; EndPoint: String = ''; QueryParams: String = ''; Body: String=''; ContentType: String = 'application/json';
     ContentEncoding : String = 'utf-8'; Username:String = ''; Password: String = ''; CustomHeaders: TURLHeaders = nil; UserAgent: String = 'Tina4Delphi'; RequestType: TTina4RequestType = Get;
-    ReadTimeOut: Integer = 10000; ConnectTimeOut: Integer = 5000; RequestContentType: String = ''; LogFile: String = ''): TBytes;
+    ReadTimeOut: Integer = 10000; ConnectTimeOut: Integer = 5000; RequestContentType: String = ''): TBytes;
   function SendMultipartFormData(var StatusCode: Integer;  const BaseURL, EndPoint: string;  const FormFields: array of string; const Files: array of string;  QueryParams: string = '';  Username: string = '';  Password: string = '';
-      CustomHeaders: TURLHeaders = nil; UserAgent: string = 'Tina4Delphi';  ReadTimeout: Integer = 30000; ConnectTimeout: Integer = 10000; LogFile: String = ''): TBytes;
+      CustomHeaders: TURLHeaders = nil; UserAgent: string = 'Tina4Delphi';  ReadTimeout: Integer = 30000; ConnectTimeout: Integer = 10000 ): TBytes;
   function StrToJSONObject(JSON:String): TJSONObject;
   function StrToJSONValue(JSON:String): TJSONValue;
   function BytesToJSONObject(JSON:TBytes): TJSONObject;
@@ -101,29 +99,17 @@ implementation
 
 uses Tina4RESTRequest;
 
-
-procedure CreateLog(FileName: String; Text: String; LogPrefix: String = 'Default');
+function JsonEscapeStr(const S: String): String;
 var
-  F: TextFile;
-
+  JsonStr: TJSONString;
 begin
-  AssignFile(F, FileName);
+  JsonStr := TJSONString.Create(S);
   try
-    if not FileExists(FileName) then
-    begin
-      Rewrite(F);
-    end
-      else
-    begin
-      Append(F);
-    end;
-
-    WriteLn(F, LogPrefix+'-'+DateTimeToStr(Now())+': '+Text);
-
+    // TJSONString.ToString returns the value with quotes and proper escaping
+    Result := JsonStr.Value;
   finally
-    CloseFile(F);
+    JsonStr.Free;
   end;
-
 end;
 
 function IsDate(const AValue: Variant): Boolean;
@@ -143,61 +129,63 @@ begin
 
   Result := False;
   try
-    // Handle non-string values (e.g., TDateTime)
-    if VarIsType(AValue, varDate) then
-    begin
-      Result := True;
-      Exit;
+    try
+      // Handle non-string values (e.g., TDateTime)
+      if VarIsType(AValue, varDate) then
+      begin
+        Result := True;
+        Exit;
+      end;
+
+      if (VarIsType(AValue, varInteger) or VarIsType(AValue, varSingle) or VarIsType(AValue, varDouble) or VarIsType(AValue, varCurrency)) then
+      begin
+        Exit;
+      end;
+
+      // Convert input to string for parsing
+      InputStr := VarToStr(AValue);
+
+      // Check if empty or null
+      if (InputStr = '') or (Length(InputStr) < 6)  then
+      begin
+        Exit;
+      end;
+
+      // Try parsing as ISO8601 (with or without milliseconds)
+      if TryISO8601ToDate(InputStr, DateValue) then
+      begin
+        Result := True;
+        Exit;
+      end;
+
+      // Try parsing as YYYY-MM-DD HH:MM:SS
+      FormatSettings.LongDateFormat := 'YYYY-MM-DD hh:nn:ss';
+      if TryStrToDateTime(InputStr, DateValue) then
+      begin
+        Result := True;
+        Exit;
+      end;
+
+      // Try parsing as YYYY-MM-DD
+      FormatSettings.ShortDateFormat := 'YYYY-MM-DD';
+      if TryStrToDate(InputStr, DateValue) then
+      begin
+        Result := True;
+        Exit;
+      end;
+
+      // Try parsing as MM/DD/YYYY
+      FormatSettings.ShortDateFormat := 'MM/DD/YYYY';
+      if TryStrToDate(InputStr, DateValue) then
+      begin
+        Result := True;
+        Exit;
+      end;
+    except
+      Result := False;
     end;
-
-    if (VarIsType(AValue, varInteger) or VarIsType(AValue, varSingle) or VarIsType(AValue, varDouble) or VarIsType(AValue, varCurrency)) then
-    begin
-      Exit;
-    end;
-
-    // Convert input to string for parsing
-    InputStr := VarToStr(AValue);
-
-    // Check if empty or null
-    if (InputStr = '') or (Length(InputStr) < 6)  then
-    begin
-      Exit;
-    end;
-
-    // Try parsing as ISO8601 (with or without milliseconds)
-    if TryISO8601ToDate(InputStr, DateValue) then
-    begin
-      Result := True;
-      Exit;
-    end;
-
-    // Try parsing as YYYY-MM-DD HH:MM:SS
-    FormatSettings.LongDateFormat := 'YYYY-MM-DD hh:nn:ss';
-    if TryStrToDateTime(InputStr, DateValue) then
-    begin
-      Result := True;
-      Exit;
-    end;
-
-    // Try parsing as YYYY-MM-DD
-    FormatSettings.ShortDateFormat := 'YYYY-MM-DD';
-    if TryStrToDate(InputStr, DateValue) then
-    begin
-      Result := True;
-      Exit;
-    end;
-
-    // Try parsing as MM/DD/YYYY
-    FormatSettings.ShortDateFormat := 'MM/DD/YYYY';
-    if TryStrToDate(InputStr, DateValue) then
-    begin
-      Result := True;
-      Exit;
-    end;
-
+  finally
     FormatSettings := ExistingFormat;
-  except
-    Result := False;
   end;
 end;
 
@@ -387,7 +375,7 @@ end;
 /// <remarks>
 /// <para>
 /// This function reads the entire file into memory to perform the encoding.
-/// It is suitable for small to medium-sized files (typically < 50–100 MB depending on available RAM).
+/// It is suitable for small to medium-sized files (typically < 50ï¿½100 MB depending on available RAM).
 /// For very large files (>200 MB), consider a streaming approach that writes chunks incrementally.
 /// </para>
 /// <para>
@@ -396,8 +384,8 @@ end;
 /// </para>
 /// <para>
 /// Exceptions:
-/// - <c>EFileNotFoundException</c> – if the file does not exist
-/// - <c>EStreamError</c> or other I/O exceptions – if the file cannot be opened or read
+/// - <c>EFileNotFoundException</c> ï¿½ if the file does not exist
+/// - <c>EStreamError</c> or other I/O exceptions ï¿½ if the file cannot be opened or read
 /// </para>
 /// </remarks>
 /// <exception cref="EFileNotFoundException">
@@ -430,8 +418,9 @@ begin
   if not FileExists(FilePath) then
     raise EFileNotFoundException.CreateFmt('File not found: %s', [FilePath]);
 
+  FileStream := TFileStream.Create(FilePath, fmOpenRead or fmShareDenyWrite);
+  Base64EncodedStream := TStringStream.Create();
   try
-    FileStream := TFileStream.Create(FilePath, fmOpenRead or fmShareDenyWrite);
     TNetEncoding.Base64.Encode(FileStream, Base64EncodedStream);
     Result := Base64EncodedStream.DataString;
   finally
@@ -874,7 +863,7 @@ end;
 /// </returns>
 function SendHttpRequest(var StatusCode: Integer; BaseURL: String; EndPoint: String = ''; QueryParams: String = ''; Body: String=''; ContentType: String = 'application/json';
   ContentEncoding : String = 'utf-8'; Username:String = ''; Password: String = ''; CustomHeaders: TURLHeaders = nil; UserAgent: String = 'Tina4Delphi';
-  RequestType: TTina4RequestType = Get; ReadTimeOut: Integer = 10000; ConnectTimeOut: Integer = 5000; RequestContentType: String = ''; LogFile: String = ''): TBytes;
+  RequestType: TTina4RequestType = Get; ReadTimeOut: Integer = 10000; ConnectTimeOut: Integer = 5000; RequestContentType: String = ''): TBytes;
 var
   HttpClient: TNetHTTPClient;
   HTTPRequest: TNetHTTPRequest;
@@ -883,7 +872,6 @@ var
   BytesStream : TBytesStream;
   Url: String;
   Header: TNetHeader;
-
 
 begin
   try
@@ -954,13 +942,6 @@ begin
       HTTPRequest.Client.AcceptEncoding := ContentEncoding;
       HTTPRequest.Client.AutomaticDecompression  := [THTTPCompressionMethod.Any];
 
-
-      if LogFile <> '' then
-      begin
-        CreateLog(LogFile, 'Headers: '+HTTPRequest.Client.CustHeaders.ToString);
-        CreateLog(LogFile, 'Body: '+Body);
-      end;
-
       BytesStream := TBytesStream.Create;
       try
         try
@@ -991,28 +972,14 @@ begin
 
           StatusCode := HTTPResponse.StatusCode;
 
-          if LogFile <> '' then
-          begin
-            CreateLog(LogFile, 'StatusCode: '+IntToStr(StatusCode));
-          end;
-
-          SetLength(Result, Length(BytesStream.Bytes));
-          Move(BytesStream.Bytes[0],Result[0],Length(BytesStream.Bytes));
-
-          if LogFile <> '' then
-          begin
-            CreateLog(LogFile, 'Result: '+Trim(StringOf(Result)));
-          end;
-
+          SetLength(Result, BytesStream.Size);
+          if BytesStream.Size > 0 then
+            Move(BytesStream.Bytes[0], Result[0], BytesStream.Size);
 
         except
           on E:Exception do
           begin
-            Result := TEncoding.UTF8.GetBytes('{"error": "'+E.Message+'"}');
-            if LogFile <> '' then
-            begin
-              CreateLog(LogFile, 'Error: '+E.Message);
-            end;
+            Result := TEncoding.UTF8.GetBytes('{"error": "'+JsonEscapeStr(E.Message)+'"}');
           end;
         end;
       finally
@@ -1027,7 +994,7 @@ begin
   except
     on E: Exception do
     begin
-      Result := TEncoding.UTF8.GetBytes('{"error": "'+E.Message+'"}');
+      Result := TEncoding.UTF8.GetBytes('{"error": "'+JsonEscapeStr(E.Message)+'"}');
     end;
   end;
 end;
@@ -1146,8 +1113,7 @@ function SendMultipartFormData(
   CustomHeaders: TURLHeaders = nil;
   UserAgent: string = 'Tina4Delphi';
   ReadTimeout: Integer = 30000;
-  ConnectTimeout: Integer = 10000;
-  LogFile: String = ''
+  ConnectTimeout: Integer = 10000
 ): TBytes;
 var
   HttpClient: TNetHTTPClient;
@@ -1226,7 +1192,7 @@ begin
 
         except
           on E: Exception do
-            Result := TEncoding.UTF8.GetBytes('{"error": "' + E.Message + '"}');
+            Result := TEncoding.UTF8.GetBytes('{"error": "' + JsonEscapeStr(E.Message) + '"}');
         end;
       finally
         Request.Free;

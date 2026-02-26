@@ -1485,7 +1485,12 @@ begin
   if Str = '' then Exit(0);
   if Str = 'auto' then Exit(-1);
 
-  if Str.EndsWith('em') then
+  if Str.EndsWith('rem') then
+  begin
+    // rem = root em; approximate as 16px base (since we don't track root font size)
+    Result := StrToFloatDef(Str.Replace('rem', ''), 0) * 16;
+  end
+  else if Str.EndsWith('em') then
   begin
     Result := StrToFloatDef(Str.Replace('em', ''), 0) * EmSize;
   end
@@ -1757,7 +1762,8 @@ begin
   if Decls.TryGetValue('font-size', Temp) then
     Style.FontSize := ParseLength(Temp, ParentStyle.FontSize);
   if Decls.TryGetValue('font-weight', Temp) then
-    Style.Bold := SameText(Temp, 'bold') or (StrToIntDef(Temp, 400) >= 700);
+    Style.Bold := SameText(Temp, 'bold') or SameText(Temp, 'bolder') or
+      (StrToIntDef(Temp, 400) >= 600);
   if Decls.TryGetValue('font-style', Temp) then
     Style.Italic := SameText(Temp, 'italic') or SameText(Temp, 'oblique');
   if Decls.TryGetValue('text-decoration', Temp) then
@@ -1807,11 +1813,17 @@ begin
     for var BP in BParts do
     begin
       var BT := BP.Trim.ToLower;
-      if (BT.EndsWith('px')) or (StrToFloatDef(BT, -1) >= 0) then
+      if BT = 'none' then
+      begin
+        Style.BorderWidth := 0;
+      end
+      else if (BT.EndsWith('px')) or (StrToFloatDef(BT, -1) >= 0) then
         Style.BorderWidth := StrToFloatDef(BT.Replace('px', ''), 1)
-      else if BT = 'solid' then
-        // border style is solid, default
-      else if BT <> 'none' then
+      else if (BT = 'solid') or (BT = 'dashed') or (BT = 'dotted') or
+              (BT = 'double') or (BT = 'groove') or (BT = 'ridge') or
+              (BT = 'inset') or (BT = 'outset') then
+        // border style — we only support solid rendering
+      else
         Style.BorderColor := ParseColor(BT);
     end;
   end;
@@ -1855,26 +1867,35 @@ begin
   inherited;
 end;
 
+function ResolveAutoMargin(V: Single): Single; inline;
+begin
+  // -1 is sentinel for 'auto', treat as 0 in layout calculations
+  if (V >= -1.01) and (V <= -0.99) then
+    Result := 0
+  else
+    Result := V;
+end;
+
 function TLayoutBox.MarginBoxWidth: Single;
 begin
-  Result := Style.Margin.Left + Style.BorderWidth + Style.Padding.Left +
-    ContentWidth + Style.Padding.Right + Style.BorderWidth + Style.Margin.Right;
+  Result := ResolveAutoMargin(Style.Margin.Left) + Style.BorderWidth + Style.Padding.Left +
+    ContentWidth + Style.Padding.Right + Style.BorderWidth + ResolveAutoMargin(Style.Margin.Right);
 end;
 
 function TLayoutBox.MarginBoxHeight: Single;
 begin
-  Result := Style.Margin.Top + Style.BorderWidth + Style.Padding.Top +
-    ContentHeight + Style.Padding.Bottom + Style.BorderWidth + Style.Margin.Bottom;
+  Result := ResolveAutoMargin(Style.Margin.Top) + Style.BorderWidth + Style.Padding.Top +
+    ContentHeight + Style.Padding.Bottom + Style.BorderWidth + ResolveAutoMargin(Style.Margin.Bottom);
 end;
 
 function TLayoutBox.ContentLeft: Single;
 begin
-  Result := Style.Margin.Left + Style.BorderWidth + Style.Padding.Left;
+  Result := ResolveAutoMargin(Style.Margin.Left) + Style.BorderWidth + Style.Padding.Left;
 end;
 
 function TLayoutBox.ContentTop: Single;
 begin
-  Result := Style.Margin.Top + Style.BorderWidth + Style.Padding.Top;
+  Result := ResolveAutoMargin(Style.Margin.Top) + Style.BorderWidth + Style.Padding.Top;
 end;
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -2187,14 +2208,29 @@ begin
     Result := Value;
 end;
 
+// Resolve 'auto' margins (-1 sentinel) to 0 for layout calculations
+function ResolveMargin(Value: Single): Single; inline;
+begin
+  // -1 is sentinel for 'auto', treat as 0; real negative margins are kept
+  if (Value >= -1.01) and (Value <= -0.99) then
+    Result := 0
+  else
+    Result := Value;
+end;
+
 procedure TLayoutEngine.LayoutBlock(Box: TLayoutBox; AvailWidth: Single);
 var
   ContentW, CursorY: Single;
   HasInline: Boolean;
   ExplW: Single;
+  MarginL, MarginR: Single;
 begin
+  // Resolve auto margins to 0 for layout width calculation
+  MarginL := ResolveMargin(Box.Style.Margin.Left);
+  MarginR := ResolveMargin(Box.Style.Margin.Right);
+
   // Calculate content width
-  ContentW := AvailWidth - Box.Style.Margin.Left - Box.Style.Margin.Right -
+  ContentW := AvailWidth - MarginL - MarginR -
     Box.Style.BorderWidth * 2 - Box.Style.Padding.Left - Box.Style.Padding.Right;
 
   // Resolve explicit width (may be percentage of available width)
@@ -2368,8 +2404,8 @@ var
       begin
         var TextH := MeasureTextHeight(Text, Child.Style, AvailWidth - CursorX);
         Frag.Text := Text;
-        Frag.X := CursorX;
-        Frag.Y := CursorY;
+        Frag.X := 0;  // relative to Child.X
+        Frag.Y := 0;  // relative to Child.Y
         Frag.W := AvailWidth - CursorX;
         Frag.H := TextH;
         Child.Fragments.Add(Frag);
@@ -2405,8 +2441,8 @@ var
         end;
 
         Frag.Text := Word;
-        Frag.X := CursorX;
-        Frag.Y := CursorY;
+        Frag.X := CursorX - Child.X;  // relative to text node start
+        Frag.Y := CursorY - Child.Y;  // relative to text node start
         Frag.W := WordW;
         Frag.H := WordH;
         Child.Fragments.Add(Frag);
@@ -2427,7 +2463,7 @@ var
           MaxY := Max(MaxY, F.Y + F.H);
         end;
         Child.ContentHeight := MaxY - MinY;
-        Child.ContentWidth := AvailWidth;
+        Child.ContentWidth := CursorX - Child.X;
       end;
       Exit;
     end;
@@ -2490,22 +2526,13 @@ var
       Child.ContentHeight := (CursorY + LineH) - StartY;
 
       // Make grandchild coordinates relative to the inline container's content area
-      // (so PaintBox's ContentLeft/ContentTop offset works correctly)
+      // (so PaintBox's ContentLeft/ContentTop offset works correctly).
+      // Fragment positions are already relative to their text node's X/Y, so they
+      // move automatically when the text node is repositioned — no separate adjustment needed.
       for var GrandChild in Child.Children do
       begin
         GrandChild.X := GrandChild.X - ContentOriginX;
         GrandChild.Y := GrandChild.Y - ContentOriginY;
-        // Also offset text fragments within text nodes
-        if GrandChild.Kind = lbkText then
-        begin
-          for var FI := 0 to GrandChild.Fragments.Count - 1 do
-          begin
-            var F := GrandChild.Fragments[FI];
-            F.X := F.X - ContentOriginX;
-            F.Y := F.Y - ContentOriginY;
-            GrandChild.Fragments[FI] := F;
-          end;
-        end;
       end;
 
       // Include full inline box height in line height
@@ -2528,6 +2555,101 @@ begin
     CursorY := CursorY + LineH;
 
   Box.ContentHeight := CursorY;
+
+  // Apply text-align: center or right by shifting element positions per line.
+  // Fragment positions are relative to their text node, so we compute absolute
+  // positions using Child.X/Y + Frag.X/Y for grouping and measurement, then
+  // shift fragment X values (relative shifts) per line.
+  if (Box.Style.TextAlign = TTextAlign.Center) or (Box.Style.TextAlign = TTextAlign.Trailing) then
+  begin
+    var LineYs: TList<Single> := TList<Single>.Create;
+    try
+      // Collect unique absolute line Y values
+      for var Child in Box.Children do
+      begin
+        if (Child.Kind = lbkBlock) or (Child.Kind = lbkTable) or
+           (Child.Kind = lbkListItem) or (Child.Kind = lbkHR) then
+          Continue;
+        if Child.Kind = lbkText then
+        begin
+          for var FI := 0 to Child.Fragments.Count - 1 do
+          begin
+            var AbsFragY := Child.Y + Child.Fragments[FI].Y;
+            var Found := False;
+            for var LY in LineYs do
+              if Abs(LY - AbsFragY) < 0.5 then begin Found := True; Break; end;
+            if not Found then
+              LineYs.Add(AbsFragY);
+          end;
+        end
+        else
+        begin
+          var Found := False;
+          for var LY in LineYs do
+            if Abs(LY - Child.Y) < 0.5 then begin Found := True; Break; end;
+          if not Found then
+            LineYs.Add(Child.Y);
+        end;
+      end;
+
+      // For each line, find the rightmost edge and shift all elements
+      for var LY in LineYs do
+      begin
+        var LineRight: Single := 0;
+        for var Child in Box.Children do
+        begin
+          if (Child.Kind = lbkBlock) or (Child.Kind = lbkTable) or
+             (Child.Kind = lbkListItem) or (Child.Kind = lbkHR) then
+            Continue;
+          if Child.Kind = lbkText then
+          begin
+            for var FI := 0 to Child.Fragments.Count - 1 do
+            begin
+              var AbsFragY := Child.Y + Child.Fragments[FI].Y;
+              if Abs(AbsFragY - LY) < 0.5 then
+                LineRight := Max(LineRight, Child.X + Child.Fragments[FI].X + Child.Fragments[FI].W);
+            end;
+          end
+          else if Abs(Child.Y - LY) < 0.5 then
+            LineRight := Max(LineRight, Child.X + Child.MarginBoxWidth);
+        end;
+
+        var Shift: Single := 0;
+        if Box.Style.TextAlign = TTextAlign.Center then
+          Shift := (AvailWidth - LineRight) / 2
+        else
+          Shift := AvailWidth - LineRight;
+        if Shift < 0 then Shift := 0;
+
+        if Shift > 0.5 then
+        begin
+          for var Child in Box.Children do
+          begin
+            if (Child.Kind = lbkBlock) or (Child.Kind = lbkTable) or
+               (Child.Kind = lbkListItem) or (Child.Kind = lbkHR) then
+              Continue;
+            if Child.Kind = lbkText then
+            begin
+              for var FI := 0 to Child.Fragments.Count - 1 do
+              begin
+                var AbsFragY := Child.Y + Child.Fragments[FI].Y;
+                if Abs(AbsFragY - LY) < 0.5 then
+                begin
+                  var F := Child.Fragments[FI];
+                  F.X := F.X + Shift;
+                  Child.Fragments[FI] := F;
+                end;
+              end;
+            end
+            else if Abs(Child.Y - LY) < 0.5 then
+              Child.X := Child.X + Shift;
+          end;
+        end;
+      end;
+    finally
+      LineYs.Free;
+    end;
+  end;
 end;
 
 procedure TLayoutEngine.LayoutTable(Box: TLayoutBox; AvailWidth: Single);
@@ -2584,7 +2706,8 @@ begin
     end;
 
     // Calculate content width
-    var TableContentW := AvailWidth - Box.Style.Margin.Left - Box.Style.Margin.Right -
+    var TableContentW := AvailWidth - ResolveMargin(Box.Style.Margin.Left) -
+      ResolveMargin(Box.Style.Margin.Right) -
       Box.Style.BorderWidth * 2 - Box.Style.Padding.Left - Box.Style.Padding.Right;
     if IsPercentageValue(Box.Style.ExplicitWidth) then
     begin
@@ -2637,20 +2760,43 @@ begin
 
         Cell.ContentWidth := CellContentW;
 
-        // Layout cell children as block
-        var CellCursorY: Single := 0;
+        // Determine if cell has inline content (use same logic as LayoutBlock)
+        var CellHasInline := False;
         for var CellChild in Cell.Children do
         begin
-          if (CellChild.Kind = lbkText) or (CellChild.Kind = lbkInline) then
+          if (CellChild.Kind = lbkImage) or (CellChild.Kind = lbkFormControl) or
+             (CellChild.Kind = lbkBR) or (CellChild.Kind = lbkInline) then
           begin
-            // Wrap in anonymous block for layout
-            LayoutInlineChildren(Cell, CellContentW);
-            CellCursorY := Cell.ContentHeight;
-            Break; // InlineChildren handles all children
+            CellHasInline := True;
+            Break;
           end
-          else
+          else if (CellChild.Kind = lbkText) and Assigned(CellChild.Tag) and
+                  (CellChild.Tag.Text.Trim <> '') then
           begin
-            LayoutBlock(CellChild, CellContentW);
+            CellHasInline := True;
+            Break;
+          end;
+        end;
+
+        // Layout cell children
+        var CellCursorY: Single := 0;
+        if CellHasInline then
+        begin
+          LayoutInlineChildren(Cell, CellContentW);
+          CellCursorY := Cell.ContentHeight;
+        end
+        else
+        begin
+          for var CellChild in Cell.Children do
+          begin
+            case CellChild.Kind of
+              lbkBlock: LayoutBlock(CellChild, CellContentW);
+              lbkTable: LayoutTable(CellChild, CellContentW);
+              lbkListItem: LayoutListItem(CellChild, CellContentW);
+              lbkHR: LayoutHR(CellChild, CellContentW);
+            else
+              LayoutBlock(CellChild, CellContentW);
+            end;
             CellChild.X := 0;
             CellChild.Y := CellCursorY;
             CellCursorY := CellCursorY + CellChild.MarginBoxHeight;
@@ -2660,7 +2806,7 @@ begin
           Cell.ContentHeight := CellCursorY;
 
         Cell.X := CellX;
-        Cell.Y := CursorY;
+        Cell.Y := 0;  // Cell position is relative to the row, not the table
         Cell.ContentWidth := CellContentW;
 
         RowH := Max(RowH, Cell.ContentHeight + Cell.Style.Padding.Top + Cell.Style.Padding.Bottom);
@@ -2693,7 +2839,8 @@ procedure TLayoutEngine.LayoutListItem(Box: TLayoutBox; AvailWidth: Single);
 var
   ContentW: Single;
 begin
-  ContentW := AvailWidth - Box.Style.Margin.Left - Box.Style.Margin.Right -
+  ContentW := AvailWidth - ResolveMargin(Box.Style.Margin.Left) -
+    ResolveMargin(Box.Style.Margin.Right) -
     Box.Style.BorderWidth * 2 - Box.Style.Padding.Left - Box.Style.Padding.Right;
   if ContentW < 0 then ContentW := 0;
 
@@ -2720,17 +2867,10 @@ begin
   begin
     // Shift inline content right for marker
     LayoutInlineChildren(Box, InnerW);
-    // Offset all fragments by MarkerW
+    // Offset children by MarkerW (fragments are relative to their text node,
+    // so they move automatically when Child.X is shifted)
     for var Child in Box.Children do
-    begin
       Child.X := Child.X + MarkerW;
-      for var I := 0 to Child.Fragments.Count - 1 do
-      begin
-        var F := Child.Fragments[I];
-        F.X := F.X + MarkerW;
-        Child.Fragments[I] := F;
-      end;
-    end;
   end
   else
   begin
@@ -2880,7 +3020,8 @@ end;
 
 procedure TLayoutEngine.LayoutHR(Box: TLayoutBox; AvailWidth: Single);
 begin
-  Box.ContentWidth := AvailWidth - Box.Style.Margin.Left - Box.Style.Margin.Right;
+  Box.ContentWidth := AvailWidth - ResolveMargin(Box.Style.Margin.Left) -
+    ResolveMargin(Box.Style.Margin.Right);
   Box.ContentHeight := 2;
 end;
 
@@ -3109,15 +3250,19 @@ end;
 procedure TTina4HTMLRender.PaintBackground(Canvas: TCanvas; Box: TLayoutBox; X, Y: Single);
 var
   R: TRectF;
+  ML, MT: Single;
 begin
   if Box.Style.BackgroundColor = TAlphaColors.Null then Exit;
 
+  ML := ResolveAutoMargin(Box.Style.Margin.Left);
+  MT := ResolveAutoMargin(Box.Style.Margin.Top);
+
   R := RectF(
-    X + Box.Style.Margin.Left,
-    Y + Box.Style.Margin.Top,
-    X + Box.Style.Margin.Left + Box.Style.BorderWidth * 2 +
+    X + ML,
+    Y + MT,
+    X + ML + Box.Style.BorderWidth * 2 +
       Box.Style.Padding.Left + Box.ContentWidth + Box.Style.Padding.Right,
-    Y + Box.Style.Margin.Top + Box.Style.BorderWidth * 2 +
+    Y + MT + Box.Style.BorderWidth * 2 +
       Box.Style.Padding.Top + Box.ContentHeight + Box.Style.Padding.Bottom
   );
 
@@ -3129,14 +3274,18 @@ end;
 procedure TTina4HTMLRender.PaintBorder(Canvas: TCanvas; Box: TLayoutBox; X, Y: Single);
 var
   R: TRectF;
+  ML, MT: Single;
 begin
   if Box.Style.BorderWidth <= 0 then Exit;
+
+  ML := ResolveAutoMargin(Box.Style.Margin.Left);
+  MT := ResolveAutoMargin(Box.Style.Margin.Top);
 
   // For blockquote-style left border only
   if Assigned(Box.Tag) and SameText(Box.Tag.TagName, 'blockquote') then
   begin
-    var LX := X + Box.Style.Margin.Left;
-    var TY := Y + Box.Style.Margin.Top;
+    var LX := X + ML;
+    var TY := Y + MT;
     var BY := TY + Box.Style.BorderWidth * 2 + Box.Style.Padding.Top +
       Box.ContentHeight + Box.Style.Padding.Bottom;
     Canvas.Stroke.Kind := TBrushKind.Solid;
@@ -3150,11 +3299,11 @@ begin
   if Box.Kind = lbkTable then
   begin
     R := RectF(
-      X + Box.Style.Margin.Left,
-      Y + Box.Style.Margin.Top,
-      X + Box.Style.Margin.Left + Box.Style.BorderWidth * 2 +
+      X + ML,
+      Y + MT,
+      X + ML + Box.Style.BorderWidth * 2 +
         Box.Style.Padding.Left + Box.ContentWidth + Box.Style.Padding.Right,
-      Y + Box.Style.Margin.Top + Box.Style.BorderWidth * 2 +
+      Y + MT + Box.Style.BorderWidth * 2 +
         Box.Style.Padding.Top + Box.ContentHeight + Box.Style.Padding.Bottom
     );
     Canvas.Stroke.Kind := TBrushKind.Solid;
@@ -3170,11 +3319,11 @@ begin
 
   // General border
   R := RectF(
-    X + Box.Style.Margin.Left + Box.Style.BorderWidth / 2,
-    Y + Box.Style.Margin.Top + Box.Style.BorderWidth / 2,
-    X + Box.Style.Margin.Left + Box.Style.BorderWidth * 2 +
+    X + ML + Box.Style.BorderWidth / 2,
+    Y + MT + Box.Style.BorderWidth / 2,
+    X + ML + Box.Style.BorderWidth * 2 +
       Box.Style.Padding.Left + Box.ContentWidth + Box.Style.Padding.Right - Box.Style.BorderWidth / 2,
-    Y + Box.Style.Margin.Top + Box.Style.BorderWidth * 2 +
+    Y + MT + Box.Style.BorderWidth * 2 +
       Box.Style.Padding.Top + Box.ContentHeight + Box.Style.Padding.Bottom - Box.Style.BorderWidth / 2
   );
   Canvas.Stroke.Kind := TBrushKind.Solid;
@@ -3466,13 +3615,13 @@ procedure TTina4HTMLRender.PaintHR(Canvas: TCanvas; Box: TLayoutBox; X, Y: Singl
 var
   LY: Single;
 begin
-  LY := Y + Box.Style.Margin.Top + 1;
+  LY := Y + ResolveAutoMargin(Box.Style.Margin.Top) + 1;
   Canvas.Stroke.Kind := TBrushKind.Solid;
   Canvas.Stroke.Color := TAlphaColors.Lightgray;
   Canvas.Stroke.Thickness := 1;
   Canvas.DrawLine(
-    PointF(X + Box.Style.Margin.Left, LY),
-    PointF(X + Box.Style.Margin.Left + Box.ContentWidth, LY),
+    PointF(X + ResolveAutoMargin(Box.Style.Margin.Left), LY),
+    PointF(X + ResolveAutoMargin(Box.Style.Margin.Left) + Box.ContentWidth, LY),
     1.0);
 end;
 

@@ -2174,7 +2174,15 @@ begin
     Kind := lbkImage
   else if SameText(Tag.TagName, 'input') or SameText(Tag.TagName, 'button') or
           SameText(Tag.TagName, 'textarea') or SameText(Tag.TagName, 'select') then
-    Kind := lbkFormControl
+  begin
+    // Form controls with display:block are treated as block-level form controls,
+    // except checkbox and radio which are always small inline elements.
+    var InputT := Tag.GetAttribute('type', 'text').ToLower;
+    if (Style.Display = 'block') and (InputT <> 'checkbox') and (InputT <> 'radio') then
+      Kind := lbkBlock
+    else
+      Kind := lbkFormControl;
+  end
   else if Style.Display = 'table' then
     Kind := lbkTable
   else if Style.Display = 'table-row' then
@@ -2286,6 +2294,23 @@ begin
 
   Box.ContentWidth := ContentW;
   CursorY := 0;
+
+  // Block-level form controls (e.g. Bootstrap .form-control sets display:block; width:100%)
+  // Size them using LayoutFormControl then return — they have no children to lay out.
+  if Assigned(Box.Tag) and
+     (SameText(Box.Tag.TagName, 'input') or SameText(Box.Tag.TagName, 'button') or
+      SameText(Box.Tag.TagName, 'textarea') or SameText(Box.Tag.TagName, 'select')) then
+  begin
+    LayoutFormControl(Box, ContentW);
+    // Override width to fill the block content width (unless FormControl set a smaller size)
+    // For text inputs, textarea, select: use full block width; for checkbox/radio: keep small size
+    var InputType := '';
+    if Assigned(Box.Tag) then
+      InputType := Box.Tag.GetAttribute('type', 'text').ToLower;
+    if (InputType <> 'checkbox') and (InputType <> 'radio') then
+      Box.ContentWidth := ContentW;
+    Exit;
+  end;
 
   // Resolve explicit height (may be percentage — but no reference, ignore for now)
   // Percentages on height are complex in CSS; we skip them
@@ -3015,7 +3040,7 @@ begin
         BtnText := Box.Tag.GetAttribute('value', 'Button');
     end;
     Box.ContentWidth := Max(60, MeasureTextWidth(BtnText, Box.Style) + 20);
-    Box.ContentHeight := 28;
+    Box.ContentHeight := Box.Style.FontSize * Box.Style.LineHeight;
   end
   else
   begin
@@ -3043,7 +3068,8 @@ begin
         Box.ContentWidth := Min(ExplW, AvailWidth)
       else
         Box.ContentWidth := Min(200, AvailWidth);
-      Box.ContentHeight := 24;
+      // Height based on font size and line height
+      Box.ContentHeight := Box.Style.FontSize * Box.Style.LineHeight;
     end;
   end;
 end;
@@ -3268,6 +3294,12 @@ begin
     lbkTable:
       if Box.Style.BorderWidth > 0 then
         PaintTableCellBorders(Canvas, Box, AbsX + Box.ContentLeft, AbsY + Box.ContentTop);
+    lbkBlock:
+      // Block-level form controls (e.g. display:block inputs)
+      if Assigned(Box.Tag) and
+         (SameText(Box.Tag.TagName, 'input') or SameText(Box.Tag.TagName, 'button') or
+          SameText(Box.Tag.TagName, 'textarea') or SameText(Box.Tag.TagName, 'select')) then
+        PaintFormControl(Canvas, Box, AbsX + Box.ContentLeft, AbsY + Box.ContentTop);
   end;
 
   // Recurse children
@@ -3497,12 +3529,18 @@ begin
   begin
     R := RectF(X, Y, X + Box.ContentWidth, Y + Box.ContentHeight);
     Canvas.Fill.Kind := TBrushKind.Solid;
-    Canvas.Fill.Color := $FFE0E0E0;
-    Canvas.FillRect(R, 3, 3, AllCorners, 1.0);
-    Canvas.Stroke.Kind := TBrushKind.Solid;
-    Canvas.Stroke.Color := TAlphaColors.Gray;
-    Canvas.Stroke.Thickness := 1;
-    Canvas.DrawRect(R, 3, 3, AllCorners, 1.0);
+    if Box.Style.BackgroundColor <> TAlphaColors.Null then
+      Canvas.Fill.Color := Box.Style.BackgroundColor
+    else
+      Canvas.Fill.Color := $FFE0E0E0;
+    Canvas.FillRect(R, 4, 4, AllCorners, 1.0);
+    if Box.Style.BorderWidth > 0 then
+    begin
+      Canvas.Stroke.Kind := TBrushKind.Solid;
+      Canvas.Stroke.Color := Box.Style.BorderColor;
+      Canvas.Stroke.Thickness := Box.Style.BorderWidth;
+      Canvas.DrawRect(R, 4, 4, AllCorners, 1.0);
+    end;
 
     Val := '';
     for var C in Box.Tag.Children do
@@ -3512,11 +3550,14 @@ begin
     try
       Layout.BeginUpdate;
       Layout.Text := Val;
+      Layout.Font.Family := Box.Style.FontFamily;
       Layout.Font.Size := Box.Style.FontSize;
-      Layout.Color := TAlphaColors.Black;
+      if Box.Style.Bold then Layout.Font.Style := [TFontStyle.fsBold];
+      Layout.Color := Box.Style.Color;
       Layout.HorizontalAlign := TTextAlign.Center;
-      Layout.TopLeft := PointF(X, Y + 4);
-      Layout.MaxSize := PointF(Box.ContentWidth, Box.ContentHeight - 8);
+      Layout.VerticalAlign := TTextAlign.Center;
+      Layout.TopLeft := PointF(X, Y);
+      Layout.MaxSize := PointF(Box.ContentWidth, Box.ContentHeight);
       Layout.EndUpdate;
       Layout.RenderLayout(Canvas);
     finally
@@ -3593,11 +3634,11 @@ begin
       R := RectF(X, Y, X + Box.ContentWidth, Y + Box.ContentHeight);
       Canvas.Fill.Kind := TBrushKind.Solid;
       Canvas.Fill.Color := TAlphaColors.White;
-      Canvas.FillRect(R, 1.0);
+      Canvas.FillRect(R, 4, 4, AllCorners, 1.0);
       Canvas.Stroke.Kind := TBrushKind.Solid;
-      Canvas.Stroke.Color := TAlphaColors.Gray;
+      Canvas.Stroke.Color := $FFD0D0D0;
       Canvas.Stroke.Thickness := 1;
-      Canvas.DrawRect(R, 1.0);
+      Canvas.DrawRect(R, 4, 4, AllCorners, 1.0);
 
       Val := Box.Tag.GetAttribute('value', Box.Tag.GetAttribute('placeholder', ''));
       if Val <> '' then
@@ -3606,13 +3647,15 @@ begin
         try
           Layout.BeginUpdate;
           Layout.Text := Val;
-          Layout.Font.Size := 12;
+          Layout.Font.Family := Box.Style.FontFamily;
+          Layout.Font.Size := Box.Style.FontSize;
           if Box.Tag.HasAttribute('placeholder') and not Box.Tag.HasAttribute('value') then
             Layout.Color := TAlphaColors.Gray
           else
-            Layout.Color := TAlphaColors.Black;
-          Layout.TopLeft := PointF(X + 4, Y + 4);
-          Layout.MaxSize := PointF(Box.ContentWidth - 8, Box.ContentHeight - 8);
+            Layout.Color := Box.Style.Color;
+          Layout.VerticalAlign := TTextAlign.Center;
+          Layout.TopLeft := PointF(X + 8, Y);
+          Layout.MaxSize := PointF(Box.ContentWidth - 16, Box.ContentHeight);
           Layout.EndUpdate;
           Layout.RenderLayout(Canvas);
         finally

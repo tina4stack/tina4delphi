@@ -282,7 +282,7 @@ begin
     begin
       while I <= Length(FieldName) do
       begin
-        if (FieldName[I] = UpperCase(FieldName[I])) then
+        if (FieldName[I] = UpperCase(FieldName[I])) and (I > 1) then
         begin
           NewName := NewName +'_'+ LowerCase(FieldName[I]);
         end
@@ -598,24 +598,16 @@ begin
   end;
 end;
 
-/// <summary> Returns a JSON Object response based on the data in a TFDMemTable
+/// <summary> Internal helper that converts any TDataSet to a JSON object with camelCase keys.
+/// Shared by all GetJSONFromTable overloads to avoid code duplication.
 /// </summary>
-/// <param name="Table">A TFDMemTable from which to get the data
-/// </param>
-/// <param name="DataSetName">A name to give the returned result, example: cats, the default is records
-/// </param>
-/// <remarks>
-/// A JSON object is returned with an array of records, if an exception happens , error is returned with the correct error
-/// </remarks>
-/// <returns>
-/// JSON Object with an Array of records
-/// </returns>
-function GetJSONFromTable(var Table: TFDMemTable; DataSetName: String = 'records'; IgnoreFields: String = ''; IgnoreBlanks: Boolean = False): TJSONObject; overload;
+function DataSetToJSON(DataSet: TDataSet; DataSetName: String; IgnoreFields: String; IgnoreBlanks: Boolean): TJSONObject;
 var
   DataRecord: TJSONObject;
   DataArray: TJSONArray;
   I: Integer;
   FieldNames: Array of String;
+  TableFieldNames: Array of String;
   IgnoreFieldList: TStringList;
   CanAddPair: Boolean;
   ByteStream: TBytesStream;
@@ -635,41 +627,44 @@ begin
     end;
 
     try
-      if not Table.Active then
+      if not DataSet.Active then
       begin
-        Table.Open;
+        DataSet.Open;
       end;
 
-      Table.First;
+      DataSet.First;
 
-      while not Table.Eof do
+      while not DataSet.Eof do
       begin
         DataRecord := TJSONObject.Create;
 
-        for I := 0 to Table.FieldDefs.Count - 1 do
+        for I := 0 to DataSet.FieldDefs.Count - 1 do
         begin
           // gets the field names in camel case on first iteration to save processing
 
-          if (Length(FieldNames) <> Table.FieldDefs.Count) then
+          if (Length(FieldNames) <> DataSet.FieldDefs.Count) then
           begin
             SetLength(FieldNames, Length(FieldNames) + 1);
-            FieldNames[I] := Table.FieldDefs[I].Name;
+            FieldNames[I] := CamelCase(DataSet.FieldDefs[I].Name);
+
+            SetLength(TableFieldNames, Length(TableFieldNames) + 1);
+            TableFieldNames[I] := DataSet.FieldDefs[I].Name;
           end;
 
           if (Pos('"'+FieldNames[I]+'"', IgnoreFields) = 0) then
           begin
             CanAddPair := True;
-            if IgnoreBlanks and (Table.FieldByName(FieldNames[I]).AsString = '') then
+            if IgnoreBlanks and (DataSet.FieldByName(TableFieldNames[I]).AsString = '') then
             begin
               CanAddPair := False;
             end;
 
             if CanAddPair then
             begin
-              if Table.FieldDefs[I].DataType = TFieldType.ftBlob then
+              if DataSet.FieldDefs[I].DataType = TFieldType.ftBlob then
               begin
                 //Base 64 encode
-                ByteStream := TBytesStream.Create(Table.FieldByName(FieldNames[I]).AsBytes);
+                ByteStream := TBytesStream.Create(DataSet.FieldByName(TableFieldNames[I]).AsBytes);
                 Base64EncodedStream := TStringStream.Create();
                 try
                   TNetEncoding.Base64.Encode(ByteStream, Base64EncodedStream);
@@ -681,20 +676,20 @@ begin
                 end;
               end
                 else
-              if Table.FieldDefs[I].DataType = TFieldType.ftDateTime then
+              if (DataSet.FieldDefs[I].DataType = TFieldType.ftDateTime) or (DataSet.FieldDefs[I].DataType = TFieldType.ftTimeStamp) then
               begin
-                DataRecord.AddPair(FieldNames[I], GetJSONDate(Table.FieldByName(FieldNames[I]).AsDateTime));
+                DataRecord.AddPair(FieldNames[I], GetJSONDate(DataSet.FieldByName(TableFieldNames[I]).AsDateTime));
               end
                 else
               begin
-                DataRecord.AddPair(FieldNames[I], Table.FieldByName(FieldNames[I]).AsString);
+                DataRecord.AddPair(FieldNames[I], DataSet.FieldByName(TableFieldNames[I]).AsString);
               end;
             end;
           end;
         end;
 
         DataArray.Add(DataRecord);
-        Table.Next;
+        DataSet.Next;
       end;
 
       Result.AddPair(DataSetName, DataArray);
@@ -710,7 +705,7 @@ begin
   end;
 end;
 
-/// <summary> Returns a JSON Object response based on the data in a TFDTable
+/// <summary> Returns a JSON Object response based on the data in a TFDMemTable
 /// </summary>
 /// <param name="Table">A TFDMemTable from which to get the data
 /// </param>
@@ -721,109 +716,37 @@ end;
 /// <param name="IgnoreBlanks">Ignore blank data fields when building the response JSON
 /// </param>
 /// <remarks>
-/// A JSON object is returned with an array of records, if an exception happens , error is returned with the correct error
+/// A JSON object is returned with an array of records. Field names are camelCased.
+/// If an exception happens, error is returned with the correct error.
+/// </remarks>
+/// <returns>
+/// JSON Object with an Array of records
+/// </returns>
+function GetJSONFromTable(var Table: TFDMemTable; DataSetName: String = 'records'; IgnoreFields: String = ''; IgnoreBlanks: Boolean = False): TJSONObject; overload;
+begin
+  Result := DataSetToJSON(Table, DataSetName, IgnoreFields, IgnoreBlanks);
+end;
+
+/// <summary> Returns a JSON Object response based on the data in a TFDTable
+/// </summary>
+/// <param name="Table">A TFDTable from which to get the data
+/// </param>
+/// <param name="DataSetName">A name to give the returned result, example: cats, the default is records
+/// </param>
+/// <param name="IgnoreFields">Comma separated list of fields to ignore on getting the data
+/// </param>
+/// <param name="IgnoreBlanks">Ignore blank data fields when building the response JSON
+/// </param>
+/// <remarks>
+/// A JSON object is returned with an array of records. Field names are camelCased.
+/// If an exception happens, error is returned with the correct error.
 /// </remarks>
 /// <returns>
 /// JSON Object with an Array of records
 /// </returns>
 function GetJSONFromTable(Table: TFDTable; DataSetName: String = 'records'; IgnoreFields: String = ''; IgnoreBlanks: Boolean = False): TJSONObject; overload;
-var
-  DataRecord: TJSONObject;
-  DataArray: TJSONArray;
-  I: Integer;
-  FieldNames: Array of String;
-  IgnoreFieldList: TStringList;
-  CanAddPair: Boolean;
-  ByteStream: TBytesStream;
-  Base64EncodedStream: TStringStream;
-
 begin
-  Result := TJSONObject.Create;
-  DataArray := TJSONArray.Create;
-  IgnoreFieldList := TStringList.Create;
-  try
-    IgnoreFieldList.CommaText := IgnoreFields;
-
-    IgnoreFields := '';
-    for I := 0 to IgnoreFieldList.Count-1 do
-    begin
-      IgnoreFields := IgnoreFields + '"'+IgnoreFieldList.Strings[I]+'"';
-    end;
-
-    try
-      if not Table.Active then
-      begin
-        Table.Open;
-      end;
-
-      Table.First;
-
-      while not Table.Eof do
-      begin
-        DataRecord := TJSONObject.Create;
-
-        for I := 0 to Table.FieldDefs.Count - 1 do
-        begin
-          // gets the field names in camel case on first iteration to save processing
-
-          if (Length(FieldNames) <> Table.FieldDefs.Count) then
-          begin
-            SetLength(FieldNames, Length(FieldNames) + 1);
-            FieldNames[I] := CamelCase(Table.FieldDefs[I].Name);
-          end;
-
-          if (Pos('"'+FieldNames[I]+'"', IgnoreFields) = 0) then
-          begin
-            CanAddPair := True;
-            if IgnoreBlanks and (Table.FieldByName(FieldNames[I]).AsString = '') then
-            begin
-              CanAddPair := False;
-            end;
-
-            if CanAddPair then
-            begin
-              if Table.FieldDefs[I].DataType = TFieldType.ftBlob then
-              begin
-                //Base 64 encode
-                ByteStream := TBytesStream.Create(Table.FieldByName(FieldNames[I]).AsBytes);
-                Base64EncodedStream := TStringStream.Create();
-                try
-                  TNetEncoding.Base64.Encode(ByteStream, Base64EncodedStream);
-
-                   DataRecord.AddPair(FieldNames[I], Base64EncodedStream.DataString);
-                finally
-                  Base64EncodedStream.Free;
-                  ByteStream.Free;
-                end;
-              end
-                else
-              if Table.FieldDefs[I].DataType = TFieldType.ftDateTime then
-              begin
-                DataRecord.AddPair(FieldNames[I], GetJSONDate(Table.FieldByName(FieldNames[I]).AsDateTime));
-              end
-                else
-              begin
-                DataRecord.AddPair(FieldNames[I], Table.FieldByName(FieldNames[I]).AsString);
-              end;
-            end;
-          end;
-        end;
-
-        DataArray.Add(DataRecord);
-        Table.Next;
-      end;
-
-      Result.AddPair(DataSetName, DataArray);
-
-    finally
-      IgnoreFieldList.Free;
-    end;
-  except
-    on E: Exception do
-    begin
-      Result.AddPair('error', E.UnitName + ' ' + E.Message);
-    end;
-  end;
+  Result := DataSetToJSON(Table, DataSetName, IgnoreFields, IgnoreBlanks);
 end;
 
 
@@ -1230,7 +1153,8 @@ end;
 /// <param name="JSON">A JSON string
 /// </param>
 /// <remarks>
-/// Converts a string into a JSON object
+/// Converts a string into a JSON value (object, array, string, number, boolean, or null).
+/// Use this instead of StrToJSONObject when the input may not be a JSON object.
 /// </remarks>
 /// <returns>
 /// A TJSONValue or nil if the string is invalid
@@ -1238,8 +1162,7 @@ end;
 function StrToJSONValue(JSON:String): TJSONValue;
 begin
   try
-
-    Result := TJSONObject.ParseJSONValue(JSON) as TJSONValue;
+    Result := TJSONObject.ParseJSONValue(JSON);
   except
     Result := nil;
   end;
@@ -1285,12 +1208,14 @@ begin
 end;
 
 
-/// <summary> Gets the field name from a JSON string field
+/// <summary> Gets the field name from a JSON string field.
+/// Prefer using TJSONPair.JsonString.Value instead which does the same thing natively.
 /// </summary>
 /// <param name="FieldName">Field name in form "name"
 /// </param>
 /// <remarks>
-/// The fields from a JSON object normally are enclosed in quotes and this removes them
+/// The fields from a JSON object normally are enclosed in quotes and this removes them.
+/// This function is kept for backwards compatibility.
 /// </remarks>
 /// <returns>
 /// Field name as a string or the original if the length is less than 2 or empty
@@ -1607,7 +1532,7 @@ begin
       var Found := False;
       for var JSONValue in Response do
       begin
-        if (DataKey = '') and (GetJSONFieldName(JSONValue.JsonString.ToString) = 'response') then
+        if (DataKey = '') and (JSONValue.JsonString.Value = 'response') then
         begin
           DataKey := 'response';
         end;
@@ -1620,7 +1545,7 @@ begin
           end;
         end;
 
-        if (GetJSONFieldName(JSONValue.JsonString.ToString) = DataKey) then
+        if (JSONValue.JsonString.Value = DataKey) then
         begin
           if (JSONValue.JsonValue is TJSONArray) then
           begin
@@ -1725,7 +1650,7 @@ begin
 
       for var JSONValue in JSONObject do
       begin
-        if (GetJSONFieldName(JSONValue.JsonString.ToString) = DataKey) then
+        if (JSONValue.JsonString.Value = DataKey) then
         begin
           if (JSONValue.JsonValue is TJSONArray) then
           begin

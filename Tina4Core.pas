@@ -58,7 +58,9 @@ type
   TTina4AddRecordEvent = procedure (Sender: TObject; var MemTable: TFDMemTable) of object;
 
 
+
   function GetGUID : String;
+  procedure CreateLog(FileName: String; Text: String; LogPrefix: String = 'Default');
   function IsDate(const AValue: Variant): Boolean;
   function CamelCase(FieldName: String): String;
   function SnakeCase(FieldName: String): String;
@@ -76,9 +78,9 @@ type
   function GetJSONFromTable(Table: TFDTable; DataSetName: String = 'records'; IgnoreFields: String = ''; IgnoreBlanks: Boolean = False): TJSONObject; overload;
   function SendHttpRequest(var StatusCode: Integer; BaseURL: String; EndPoint: String = ''; QueryParams: String = ''; Body: String=''; ContentType: String = 'application/json';
     ContentEncoding : String = 'utf-8'; Username:String = ''; Password: String = ''; CustomHeaders: TURLHeaders = nil; UserAgent: String = 'Tina4Delphi'; RequestType: TTina4RequestType = Get;
-    ReadTimeOut: Integer = 10000; ConnectTimeOut: Integer = 5000; RequestContentType: String = ''): TBytes;
+    ReadTimeOut: Integer = 10000; ConnectTimeOut: Integer = 5000; RequestContentType: String = ''; LogFile: String = ''): TBytes;
   function SendMultipartFormData(var StatusCode: Integer;  const BaseURL, EndPoint: string;  const FormFields: array of string; const Files: array of string;  QueryParams: string = '';  Username: string = '';  Password: string = '';
-      CustomHeaders: TURLHeaders = nil; UserAgent: string = 'Tina4Delphi';  ReadTimeout: Integer = 30000; ConnectTimeout: Integer = 10000 ): TBytes;
+      CustomHeaders: TURLHeaders = nil; UserAgent: string = 'Tina4Delphi';  ReadTimeout: Integer = 30000; ConnectTimeout: Integer = 10000; LogFile: String = ''): TBytes;
   function StrToJSONObject(JSON:String): TJSONObject;
   function StrToJSONValue(JSON:String): TJSONValue;
   function BytesToJSONObject(JSON:TBytes): TJSONObject;
@@ -99,6 +101,30 @@ implementation
 
 uses Tina4RESTRequest;
 
+
+procedure CreateLog(FileName: String; Text: String; LogPrefix: String = 'Default');
+var
+  F: TextFile;
+
+begin
+  AssignFile(F, FileName);
+  try
+    if not FileExists(FileName) then
+    begin
+      Rewrite(F);
+    end
+      else
+    begin
+      Append(F);
+    end;
+
+    WriteLn(F, LogPrefix+'-'+DateTimeToStr(Now())+': '+Text);
+
+  finally
+    CloseFile(F);
+  end;
+
+end;
 
 function IsDate(const AValue: Variant): Boolean;
 const
@@ -848,7 +874,7 @@ end;
 /// </returns>
 function SendHttpRequest(var StatusCode: Integer; BaseURL: String; EndPoint: String = ''; QueryParams: String = ''; Body: String=''; ContentType: String = 'application/json';
   ContentEncoding : String = 'utf-8'; Username:String = ''; Password: String = ''; CustomHeaders: TURLHeaders = nil; UserAgent: String = 'Tina4Delphi';
-  RequestType: TTina4RequestType = Get; ReadTimeOut: Integer = 10000; ConnectTimeOut: Integer = 5000; RequestContentType: String = ''): TBytes;
+  RequestType: TTina4RequestType = Get; ReadTimeOut: Integer = 10000; ConnectTimeOut: Integer = 5000; RequestContentType: String = ''; LogFile: String = ''): TBytes;
 var
   HttpClient: TNetHTTPClient;
   HTTPRequest: TNetHTTPRequest;
@@ -857,6 +883,7 @@ var
   BytesStream : TBytesStream;
   Url: String;
   Header: TNetHeader;
+
 
 begin
   try
@@ -927,6 +954,13 @@ begin
       HTTPRequest.Client.AcceptEncoding := ContentEncoding;
       HTTPRequest.Client.AutomaticDecompression  := [THTTPCompressionMethod.Any];
 
+
+      if LogFile <> '' then
+      begin
+        CreateLog(LogFile, 'Headers: '+HTTPRequest.Client.CustHeaders.ToString);
+        CreateLog(LogFile, 'Body: '+Body);
+      end;
+
       BytesStream := TBytesStream.Create;
       try
         try
@@ -957,13 +991,28 @@ begin
 
           StatusCode := HTTPResponse.StatusCode;
 
+          if LogFile <> '' then
+          begin
+            CreateLog(LogFile, 'StatusCode: '+IntToStr(StatusCode));
+          end;
+
           SetLength(Result, Length(BytesStream.Bytes));
           Move(BytesStream.Bytes[0],Result[0],Length(BytesStream.Bytes));
+
+          if LogFile <> '' then
+          begin
+            CreateLog(LogFile, 'Result: '+Trim(StringOf(Result)));
+          end;
+
 
         except
           on E:Exception do
           begin
             Result := TEncoding.UTF8.GetBytes('{"error": "'+E.Message+'"}');
+            if LogFile <> '' then
+            begin
+              CreateLog(LogFile, 'Error: '+E.Message);
+            end;
           end;
         end;
       finally
@@ -1097,7 +1146,8 @@ function SendMultipartFormData(
   CustomHeaders: TURLHeaders = nil;
   UserAgent: string = 'Tina4Delphi';
   ReadTimeout: Integer = 30000;
-  ConnectTimeout: Integer = 10000
+  ConnectTimeout: Integer = 10000;
+  LogFile: String = ''
 ): TBytes;
 var
   HttpClient: TNetHTTPClient;

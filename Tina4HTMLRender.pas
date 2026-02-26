@@ -1682,13 +1682,13 @@ begin
   begin
     Result.Margin.Top := ParentStyle.FontSize * 0.5;
     Result.Margin.Bottom := ParentStyle.FontSize * 0.5;
-    Result.Padding.Left := 20;
+    Result.Padding.Left := 10;
   end
   else if TN = 'ol' then
   begin
     Result.Margin.Top := ParentStyle.FontSize * 0.5;
     Result.Margin.Bottom := ParentStyle.FontSize * 0.5;
-    Result.Padding.Left := 20;
+    Result.Padding.Left := 10;
   end
   else if TN = 'li' then
   begin
@@ -1791,7 +1791,7 @@ begin
     Style.FontSize := ParseLength(Temp, ParentStyle.FontSize);
   if Decls.TryGetValue('font-weight', Temp) then
     Style.Bold := SameText(Temp, 'bold') or SameText(Temp, 'bolder') or
-      (StrToIntDef(Temp, 400) >= 600);
+      (StrToIntDef(Temp, 400) >= 500);
   if Decls.TryGetValue('font-style', Temp) then
     Style.Italic := SameText(Temp, 'italic') or SameText(Temp, 'oblique');
   if Decls.TryGetValue('text-decoration', Temp) then

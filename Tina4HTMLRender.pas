@@ -2428,13 +2428,59 @@ var
     // Inline container (span, a, b, i, etc.) — recurse children
     if Child.Kind = lbkInline then
     begin
+      // X is the margin-box left edge (PaintBackground adds Margin.Left internally)
       Child.X := CursorX;
       Child.Y := CursorY;
+      var StartY := CursorY;
+
+      // Advance cursor past left margin + border + padding before laying out children
+      CursorX := CursorX + Child.Style.Margin.Left + Child.Style.BorderWidth +
+        Child.Style.Padding.Left;
+
+      // Content origin in parent block coordinates
+      var ContentOriginX := CursorX;
+      var ContentOriginY := CursorY;
+
       for var GrandChild in Child.Children do
         ProcessInlineBox(GrandChild);
-      // Update child bounds
-      Child.ContentHeight := (CursorY + LineH) - Child.Y;
-      Child.ContentWidth := AvailWidth;
+      var ContentEndX := CursorX;
+
+      // Advance cursor past right padding + border + margin
+      CursorX := CursorX + Child.Style.Padding.Right + Child.Style.BorderWidth +
+        Child.Style.Margin.Right;
+
+      // Calculate content width — just the inner text portion
+      if CursorY = StartY then
+        Child.ContentWidth := ContentEndX - ContentOriginX
+      else
+        Child.ContentWidth := AvailWidth - Child.Style.Margin.Left - Child.Style.Margin.Right -
+          Child.Style.BorderWidth * 2 - Child.Style.Padding.Left - Child.Style.Padding.Right;
+
+      Child.ContentHeight := (CursorY + LineH) - StartY;
+
+      // Make grandchild coordinates relative to the inline container's content area
+      // (so PaintBox's ContentLeft/ContentTop offset works correctly)
+      for var GrandChild in Child.Children do
+      begin
+        GrandChild.X := GrandChild.X - ContentOriginX;
+        GrandChild.Y := GrandChild.Y - ContentOriginY;
+        // Also offset text fragments within text nodes
+        if GrandChild.Kind = lbkText then
+        begin
+          for var FI := 0 to GrandChild.Fragments.Count - 1 do
+          begin
+            var F := GrandChild.Fragments[FI];
+            F.X := F.X - ContentOriginX;
+            F.Y := F.Y - ContentOriginY;
+            GrandChild.Fragments[FI] := F;
+          end;
+        end;
+      end;
+
+      // Include full inline box height in line height
+      LineH := Max(LineH, Child.Style.Margin.Top + Child.Style.BorderWidth +
+        Child.Style.Padding.Top + Child.ContentHeight +
+        Child.Style.Padding.Bottom + Child.Style.BorderWidth + Child.Style.Margin.Bottom);
     end;
   end;
 
@@ -2554,6 +2600,13 @@ begin
         if CS > 1 then
           CellW := CellW + CellBorderW * (CS - 1);
 
+        // Propagate table border to cells that don't have their own
+        if (Cell.Style.BorderWidth <= 0) and (BorderW > 0) then
+        begin
+          Cell.Style.BorderWidth := BorderW;
+          Cell.Style.BorderColor := Box.Style.BorderColor;
+        end;
+
         // Layout cell content
         var CellContentW := CellW - Cell.Style.Padding.Left - Cell.Style.Padding.Right;
         if CellContentW < 0 then CellContentW := 0;
@@ -2584,7 +2637,7 @@ begin
 
         Cell.X := CellX;
         Cell.Y := CursorY;
-        Cell.ContentWidth := CellW;
+        Cell.ContentWidth := CellContentW;
 
         RowH := Max(RowH, Cell.ContentHeight + Cell.Style.Padding.Top + Cell.Style.Padding.Bottom);
         CellX := CellX + CellW + CellBorderW;
@@ -3121,7 +3174,7 @@ begin
       Layout.Font.Size := Box.Style.FontSize;
       Layout.Font.Style := FontStyles;
       Layout.Color := Box.Style.Color;
-      Layout.WordWrap := Box.Style.WhiteSpace = 'pre';
+      Layout.WordWrap := Box.Style.WhiteSpace <> 'pre';
       Layout.HorizontalAlign := TTextAlign.Leading;
       Layout.TopLeft := PointF(X + Box.ContentLeft + Frag.X,
                                Y + Box.ContentTop + Frag.Y);

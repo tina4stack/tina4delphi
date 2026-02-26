@@ -1425,8 +1425,9 @@ begin
 
           MemTable.Filtered := True;
 
-          if (MemTable.RecNo = 0) then   //No record found
+          if MemTable.IsEmpty then   //No record found
           begin
+            MemTable.Filtered := False;
             MemTable.Append;
           end
             else

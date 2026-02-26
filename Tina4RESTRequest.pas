@@ -33,11 +33,15 @@ type
     FTransformResultToSnakeCase: Boolean;
     FFreeOnAsyncExecute: Boolean;
     procedure SetMasterSource(const Source: TTina4RESTRequest);
+    procedure SetMemTable(const Value: TFDMemTable);
+    procedure SetSourceMemTable(const Value: TFDMemTable);
+    procedure SetTina4REST(const Value: TTina4REST);
     procedure SetResponseBody(List: TStringList);
     procedure SetRequestBody(List: TStringList);
 
   protected
     { Protected declarations }
+    procedure Notification(AComponent: TComponent; Operation: TOperation); override;
   public
     { Public declarations }
     procedure ExecuteRESTCall;
@@ -55,11 +59,11 @@ type
     property EndPoint: String read FEndPoint write FEndPoint;
     property StatusCode: Integer read FStatusCode write FStatusCode;
     property QueryParams: String read FQueryParams write FQueryParams;
-    property MemTable: TFDMemTable read FMemTable write FMemTable;
-    property SourceMemTable: TFDMemTable read FSourceMemTable write FSourceMemTable;
+    property MemTable: TFDMemTable read FMemTable write SetMemTable;
+    property SourceMemTable: TFDMemTable read FSourceMemTable write SetSourceMemTable;
     property SourceIgnoreFields: String read FSourceIgnoreFields write FSourceIgnoreFields;
     property SourceIgnoreBlanks: Boolean read FSourceIgnoreBlanks write FSourceIgnoreBlanks;
-    property Tina4REST: TTina4REST read FTina4REST write FTina4REST;
+    property Tina4REST: TTina4REST read FTina4REST write SetTina4REST;
     property MasterSource: TTina4RESTRequest read FMasterSource write SetMasterSource;
     property ResponseBody: TStringList read FResponseBody write SetResponseBody;
     property RequestBody: TStringList read FRequestBody write SetRequestBody;
@@ -262,13 +266,68 @@ begin
 end;
 
 
+procedure TTina4RESTRequest.Notification(AComponent: TComponent; Operation: TOperation);
+begin
+  inherited;
+  if Operation = opRemove then
+  begin
+    if AComponent = FTina4REST then
+      FTina4REST := nil
+    else if AComponent = FMasterSource then
+      FMasterSource := nil
+    else if AComponent = FMemTable then
+      FMemTable := nil
+    else if AComponent = FSourceMemTable then
+      FSourceMemTable := nil;
+  end;
+end;
+
+procedure TTina4RESTRequest.SetTina4REST(const Value: TTina4REST);
+begin
+  if FTina4REST <> Value then
+  begin
+    if Assigned(FTina4REST) then
+      FTina4REST.RemoveFreeNotification(Self);
+    FTina4REST := Value;
+    if Assigned(FTina4REST) then
+      FTina4REST.FreeNotification(Self);
+  end;
+end;
+
+procedure TTina4RESTRequest.SetMemTable(const Value: TFDMemTable);
+begin
+  if FMemTable <> Value then
+  begin
+    if Assigned(FMemTable) then
+      FMemTable.RemoveFreeNotification(Self);
+    FMemTable := Value;
+    if Assigned(FMemTable) then
+      FMemTable.FreeNotification(Self);
+  end;
+end;
+
+procedure TTina4RESTRequest.SetSourceMemTable(const Value: TFDMemTable);
+begin
+  if FSourceMemTable <> Value then
+  begin
+    if Assigned(FSourceMemTable) then
+      FSourceMemTable.RemoveFreeNotification(Self);
+    FSourceMemTable := Value;
+    if Assigned(FSourceMemTable) then
+      FSourceMemTable.FreeNotification(Self);
+  end;
+end;
+
 procedure TTina4RESTRequest.SetMasterSource(const Source: TTina4RESTRequest);
 begin
-  if Source <>  nil then
+  if FMasterSource <> Source then
   begin
-    if Source.Name <> Self.Name then
+    if Assigned(FMasterSource) then
+      FMasterSource.RemoveFreeNotification(Self);
+    if (Source <> nil) and (Source.Name <> Self.Name) then
     begin
       FMasterSource := Source;
+      FMasterSource.FreeNotification(Self);
     end
       else
     begin

@@ -16,8 +16,11 @@ type
     FIndexFieldNames: String;
     FMasterOnExecuteDone: TTina4Event;
     procedure SetMasterSource(const Source: TTina4RESTRequest);
+    procedure SetMemTable(const Value: TFDMemTable);
     procedure SetJSONData(const Value: TStringList);
     procedure RunExecute(Sender: TObject);
+  protected
+    procedure Notification(AComponent: TComponent; Operation: TOperation); override;
   public
     constructor Create(AOwner: TComponent); override;
     destructor Destroy; override;
@@ -25,7 +28,7 @@ type
 
   published
     property DataKey: String read FDataKey write FDataKey;
-    property MemTable: TFDMemTable read FMemTable write FMemTable;
+    property MemTable: TFDMemTable read FMemTable write SetMemTable;
     property JSONData: TStringList read FJSONData write SetJSONData;
     property SyncMode: TTina4RestSyncMode read FSyncMode write FSyncMode;
     property IndexFieldNames: String read FIndexFieldNames write FIndexFieldNames;
@@ -53,6 +56,30 @@ destructor TTina4JSONAdapter.Destroy;
 begin
   FJSONData.Free;
   inherited;
+end;
+
+procedure TTina4JSONAdapter.Notification(AComponent: TComponent; Operation: TOperation);
+begin
+  inherited;
+  if Operation = opRemove then
+  begin
+    if AComponent = FMasterSource then
+      FMasterSource := nil
+    else if AComponent = FMemTable then
+      FMemTable := nil;
+  end;
+end;
+
+procedure TTina4JSONAdapter.SetMemTable(const Value: TFDMemTable);
+begin
+  if FMemTable <> Value then
+  begin
+    if Assigned(FMemTable) then
+      FMemTable.RemoveFreeNotification(Self);
+    FMemTable := Value;
+    if Assigned(FMemTable) then
+      FMemTable.FreeNotification(Self);
+  end;
 end;
 
 procedure TTina4JSONAdapter.SetJSONData(const Value: TStringList);
@@ -116,10 +143,18 @@ end;
 
 procedure TTina4JSONAdapter.SetMasterSource(const Source: TTina4RESTRequest);
 begin
-  FMasterSource := Source;
-
-  FMasterOnExecuteDone:= FMasterSource.OnExecuteDone;
-  FMasterSource.OnExecuteDone := RunExecute;
+  if FMasterSource <> Source then
+  begin
+    if Assigned(FMasterSource) then
+      FMasterSource.RemoveFreeNotification(Self);
+    FMasterSource := Source;
+    if Assigned(FMasterSource) then
+    begin
+      FMasterSource.FreeNotification(Self);
+      FMasterOnExecuteDone := FMasterSource.OnExecuteDone;
+      FMasterSource.OnExecuteDone := RunExecute;
+    end;
+  end;
 end;
 
 end.

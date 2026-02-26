@@ -3993,8 +3993,11 @@ end;
 procedure TTina4HTMLRender.Resize;
 begin
   inherited;
-  FNeedRelayout := True;
-  Repaint;
+  if not FIsLayoutting then
+  begin
+    FNeedRelayout := True;
+    Repaint;
+  end;
 end;
 
 end.

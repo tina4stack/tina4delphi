@@ -1682,13 +1682,13 @@ begin
   begin
     Result.Margin.Top := ParentStyle.FontSize * 0.5;
     Result.Margin.Bottom := ParentStyle.FontSize * 0.5;
-    Result.Padding.Left := 10;
+    Result.Padding.Left := 24;
   end
   else if TN = 'ol' then
   begin
     Result.Margin.Top := ParentStyle.FontSize * 0.5;
     Result.Margin.Bottom := ParentStyle.FontSize * 0.5;
-    Result.Padding.Left := 10;
+    Result.Padding.Left := 24;
   end
   else if TN = 'li' then
   begin
@@ -2875,7 +2875,7 @@ begin
   if ContentW < 0 then ContentW := 0;
 
   // Leave space for bullet/number marker
-  var MarkerW: Single := 20;
+  var MarkerW: Single := 8;
   var InnerW := ContentW - MarkerW;
   if InnerW < 0 then InnerW := 0;
 
@@ -3641,29 +3641,41 @@ procedure TTina4HTMLRender.PaintListMarker(Canvas: TCanvas; Box: TLayoutBox; X, 
 var
   Layout: TTextLayout;
   MarkerText: string;
-  MarkerY: Single;
+  MarkerY, LineH, BulletR, BulletCX, BulletCY: Single;
 begin
   MarkerY := Y + Box.ContentTop;
+  LineH := Box.Style.FontSize * Box.Style.LineHeight;
 
   if Box.IsOrdered then
-    MarkerText := IntToStr(Box.ListIndex) + '.'
+  begin
+    MarkerText := IntToStr(Box.ListIndex) + '.';
+    Layout := TTextLayoutManager.DefaultTextLayout.Create;
+    try
+      Layout.BeginUpdate;
+      Layout.Text := MarkerText;
+      Layout.Font.Family := Box.Style.FontFamily;
+      Layout.Font.Size := Box.Style.FontSize;
+      Layout.Color := Box.Style.Color;
+      Layout.HorizontalAlign := TTextAlign.Trailing;
+      Layout.TopLeft := PointF(X + Box.ContentLeft - 4, MarkerY);
+      Layout.MaxSize := PointF(18, LineH);
+      Layout.EndUpdate;
+      Layout.RenderLayout(Canvas);
+    finally
+      Layout.Free;
+    end;
+  end
   else
-    MarkerText := #8226; // bullet
-
-  Layout := TTextLayoutManager.DefaultTextLayout.Create;
-  try
-    Layout.BeginUpdate;
-    Layout.Text := MarkerText;
-    Layout.Font.Family := Box.Style.FontFamily;
-    Layout.Font.Size := Box.Style.FontSize;
-    Layout.Color := Box.Style.Color;
-    Layout.HorizontalAlign := TTextAlign.Trailing;
-    Layout.TopLeft := PointF(X + Box.ContentLeft, MarkerY);
-    Layout.MaxSize := PointF(18, Box.Style.FontSize * Box.Style.LineHeight);
-    Layout.EndUpdate;
-    Layout.RenderLayout(Canvas);
-  finally
-    Layout.Free;
+  begin
+    // Draw a filled circle bullet — radius scales with font size
+    BulletR := Box.Style.FontSize * 0.18;
+    if BulletR < 2.5 then BulletR := 2.5;
+    BulletCX := X + Box.ContentLeft;
+    BulletCY := MarkerY + LineH * 0.5;
+    Canvas.Fill.Kind := TBrushKind.Solid;
+    Canvas.Fill.Color := Box.Style.Color;
+    Canvas.FillEllipse(RectF(BulletCX - BulletR, BulletCY - BulletR,
+      BulletCX + BulletR, BulletCY + BulletR), 1.0);
   end;
 end;
 

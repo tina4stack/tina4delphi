@@ -1,4 +1,4 @@
-unit Tina4HtmlRender;
+﻿unit Tina4HtmlRender;
 
 interface
 
@@ -277,7 +277,7 @@ type
     procedure PaintBorder(Canvas: TCanvas; Box: TLayoutBox; X, Y: Single);
     procedure PaintText(Canvas: TCanvas; Box: TLayoutBox; X, Y: Single);
     procedure PaintImage(Canvas: TCanvas; Box: TLayoutBox; X, Y: Single);
-    procedure PaintFormControl(Canvas: TCanvas; Box: TLayoutBox; X, Y: Single);
+
     procedure PaintHR(Canvas: TCanvas; Box: TLayoutBox; X, Y: Single);
     procedure PaintListMarker(Canvas: TCanvas; Box: TLayoutBox; X, Y: Single);
     procedure PaintTableCellBorders(Canvas: TCanvas; Box: TLayoutBox; CX, CY: Single);
@@ -2297,13 +2297,18 @@ begin
 
   // Block-level form controls (e.g. Bootstrap .form-control sets display:block; width:100%)
   // Size them using LayoutFormControl then return — they have no children to lay out.
+  // Native FMX controls handle their own borders, so zero out the CSS border to prevent
+  // it from inflating the box model (MarginBoxHeight, ContentLeft, etc.).
   if Assigned(Box.Tag) and
      (SameText(Box.Tag.TagName, 'input') or SameText(Box.Tag.TagName, 'button') or
       SameText(Box.Tag.TagName, 'textarea') or SameText(Box.Tag.TagName, 'select')) then
   begin
+    Box.Style.BorderWidth := 0;
+    // Recalculate content width without border
+    ContentW := AvailWidth - MarginL - MarginR -
+      Box.Style.Padding.Left - Box.Style.Padding.Right;
+    if ContentW < 0 then ContentW := 0;
     LayoutFormControl(Box, ContentW);
-    // Override width to fill the block content width (unless FormControl set a smaller size)
-    // For text inputs, textarea, select: use full block width; for checkbox/radio: keep small size
     var InputType := '';
     if Assigned(Box.Tag) then
       InputType := Box.Tag.GetAttribute('type', 'text').ToLower;
@@ -3216,6 +3221,11 @@ begin
     FContentHeight := FLayoutEngine.TotalHeight;
     ClampScroll;
     FNeedRelayout := False;
+
+    // Create native FMX controls for form elements
+    ClearFormControls;
+    if Assigned(FLayoutEngine.Root) then
+      CreateFormControls(FLayoutEngine.Root, 0, 0);
   finally
     FIsLayoutting := False;
   end;
@@ -3232,6 +3242,241 @@ begin
     FScrollY := 0
   else
     FScrollY := Max(0, Min(FScrollY, FContentHeight - Height));
+end;
+
+procedure TTina4HTMLRender.ClearFormControls;
+begin
+  for var I := FFormControls.Count - 1 downto 0 do
+    FFormControls[I].Control.Free;
+  FFormControls.Clear;
+end;
+
+function TTina4HTMLRender.GetFormControlNameValue(Control: TControl;
+  out AName, AValue: string): Boolean;
+begin
+  AName := '';
+  AValue := '';
+  for var Rec in FFormControls do
+  begin
+    if Rec.Control = Control then
+    begin
+      if Assigned(Rec.Box.Tag) then
+      begin
+        AName := Rec.Box.Tag.GetAttribute('name', '');
+        // For radio/checkbox, return the element's value attribute
+        if (Control is TCheckBox) or (Control is TRadioButton) then
+          AValue := Rec.Box.Tag.GetAttribute('value', '');
+      end;
+      Break;
+    end;
+  end;
+  if AValue = '' then
+  begin
+    if Control is TEdit then AValue := TEdit(Control).Text
+    else if Control is TMemo then AValue := TMemo(Control).Lines.Text
+    else if Control is TCheckBox then AValue := BoolToStr(TCheckBox(Control).IsChecked, True)
+    else if Control is TRadioButton then AValue := BoolToStr(TRadioButton(Control).IsChecked, True)
+    else if Control is TComboBox then
+    begin
+      if TComboBox(Control).Selected <> nil then
+        AValue := TComboBox(Control).Selected.Text;
+    end
+    else if Control is TButton then AValue := TButton(Control).Text;
+  end;
+  Result := AName <> '';
+end;
+
+procedure TTina4HTMLRender.HandleFormControlChange(Sender: TObject);
+var N, V: string;
+begin
+  if Assigned(FOnChange) and (Sender is TControl) and
+     GetFormControlNameValue(TControl(Sender), N, V) then
+    FOnChange(Sender, N, V);
+end;
+
+procedure TTina4HTMLRender.HandleFormControlClick(Sender: TObject);
+var N, V: string;
+begin
+  if Assigned(FOnClick) and (Sender is TControl) and
+     GetFormControlNameValue(TControl(Sender), N, V) then
+    FOnClick(Sender, N, V);
+end;
+
+procedure TTina4HTMLRender.HandleFormControlEnter(Sender: TObject);
+var N, V: string;
+begin
+  if Assigned(FOnEnter) and (Sender is TControl) and
+     GetFormControlNameValue(TControl(Sender), N, V) then
+    FOnEnter(Sender, N, V);
+end;
+
+procedure TTina4HTMLRender.HandleFormControlExit(Sender: TObject);
+var N, V: string;
+begin
+  if Assigned(FOnExit) and (Sender is TControl) and
+     GetFormControlNameValue(TControl(Sender), N, V) then
+    FOnExit(Sender, N, V);
+end;
+
+procedure TTina4HTMLRender.CreateFormControls(Box: TLayoutBox; OffX, OffY: Single);
+var
+  AbsX, AbsY, CX, CY: Single;
+  Ctl: TControl;
+  Rec: TNativeFormControl;
+  TN, InputType, Placeholder, Val: string;
+begin
+  if Box.Style.Display = 'none' then Exit;
+
+  AbsX := OffX + Box.X;
+  AbsY := OffY + Box.Y;
+
+  if Assigned(Box.Tag) then
+  begin
+    TN := Box.Tag.TagName.ToLower;
+    Ctl := nil;
+
+    if TN = 'input' then
+    begin
+      InputType := Box.Tag.GetAttribute('type', 'text').ToLower;
+      Placeholder := Box.Tag.GetAttribute('placeholder', '');
+      Val := Box.Tag.GetAttribute('value', '');
+
+      if InputType = 'checkbox' then
+      begin
+        var CB := TCheckBox.Create(Self);
+        CB.IsChecked := Box.Tag.HasAttribute('checked');
+        CB.OnChange := HandleFormControlChange;
+        Ctl := CB;
+      end
+      else if InputType = 'radio' then
+      begin
+        var RB := TRadioButton.Create(Self);
+        RB.IsChecked := Box.Tag.HasAttribute('checked');
+        RB.GroupName := Box.Tag.GetAttribute('name', 'radio');
+        RB.OnChange := HandleFormControlChange;
+        Ctl := RB;
+      end
+      else
+      begin
+        var Ed := TEdit.Create(Self);
+        if InputType = 'password' then Ed.Password := True;
+        Ed.TextPrompt := Placeholder;
+        if Val <> '' then Ed.Text := Val;
+        Ed.OnChange := HandleFormControlChange;
+        Ed.OnEnter := HandleFormControlEnter;
+        Ed.OnExit := HandleFormControlExit;
+        Ctl := Ed;
+      end;
+    end
+    else if TN = 'textarea' then
+    begin
+      var Mem := TMemo.Create(Self);
+      Mem.OnChange := HandleFormControlChange;
+      Ctl := Mem;
+    end
+    else if TN = 'select' then
+    begin
+      var Cmb := TComboBox.Create(Self);
+      if Assigned(Box.Tag) then
+        for var OptTag in Box.Tag.Children do
+          if SameText(OptTag.TagName, 'option') then
+          begin
+            var OptText := '';
+            for var C in OptTag.Children do
+              if C.TagName = '#text' then OptText := OptText + C.Text;
+            Cmb.Items.Add(OptText.Trim);
+          end;
+      if Cmb.Items.Count > 0 then Cmb.ItemIndex := 0;
+      Cmb.OnChange := HandleFormControlChange;
+      Ctl := Cmb;
+    end
+    else if TN = 'button' then
+    begin
+      var Btn := TButton.Create(Self);
+      var BtnText := '';
+      for var C in Box.Tag.Children do
+        if C.TagName = '#text' then BtnText := BtnText + C.Text;
+      if BtnText = '' then BtnText := Box.Tag.GetAttribute('value', 'Button');
+      Btn.Text := BtnText.Trim;
+      Btn.OnClick := HandleFormControlClick;
+      Ctl := Btn;
+    end;
+
+    if Assigned(Ctl) then
+    begin
+      Ctl.Parent := Self;
+      Ctl.Width := Box.ContentWidth + Box.Style.Padding.Left + Box.Style.Padding.Right;
+      Ctl.Height := Box.ContentHeight + Box.Style.Padding.Top + Box.Style.Padding.Bottom;
+
+      // Apply CSS styles to all styled controls
+      if Ctl is TStyledControl then
+      begin
+        var SC := TStyledControl(Ctl);
+        // Remove styled settings so our CSS values take effect
+        SC.StyledSettings := SC.StyledSettings - [TStyledSetting.Family,
+          TStyledSetting.Size, TStyledSetting.FontColor, TStyledSetting.Style];
+        SC.Font.Family := Box.Style.FontFamily;
+        SC.Font.Size := Box.Style.FontSize;
+        if Box.Style.Bold then
+          SC.Font.Style := SC.Font.Style + [TFontStyle.fsBold];
+        if Box.Style.Italic then
+          SC.Font.Style := SC.Font.Style + [TFontStyle.fsItalic];
+        if Box.Style.Color <> TAlphaColors.Null then
+          SC.FontColor := Box.Style.Color;
+      end;
+
+      Rec.Control := Ctl;
+      Rec.Box := Box;
+      FFormControls.Add(Rec);
+      Exit;
+    end;
+  end;
+
+  // Recurse children
+  CX := AbsX + Box.ContentLeft;
+  CY := AbsY + Box.ContentTop;
+  for var Child in Box.Children do
+    CreateFormControls(Child, CX, CY);
+end;
+
+procedure TTina4HTMLRender.PositionFormControls;
+var
+  AbsX, AbsY: Single;
+
+  function FindBox(Parent, Target: TLayoutBox; var PX, PY: Single): Boolean;
+  begin
+    if Parent = Target then Exit(True);
+    var CX := PX + Parent.ContentLeft;
+    var CY := PY + Parent.ContentTop;
+    for var C in Parent.Children do
+    begin
+      var SX := CX + C.X;
+      var SY := CY + C.Y;
+      if FindBox(C, Target, SX, SY) then
+      begin
+        PX := SX;
+        PY := SY;
+        Exit(True);
+      end;
+    end;
+    Result := False;
+  end;
+
+begin
+  if not Assigned(FLayoutEngine.Root) then Exit;
+  for var I := 0 to FFormControls.Count - 1 do
+  begin
+    var Rec := FFormControls[I];
+    AbsX := 0;
+    AbsY := 0;
+    FindBox(FLayoutEngine.Root, Rec.Box, AbsX, AbsY);
+    Rec.Control.Position.X := AbsX;
+    Rec.Control.Position.Y := AbsY - FScrollY;
+    Rec.Control.Width := Rec.Box.ContentWidth + Rec.Box.Style.Padding.Left + Rec.Box.Style.Padding.Right;
+    Rec.Control.Height := Rec.Box.ContentHeight + Rec.Box.Style.Padding.Top + Rec.Box.Style.Padding.Bottom;
+    Rec.Control.Visible := (Rec.Control.Position.Y + Rec.Control.Height > 0) and
+      (Rec.Control.Position.Y < Height);
+  end;
 end;
 
 procedure TTina4HTMLRender.Paint;
@@ -3259,6 +3504,9 @@ begin
   finally
     Canvas.EndScene;
   end;
+
+  // Position native form controls after painting (accounts for scroll)
+  PositionFormControls;
 end;
 
 procedure TTina4HTMLRender.PaintBox(Canvas: TCanvas; Box: TLayoutBox; OffX, OffY: Single);
@@ -3266,6 +3514,12 @@ var
   AbsX, AbsY, CX, CY: Single;
 begin
   if Box.Style.Display = 'none' then Exit;
+
+  // Skip form control boxes — they are rendered as native FMX controls
+  if Assigned(Box.Tag) and
+     (SameText(Box.Tag.TagName, 'input') or SameText(Box.Tag.TagName, 'button') or
+      SameText(Box.Tag.TagName, 'textarea') or SameText(Box.Tag.TagName, 'select')) then
+    Exit;
 
   AbsX := OffX + Box.X;
   AbsY := OffY + Box.Y;
@@ -3285,8 +3539,6 @@ begin
       PaintText(Canvas, Box, AbsX, AbsY);
     lbkImage:
       PaintImage(Canvas, Box, AbsX + Box.ContentLeft, AbsY + Box.ContentTop);
-    lbkFormControl:
-      PaintFormControl(Canvas, Box, AbsX + Box.ContentLeft, AbsY + Box.ContentTop);
     lbkHR:
       PaintHR(Canvas, Box, AbsX, AbsY);
     lbkListItem:
@@ -3294,12 +3546,6 @@ begin
     lbkTable:
       if Box.Style.BorderWidth > 0 then
         PaintTableCellBorders(Canvas, Box, AbsX + Box.ContentLeft, AbsY + Box.ContentTop);
-    lbkBlock:
-      // Block-level form controls (e.g. display:block inputs)
-      if Assigned(Box.Tag) and
-         (SameText(Box.Tag.TagName, 'input') or SameText(Box.Tag.TagName, 'button') or
-          SameText(Box.Tag.TagName, 'textarea') or SameText(Box.Tag.TagName, 'select')) then
-        PaintFormControl(Canvas, Box, AbsX + Box.ContentLeft, AbsY + Box.ContentTop);
   end;
 
   // Recurse children
@@ -3315,6 +3561,12 @@ var
   ML, MT: Single;
 begin
   if Box.Style.BackgroundColor = TAlphaColors.Null then Exit;
+
+  // Form controls are native FMX controls — skip canvas background
+  if Assigned(Box.Tag) and
+     (SameText(Box.Tag.TagName, 'input') or SameText(Box.Tag.TagName, 'button') or
+      SameText(Box.Tag.TagName, 'textarea') or SameText(Box.Tag.TagName, 'select')) then
+    Exit;
 
   ML := ResolveAutoMargin(Box.Style.Margin.Left);
   MT := ResolveAutoMargin(Box.Style.Margin.Top);
@@ -3359,6 +3611,12 @@ begin
 
   // Table borders are handled entirely by PaintTableCellBorders (collapsed grid)
   if (Box.Kind = lbkTable) or (Box.Kind = lbkTableCell) then
+    Exit;
+
+  // Form controls are native FMX controls — skip canvas border
+  if Assigned(Box.Tag) and
+     (SameText(Box.Tag.TagName, 'input') or SameText(Box.Tag.TagName, 'button') or
+      SameText(Box.Tag.TagName, 'textarea') or SameText(Box.Tag.TagName, 'select')) then
     Exit;
 
   // General border
@@ -3480,191 +3738,6 @@ begin
   end;
 end;
 
-procedure TTina4HTMLRender.PaintFormControl(Canvas: TCanvas; Box: TLayoutBox; X, Y: Single);
-var
-  R: TRectF;
-  InputType, Val: string;
-begin
-  if not Assigned(Box.Tag) then Exit;
-  var TN := Box.Tag.TagName.ToLower;
-
-  if TN = 'textarea' then
-  begin
-    R := RectF(X, Y, X + Box.ContentWidth, Y + Box.ContentHeight);
-    Canvas.Fill.Kind := TBrushKind.Solid;
-    Canvas.Fill.Color := TAlphaColors.White;
-    Canvas.FillRect(R, 1.0);
-    Canvas.Stroke.Kind := TBrushKind.Solid;
-    Canvas.Stroke.Color := TAlphaColors.Gray;
-    Canvas.Stroke.Thickness := 1;
-    Canvas.DrawRect(R, 1.0);
-  end
-  else if TN = 'select' then
-  begin
-    R := RectF(X, Y, X + Box.ContentWidth, Y + Box.ContentHeight);
-    Canvas.Fill.Kind := TBrushKind.Solid;
-    Canvas.Fill.Color := TAlphaColors.White;
-    Canvas.FillRect(R, 1.0);
-    Canvas.Stroke.Kind := TBrushKind.Solid;
-    Canvas.Stroke.Color := TAlphaColors.Gray;
-    Canvas.Stroke.Thickness := 1;
-    Canvas.DrawRect(R, 1.0);
-    // Draw dropdown arrow
-    var AX := X + Box.ContentWidth - 12;
-    var AY := Y + Box.ContentHeight / 2;
-    Canvas.Fill.Color := TAlphaColors.Gray;
-    // Simple triangle
-    var Path := TPathData.Create;
-    try
-      Path.MoveTo(PointF(AX, AY - 3));
-      Path.LineTo(PointF(AX + 6, AY - 3));
-      Path.LineTo(PointF(AX + 3, AY + 3));
-      Path.ClosePath;
-      Canvas.FillPath(Path, 1.0);
-    finally
-      Path.Free;
-    end;
-  end
-  else if TN = 'button' then
-  begin
-    R := RectF(X, Y, X + Box.ContentWidth, Y + Box.ContentHeight);
-    Canvas.Fill.Kind := TBrushKind.Solid;
-    if Box.Style.BackgroundColor <> TAlphaColors.Null then
-      Canvas.Fill.Color := Box.Style.BackgroundColor
-    else
-      Canvas.Fill.Color := $FFE0E0E0;
-    Canvas.FillRect(R, 4, 4, AllCorners, 1.0);
-    if Box.Style.BorderWidth > 0 then
-    begin
-      Canvas.Stroke.Kind := TBrushKind.Solid;
-      Canvas.Stroke.Color := Box.Style.BorderColor;
-      Canvas.Stroke.Thickness := Box.Style.BorderWidth;
-      Canvas.DrawRect(R, 4, 4, AllCorners, 1.0);
-    end;
-
-    Val := '';
-    for var C in Box.Tag.Children do
-      if C.TagName = '#text' then Val := Val + C.Text;
-    if Val = '' then Val := Box.Tag.GetAttribute('value', 'Button');
-    var Layout := TTextLayoutManager.DefaultTextLayout.Create;
-    try
-      Layout.BeginUpdate;
-      Layout.Text := Val;
-      Layout.Font.Family := Box.Style.FontFamily;
-      Layout.Font.Size := Box.Style.FontSize;
-      if Box.Style.Bold then Layout.Font.Style := [TFontStyle.fsBold];
-      Layout.Color := Box.Style.Color;
-      Layout.HorizontalAlign := TTextAlign.Center;
-      Layout.VerticalAlign := TTextAlign.Center;
-      Layout.TopLeft := PointF(X, Y);
-      Layout.MaxSize := PointF(Box.ContentWidth, Box.ContentHeight);
-      Layout.EndUpdate;
-      Layout.RenderLayout(Canvas);
-    finally
-      Layout.Free;
-    end;
-  end
-  else
-  begin
-    // input element
-    InputType := Box.Tag.GetAttribute('type', 'text').ToLower;
-
-    if InputType = 'checkbox' then
-    begin
-      R := RectF(X, Y, X + 16, Y + 16);
-      Canvas.Fill.Kind := TBrushKind.Solid;
-      Canvas.Fill.Color := TAlphaColors.White;
-      Canvas.FillRect(R, 1.0);
-      Canvas.Stroke.Kind := TBrushKind.Solid;
-      Canvas.Stroke.Color := TAlphaColors.Gray;
-      Canvas.Stroke.Thickness := 1;
-      Canvas.DrawRect(R, 1.0);
-      if Box.Tag.HasAttribute('checked') then
-      begin
-        Canvas.Stroke.Color := TAlphaColors.Black;
-        Canvas.Stroke.Thickness := 2;
-        Canvas.DrawLine(PointF(X + 3, Y + 8), PointF(X + 6, Y + 12), 1.0);
-        Canvas.DrawLine(PointF(X + 6, Y + 12), PointF(X + 13, Y + 3), 1.0);
-      end;
-    end
-    else if InputType = 'radio' then
-    begin
-      Canvas.Fill.Kind := TBrushKind.Solid;
-      Canvas.Fill.Color := TAlphaColors.White;
-      Canvas.FillEllipse(RectF(X, Y, X + 16, Y + 16), 1.0);
-      Canvas.Stroke.Kind := TBrushKind.Solid;
-      Canvas.Stroke.Color := TAlphaColors.Gray;
-      Canvas.Stroke.Thickness := 1;
-      Canvas.DrawEllipse(RectF(X, Y, X + 16, Y + 16), 1.0);
-      if Box.Tag.HasAttribute('checked') then
-      begin
-        Canvas.Fill.Color := TAlphaColors.Black;
-        Canvas.FillEllipse(RectF(X + 4, Y + 4, X + 12, Y + 12), 1.0);
-      end;
-    end
-    else if InputType = 'button' then
-    begin
-      R := RectF(X, Y, X + Box.ContentWidth, Y + Box.ContentHeight);
-      Canvas.Fill.Kind := TBrushKind.Solid;
-      Canvas.Fill.Color := $FFE0E0E0;
-      Canvas.FillRect(R, 3, 3, AllCorners, 1.0);
-      Canvas.Stroke.Kind := TBrushKind.Solid;
-      Canvas.Stroke.Color := TAlphaColors.Gray;
-      Canvas.Stroke.Thickness := 1;
-      Canvas.DrawRect(R, 3, 3, AllCorners, 1.0);
-      Val := Box.Tag.GetAttribute('value', 'Button');
-      var Layout := TTextLayoutManager.DefaultTextLayout.Create;
-      try
-        Layout.BeginUpdate;
-        Layout.Text := Val;
-        Layout.Font.Size := Box.Style.FontSize;
-        Layout.Color := TAlphaColors.Black;
-        Layout.HorizontalAlign := TTextAlign.Center;
-        Layout.TopLeft := PointF(X, Y + 4);
-        Layout.MaxSize := PointF(Box.ContentWidth, Box.ContentHeight - 8);
-        Layout.EndUpdate;
-        Layout.RenderLayout(Canvas);
-      finally
-        Layout.Free;
-      end;
-    end
-    else
-    begin
-      // text input
-      R := RectF(X, Y, X + Box.ContentWidth, Y + Box.ContentHeight);
-      Canvas.Fill.Kind := TBrushKind.Solid;
-      Canvas.Fill.Color := TAlphaColors.White;
-      Canvas.FillRect(R, 4, 4, AllCorners, 1.0);
-      Canvas.Stroke.Kind := TBrushKind.Solid;
-      Canvas.Stroke.Color := $FFD0D0D0;
-      Canvas.Stroke.Thickness := 1;
-      Canvas.DrawRect(R, 4, 4, AllCorners, 1.0);
-
-      Val := Box.Tag.GetAttribute('value', Box.Tag.GetAttribute('placeholder', ''));
-      if Val <> '' then
-      begin
-        var Layout := TTextLayoutManager.DefaultTextLayout.Create;
-        try
-          Layout.BeginUpdate;
-          Layout.Text := Val;
-          Layout.Font.Family := Box.Style.FontFamily;
-          Layout.Font.Size := Box.Style.FontSize;
-          if Box.Tag.HasAttribute('placeholder') and not Box.Tag.HasAttribute('value') then
-            Layout.Color := TAlphaColors.Gray
-          else
-            Layout.Color := Box.Style.Color;
-          Layout.VerticalAlign := TTextAlign.Center;
-          Layout.TopLeft := PointF(X + 8, Y);
-          Layout.MaxSize := PointF(Box.ContentWidth - 16, Box.ContentHeight);
-          Layout.EndUpdate;
-          Layout.RenderLayout(Canvas);
-        finally
-          Layout.Free;
-        end;
-      end;
-    end;
-  end;
-end;
 
 procedure TTina4HTMLRender.PaintHR(Canvas: TCanvas; Box: TLayoutBox; X, Y: Single);
 var
@@ -3816,62 +3889,3 @@ begin
   Canvas.FillRect(ThumbRect, 4, 4, AllCorners, 1.0);
 end;
 
-// ── Scrolling ──
-
-procedure TTina4HTMLRender.MouseWheel(Shift: TShiftState; WheelDelta: Integer;
-  var Handled: Boolean);
-begin
-  FScrollY := FScrollY - WheelDelta;
-  ClampScroll;
-  Repaint;
-  Handled := True;
-end;
-
-procedure TTina4HTMLRender.MouseDown(Button: TMouseButton; Shift: TShiftState;
-  X, Y: Single);
-begin
-  inherited;
-  if ScrollBarVisible and (X >= Width - FScrollBarWidth) then
-  begin
-    FMouseDownOnScroll := True;
-    FScrollDragStart := Y;
-    FScrollDragThumbStart := FScrollY;
-  end;
-end;
-
-procedure TTina4HTMLRender.MouseMove(Shift: TShiftState; X, Y: Single);
-var
-  Ratio, ThumbH, Delta: Single;
-begin
-  inherited;
-  if FMouseDownOnScroll and ScrollBarVisible then
-  begin
-    Ratio := Height / FContentHeight;
-    ThumbH := Max(20, Height * Ratio);
-    Delta := Y - FScrollDragStart;
-    var TrackRange := Height - ThumbH;
-    if TrackRange > 0 then
-    begin
-      var ScrollRange := FContentHeight - Height;
-      FScrollY := FScrollDragThumbStart + (Delta / TrackRange) * ScrollRange;
-      ClampScroll;
-      Repaint;
-    end;
-  end;
-end;
-
-procedure TTina4HTMLRender.MouseUp(Button: TMouseButton; Shift: TShiftState;
-  X, Y: Single);
-begin
-  inherited;
-  FMouseDownOnScroll := False;
-end;
-
-procedure TTina4HTMLRender.Resize;
-begin
-  inherited;
-  FNeedRelayout := True;
-  Repaint;
-end;
-
-end.

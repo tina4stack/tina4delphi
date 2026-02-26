@@ -3919,3 +3919,60 @@ begin
   Canvas.FillRect(ThumbRect, 4, 4, AllCorners, 1.0);
 end;
 
+procedure TTina4HTMLRender.MouseWheel(Shift: TShiftState; WheelDelta: Integer;
+  var Handled: Boolean);
+begin
+  FScrollY := FScrollY - WheelDelta;
+  ClampScroll;
+  Repaint;
+  Handled := True;
+end;
+
+procedure TTina4HTMLRender.MouseDown(Button: TMouseButton; Shift: TShiftState;
+  X, Y: Single);
+begin
+  inherited;
+  if ScrollBarVisible and (X >= Width - FScrollBarWidth) then
+  begin
+    FMouseDownOnScroll := True;
+    FScrollDragStart := Y;
+    FScrollDragThumbStart := FScrollY;
+  end;
+end;
+
+procedure TTina4HTMLRender.MouseMove(Shift: TShiftState; X, Y: Single);
+var
+  Ratio, ThumbH, Delta: Single;
+begin
+  inherited;
+  if FMouseDownOnScroll and ScrollBarVisible then
+  begin
+    Ratio := Height / FContentHeight;
+    ThumbH := Max(20, Height * Ratio);
+    Delta := Y - FScrollDragStart;
+    var TrackRange := Height - ThumbH;
+    if TrackRange > 0 then
+    begin
+      var ScrollRange := FContentHeight - Height;
+      FScrollY := FScrollDragThumbStart + (Delta / TrackRange) * ScrollRange;
+      ClampScroll;
+      Repaint;
+    end;
+  end;
+end;
+
+procedure TTina4HTMLRender.MouseUp(Button: TMouseButton; Shift: TShiftState;
+  X, Y: Single);
+begin
+  inherited;
+  FMouseDownOnScroll := False;
+end;
+
+procedure TTina4HTMLRender.Resize;
+begin
+  inherited;
+  FNeedRelayout := True;
+  Repaint;
+end;
+
+end.

@@ -1,25 +1,25 @@
 object frmDataModule: TfrmDataModule
-  Height = 989
-  Width = 1230
-  PixelsPerInch = 144
+  Height = 824
+  Width = 1025
+  PixelsPerInch = 120
   object IdSchedulerOfThreadPool1: TIdSchedulerOfThreadPool
     MaxThreads = 50
     PoolSize = 100
-    Left = 264
-    Top = 120
+    Left = 220
+    Top = 100
   end
   object FDConnection1: TFDConnection
     Params.Strings = (
       'Database=D:\projects\tina4delphi\Example\Car_Database.db'
       'DriverID=SQLite')
     LoginPrompt = False
-    Left = 612
-    Top = 456
+    Left = 510
+    Top = 380
   end
   object FDTable1: TFDTable
     Connection = FDConnection1
-    Left = 384
-    Top = 300
+    Left = 320
+    Top = 250
   end
   object FDMemTable1: TFDMemTable
     Active = True
@@ -46,8 +46,8 @@ object frmDataModule: TfrmDataModule
     UpdateOptions.CheckUpdatable = False
     UpdateOptions.AutoCommitUpdates = True
     StoreDefs = True
-    Left = 240
-    Top = 456
+    Left = 200
+    Top = 380
     Content = {
       4144425310000000C9000000FF00010001FF02FF03040016000000460044004D
       0065006D005400610062006C0065003100050016000000460044004D0065006D
@@ -81,8 +81,8 @@ object frmDataModule: TfrmDataModule
   object IdHTTPServer1: TIdHTTPServer
     Bindings = <>
     Scheduler = IdSchedulerOfThreadPool1
-    Left = 192
-    Top = 228
+    Left = 160
+    Top = 190
   end
   object FDMemTable2: TFDMemTable
     Active = True
@@ -108,44 +108,36 @@ object frmDataModule: TfrmDataModule
     UpdateOptions.CheckRequired = False
     UpdateOptions.AutoCommitUpdates = True
     StoreDefs = True
-    Left = 794
-    Top = 180
+    Left = 662
+    Top = 150
   end
   object RESTClient1: TRESTClient
     Params = <>
     SynchronizedEvents = False
-    Left = 984
-    Top = 264
+    Left = 820
+    Top = 220
   end
   object RESTRequest1: TRESTRequest
     Client = RESTClient1
     Params = <>
     Response = RESTResponse1
     SynchronizedEvents = False
-    Left = 1164
-    Top = 252
+    Left = 970
+    Top = 210
   end
   object RESTResponse1: TRESTResponse
-    Left = 1152
-    Top = 384
+    Left = 960
+    Top = 320
   end
   object RESTResponseDataSetAdapter1: TRESTResponseDataSetAdapter
     FieldDefs = <>
-    Left = 984
-    Top = 456
-  end
-  object Tina4REST1: TTina4REST
-    UserAgent = 'Tina4REST'
-    ReadTimeOut = 0
-    ConnectTimeOut = 0
-    Left = 252
-    Top = 720
-    Headers = ()
+    Left = 820
+    Top = 380
   end
   object Tina4WebServer1: TTina4WebServer
     Active = False
-    Left = 792
-    Top = 360
+    Left = 660
+    Top = 300
   end
   object Tina4RESTRequest1: TTina4RESTRequest
     TransformResultToSnakeCase = False
@@ -154,8 +146,64 @@ object frmDataModule: TfrmDataModule
     RequestType = Get
     StatusCode = 0
     SourceIgnoreBlanks = False
-    Tina4REST = Tina4REST1
-    Left = 612
-    Top = 816
+    Left = 510
+    Top = 680
+  end
+  object Tina4JSONAdapter1: TTina4JSONAdapter
+    DataKey = 'employees'
+    MemTable = FDMemTable3
+    JSONData.Strings = (
+      
+        '{"employees": [{"id": "1", "firstName": "John", "lastName": "Doe' +
+        '", "email": "john@example.com", "department": "Engineering"}, {"' +
+        'id": "2", "firstName": "Jane", "lastName": "Smith", "email": "ja' +
+        'ne@example.com", "department": "Marketing"}, {"id": "3", "firstN' +
+        'ame": "Bob", "lastName": "Wilson", "email": "bob@example.com", "' +
+        'department": "Engineering"}]}')
+    SyncMode = Clear
+    Left = 560
+    Top = 544
+  end
+  object FDMemTable3: TFDMemTable
+    Active = True
+    FieldDefs = <
+      item
+        Name = 'id'
+        DataType = ftString
+        Size = 1000
+      end
+      item
+        Name = 'firstName'
+        DataType = ftString
+        Size = 1000
+      end
+      item
+        Name = 'lastName'
+        DataType = ftString
+        Size = 1000
+      end
+      item
+        Name = 'email'
+        DataType = ftString
+        Size = 1000
+      end
+      item
+        Name = 'department'
+        DataType = ftString
+        Size = 1000
+      end>
+    IndexDefs = <>
+    FetchOptions.AssignedValues = [evMode]
+    FetchOptions.Mode = fmAll
+    ResourceOptions.AssignedValues = [rvSilentMode]
+    ResourceOptions.SilentMode = True
+    UpdateOptions.AssignedValues = [uvUpdateChngFields, uvUpdateMode, uvLockMode, uvLockPoint, uvLockWait, uvRefreshMode, uvFetchGeneratorsPoint, uvCheckRequired, uvCheckReadOnly, uvCheckUpdatable, uvAutoCommitUpdates]
+    UpdateOptions.LockWait = True
+    UpdateOptions.FetchGeneratorsPoint = gpNone
+    UpdateOptions.CheckRequired = False
+    UpdateOptions.AutoCommitUpdates = True
+    StoreDefs = True
+    Left = 696
+    Top = 560
   end
 end

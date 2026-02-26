@@ -3439,21 +3439,20 @@ begin
       Ctl.Width := Box.ContentWidth + Box.Style.Padding.Left + Box.Style.Padding.Right;
       Ctl.Height := Box.ContentHeight + Box.Style.Padding.Top + Box.Style.Padding.Bottom;
 
-      // Apply CSS styles to text controls (TEdit, TButton, TCheckBox, etc.)
-      if Ctl is TTextControl then
+      // Apply CSS styles via ITextSettings (works for TEdit, TButton, TMemo, etc.)
+      var TS: ITextSettings;
+      if Supports(Ctl, ITextSettings, TS) then
       begin
-        var TC := TTextControl(Ctl);
-        // Remove styled settings so our CSS values take effect
-        TC.StyledSettings := TC.StyledSettings - [TStyledSetting.Family,
+        TS.StyledSettings := TS.StyledSettings - [TStyledSetting.Family,
           TStyledSetting.Size, TStyledSetting.FontColor, TStyledSetting.Style];
-        TC.Font.Family := Box.Style.FontFamily;
-        TC.Font.Size := Box.Style.FontSize;
+        TS.TextSettings.Font.Family := Box.Style.FontFamily;
+        TS.TextSettings.Font.Size := Box.Style.FontSize;
         if Box.Style.Bold then
-          TC.Font.Style := TC.Font.Style + [TFontStyle.fsBold];
+          TS.TextSettings.Font.Style := TS.TextSettings.Font.Style + [TFontStyle.fsBold];
         if Box.Style.Italic then
-          TC.Font.Style := TC.Font.Style + [TFontStyle.fsItalic];
+          TS.TextSettings.Font.Style := TS.TextSettings.Font.Style + [TFontStyle.fsItalic];
         if Box.Style.Color <> TAlphaColors.Null then
-          TC.FontColor := Box.Style.Color;
+          TS.TextSettings.FontColor := Box.Style.Color;
       end;
 
       Rec.Control := Ctl;

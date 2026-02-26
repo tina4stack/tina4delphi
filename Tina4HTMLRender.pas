@@ -2670,17 +2670,12 @@ begin
     Layout.Color := Box.Style.Color;
     Layout.HorizontalAlign := TTextAlign.Trailing;
     Layout.TopLeft := PointF(X + Box.ContentLeft, MarkerY);
-    Layout.MaxSize := PointF(18, GetLineHeight(Box.Style));
+    Layout.MaxSize := PointF(18, Box.Style.FontSize * Box.Style.LineHeight);
     Layout.EndUpdate;
     Layout.RenderLayout(Canvas);
   finally
     Layout.Free;
   end;
-end;
-
-function GetLineHeight(const Style: TComputedStyle): Single;
-begin
-  Result := Style.FontSize * Style.LineHeight;
 end;
 
 procedure TTina4HTMLRender.PaintScrollBar(Canvas: TCanvas);

@@ -3087,13 +3087,19 @@ begin
       Box.ContentWidth := 16;
       Box.ContentHeight := 16;
     end
-    else if InputType = 'button' then
+    else if (InputType = 'button') or (InputType = 'submit') or (InputType = 'reset') then
     begin
       var BtnText := '';
       if Assigned(Box.Tag) then
-        BtnText := Box.Tag.GetAttribute('value', 'Button');
+        BtnText := Box.Tag.GetAttribute('value', '');
+      if BtnText = '' then
+      begin
+        if InputType = 'submit' then BtnText := 'Submit'
+        else if InputType = 'reset' then BtnText := 'Reset'
+        else BtnText := 'Button';
+      end;
       Box.ContentWidth := Max(60, MeasureTextWidth(BtnText, Box.Style) + 20);
-      Box.ContentHeight := 28;
+      Box.ContentHeight := Box.Style.FontSize * Box.Style.LineHeight;
     end
     else
     begin
@@ -3386,6 +3392,20 @@ begin
         RB.GroupName := Box.Tag.GetAttribute('name', 'radio');
         RB.OnChange := HandleFormControlChange;
         Ctl := RB;
+      end
+      else if (InputType = 'submit') or (InputType = 'button') or (InputType = 'reset') then
+      begin
+        var Btn := TButton.Create(Self);
+        if Val <> '' then
+          Btn.Text := Val
+        else if InputType = 'submit' then
+          Btn.Text := 'Submit'
+        else if InputType = 'reset' then
+          Btn.Text := 'Reset'
+        else
+          Btn.Text := 'Button';
+        Btn.OnClick := HandleFormControlClick;
+        Ctl := Btn;
       end
       else
       begin

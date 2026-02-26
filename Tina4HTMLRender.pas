@@ -2754,23 +2754,23 @@ begin
         TableContentW := Box.Style.ExplicitWidth;
     end;
 
-    // Equal column widths (simple approach)
-    var CellBorderW := BorderW;
-    var TotalBorder := CellBorderW * (NumCols + 1);
-    var AvailForCols := TableContentW - TotalBorder;
+    // Use collapsed borders — adjacent cells share a single border line.
+    // No spacing between cells; PaintTableCellBorders draws a single grid.
+    var CellBorderW: Single := 0;  // no inter-cell spacing in collapsed mode
+    var AvailForCols := TableContentW;
     if AvailForCols < 0 then AvailForCols := 0;
 
     SetLength(ColWidths, NumCols);
     for var I := 0 to NumCols - 1 do
       ColWidths[I] := AvailForCols / NumCols;
 
-    // Layout rows
-    CursorY := BorderW;
+    // Layout rows — no border offset needed with collapsed borders
+    CursorY := 0;
     for var Row in Rows do
     begin
       RowH := 0;
       ColIdx := 0;
-      var CellX := BorderW;
+      var CellX: Single := 0;
 
       for var Cell in Row.Children do
       begin
@@ -3325,26 +3325,8 @@ begin
     Exit;
   end;
 
-  // Table outer border (cell borders are drawn by PaintTableCellBorders)
-  if Box.Kind = lbkTable then
-  begin
-    R := RectF(
-      X + ML,
-      Y + MT,
-      X + ML + Box.Style.BorderWidth * 2 +
-        Box.Style.Padding.Left + Box.ContentWidth + Box.Style.Padding.Right,
-      Y + MT + Box.Style.BorderWidth * 2 +
-        Box.Style.Padding.Top + Box.ContentHeight + Box.Style.Padding.Bottom
-    );
-    Canvas.Stroke.Kind := TBrushKind.Solid;
-    Canvas.Stroke.Color := Box.Style.BorderColor;
-    Canvas.Stroke.Thickness := Box.Style.BorderWidth;
-    Canvas.DrawRect(R, 1.0);
-    Exit;
-  end;
-
-  // Skip cell borders (handled by table's PaintTableCellBorders)
-  if Box.Kind = lbkTableCell then
+  // Table borders are handled entirely by PaintTableCellBorders (collapsed grid)
+  if (Box.Kind = lbkTable) or (Box.Kind = lbkTableCell) then
     Exit;
 
   // General border
@@ -3687,51 +3669,72 @@ end;
 
 procedure TTina4HTMLRender.PaintTableCellBorders(Canvas: TCanvas; Box: TLayoutBox; CX, CY: Single);
 var
-  R: TRectF;
+  Rows: TList<TLayoutBox>;
+  RowYOffsets: TList<Single>;
+  TableW, TableH: Single;
+  BW: Single;
 begin
-  // Draw borders around each cell using the table's border style
+  // Draw collapsed grid borders: single lines shared between adjacent cells.
+  BW := Box.Style.BorderWidth;
   Canvas.Stroke.Kind := TBrushKind.Solid;
   Canvas.Stroke.Color := Box.Style.BorderColor;
-  Canvas.Stroke.Thickness := Box.Style.BorderWidth;
+  Canvas.Stroke.Thickness := BW;
 
-  for var Row in Box.Children do
-  begin
-    if Row.Kind <> lbkTableRow then Continue;
-    // Check for row groups (thead/tbody/tfoot) that contain actual rows
-    var HasSubRows := False;
-    for var Sub in Row.Children do
+  TableW := Box.ContentWidth;
+  TableH := Box.ContentHeight;
+
+  Rows := TList<TLayoutBox>.Create;
+  RowYOffsets := TList<Single>.Create;
+  try
+    // Collect all rows, flattening thead/tbody/tfoot groups
+    for var Child in Box.Children do
     begin
-      if Sub.Kind = lbkTableRow then
+      if Child.Kind <> lbkTableRow then Continue;
+      var HasSubRows := False;
+      for var Sub in Child.Children do
       begin
-        HasSubRows := True;
-        // Draw cells for sub-row
-        for var Cell in Sub.Children do
+        if Sub.Kind = lbkTableRow then
         begin
-          if Cell.Kind <> lbkTableCell then Continue;
-          R := RectF(
-            CX + Sub.X + Cell.X,
-            CY + Row.Y + Sub.Y + Cell.Y,
-            CX + Sub.X + Cell.X + Cell.ContentWidth + Cell.Style.Padding.Left + Cell.Style.Padding.Right,
-            CY + Row.Y + Sub.Y + Cell.Y + Cell.ContentHeight + Cell.Style.Padding.Top + Cell.Style.Padding.Bottom
-          );
-          Canvas.DrawRect(R, 1.0);
+          HasSubRows := True;
+          Rows.Add(Sub);
+          RowYOffsets.Add(Child.Y + Sub.Y);
         end;
       end;
-    end;
-    if not HasSubRows then
-    begin
-      for var Cell in Row.Children do
+      if not HasSubRows then
       begin
-        if Cell.Kind <> lbkTableCell then Continue;
-        R := RectF(
-          CX + Cell.X,
-          CY + Row.Y + Cell.Y,
-          CX + Cell.X + Cell.ContentWidth + Cell.Style.Padding.Left + Cell.Style.Padding.Right,
-          CY + Row.Y + Cell.Y + Cell.ContentHeight + Cell.Style.Padding.Top + Cell.Style.Padding.Bottom
-        );
-        Canvas.DrawRect(R, 1.0);
+        Rows.Add(Child);
+        RowYOffsets.Add(Child.Y);
       end;
     end;
+
+    // Draw outer table border
+    Canvas.DrawRect(RectF(CX, CY, CX + TableW, CY + TableH), 1.0);
+
+    // Draw horizontal lines between rows (not top or bottom — those are part of outer rect)
+    for var I := 0 to Rows.Count - 2 do
+    begin
+      var LineY := CY + RowYOffsets[I] + Rows[I].ContentHeight;
+      Canvas.DrawLine(PointF(CX, LineY), PointF(CX + TableW, LineY), 1.0);
+    end;
+
+    // Draw vertical lines between cells using the first row's cell positions
+    // (all rows have the same column layout)
+    if Rows.Count > 0 then
+    begin
+      var FirstRow := Rows[0];
+      for var Cell in FirstRow.Children do
+      begin
+        if Cell.Kind <> lbkTableCell then Continue;
+        var LineX := CX + Cell.X + Cell.ContentWidth +
+          Cell.Style.Padding.Left + Cell.Style.Padding.Right;
+        // Don't draw line at the right edge (that's the outer border)
+        if LineX < CX + TableW - 1 then
+          Canvas.DrawLine(PointF(LineX, CY), PointF(LineX, CY + TableH), 1.0);
+      end;
+    end;
+  finally
+    RowYOffsets.Free;
+    Rows.Free;
   end;
 end;
 

@@ -1485,7 +1485,17 @@ begin
             begin
               MemTable.Filter := MemTable.Filter +' and ';
             end;
-            MemTable.Filter := MemTable.Filter + IndexStringList[I] +' = '+QuotedStr(JSONRecord.GetValue<string>(IndexStringList[I]));
+
+            var JSONKeyValue: String := '';
+            // Try the field name directly first
+            if not JSONRecord.TryGetValue<string>(IndexStringList[I], JSONKeyValue) then
+            begin
+              // If not found and we're transforming to snake_case, try the camelCase version
+              if TransformFieldNamesToSnakeCase then
+                JSONRecord.TryGetValue<string>(CamelCase(IndexStringList[I]), JSONKeyValue);
+            end;
+
+            MemTable.Filter := MemTable.Filter + IndexStringList[I] +' = '+QuotedStr(JSONKeyValue);
           end;
 
           MemTable.Filtered := True;

@@ -11,15 +11,24 @@ type
     FMasterSource: TTina4RESTRequest;
     FDataKey: String;
     FMemTable : TFDMemTable;
+    FJSONData: TStringList;
+    FSyncMode: TTina4RestSyncMode;
+    FIndexFieldNames: String;
     FMasterOnExecuteDone: TTina4Event;
     procedure SetMasterSource(const Source: TTina4RESTRequest);
+    procedure SetJSONData(const Value: TStringList);
     procedure RunExecute(Sender: TObject);
   public
+    constructor Create(AOwner: TComponent); override;
+    destructor Destroy; override;
     procedure Execute;
 
   published
     property DataKey: String read FDataKey write FDataKey;
     property MemTable: TFDMemTable read FMemTable write FMemTable;
+    property JSONData: TStringList read FJSONData write SetJSONData;
+    property SyncMode: TTina4RestSyncMode read FSyncMode write FSyncMode;
+    property IndexFieldNames: String read FIndexFieldNames write FIndexFieldNames;
     property MasterSource: TTina4RESTRequest read FMasterSource write SetMasterSource;
   end;
 
@@ -34,10 +43,36 @@ end;
 
 { TTina4JSONAdapter }
 
+constructor TTina4JSONAdapter.Create(AOwner: TComponent);
+begin
+  inherited;
+  FJSONData := TStringList.Create;
+end;
+
+destructor TTina4JSONAdapter.Destroy;
+begin
+  FJSONData.Free;
+  inherited;
+end;
+
+procedure TTina4JSONAdapter.SetJSONData(const Value: TStringList);
+begin
+  FJSONData.Assign(Value);
+end;
+
 procedure TTina4JSONAdapter.Execute;
 begin
-  //Populates the target mem table
-  if Assigned(FMemTable) and Assigned(FMasterSource) then
+  if not Assigned(FMemTable) then
+    Exit;
+
+  //Populate from JSONData property if it has content
+  if FJSONData.Text <> '' then
+  begin
+    PopulateMemTableFromJSON(FMemTable, FDataKey, FJSONData.Text, FIndexFieldNames, FSyncMode);
+  end;
+
+  //Populate from MasterSource if assigned
+  if Assigned(FMasterSource) then
   begin
     var MasterJSONData: String :=  FMasterSource.ResponseBody.Text;
 
@@ -63,7 +98,7 @@ begin
         end;
       end;
     end;
-    PopulateMemTableFromJSON(FMemTable, FDataKey, MasterJSONData); //data key is checkList
+    PopulateMemTableFromJSON(FMemTable, FDataKey, MasterJSONData, FIndexFieldNames, FSyncMode);
   end;
 end;
 

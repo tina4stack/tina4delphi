@@ -4,7 +4,8 @@ interface
 
 uses
   System.SysUtils, System.Classes, System.Types, System.Math,
-  System.Generics.Collections, System.UITypes, System.UIConsts,
+  System.Generics.Collections, System.Generics.Defaults,
+  System.UITypes, System.UIConsts,
   System.NetEncoding, System.Net.HttpClient,
   FMX.Types, FMX.Controls, FMX.Graphics, FMX.TextLayout;
 
@@ -38,6 +39,8 @@ type
     FPos: Integer;
     FLen: Integer;
     FInPre: Boolean;
+    FStyleBlocks: TStringList;
+    FLinkHrefs: TStringList;
     function Peek: Char;
     function PeekAt(Offset: Integer): Char;
     procedure Advance(Count: Integer = 1);
@@ -46,6 +49,7 @@ type
     procedure SkipComment;
     procedure SkipDoctype;
     procedure SkipRawContent(const TagName: string);
+    function ReadRawContent(const TagName: string): string;
     function ReadTagName: string;
     function ReadAttributeValue: string;
     procedure ParseAttributes(Tag: THTMLTag);
@@ -59,8 +63,40 @@ type
     destructor Destroy; override;
     procedure Parse(const HTML: string);
     property Root: THTMLTag read FRoot;
+    property StyleBlocks: TStringList read FStyleBlocks;
+    property LinkHrefs: TStringList read FLinkHrefs;
     class function DecodeEntities(const S: string): string; static;
     class function IsBlockTag(const Name: string): Boolean; static;
+  end;
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // CSS Stylesheet
+  // ─────────────────────────────────────────────────────────────────────────
+
+  TCSSDeclarations = TDictionary<string, string>;
+
+  TCSSRule = class
+  public
+    Selector: string;
+    Declarations: TCSSDeclarations;
+    constructor Create;
+    destructor Destroy; override;
+  end;
+
+  TCSSStyleSheet = class
+  private
+    FRules: TObjectList<TCSSRule>;
+    procedure ParseCSS(const CSSText: string);
+    function SelectorMatches(const Selector: string; Tag: THTMLTag): Boolean;
+    function SelectorSpecificity(const Selector: string): Integer;
+  public
+    constructor Create;
+    destructor Destroy; override;
+    procedure AddCSS(const CSSText: string);
+    procedure LoadFromURL(const URL: string);
+    procedure Clear;
+    procedure ApplyTo(Tag: THTMLTag; Declarations: TCSSDeclarations);
+    property Rules: TObjectList<TCSSRule> read FRules;
   end;
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -93,7 +129,8 @@ type
     Display: string;
     WhiteSpace: string;
     class function Default: TComputedStyle; static;
-    class function ForTag(Tag: THTMLTag; const ParentStyle: TComputedStyle): TComputedStyle; static;
+    class function ForTag(Tag: THTMLTag; const ParentStyle: TComputedStyle; StyleSheet: TCSSStyleSheet = nil): TComputedStyle; static;
+    class procedure ApplyDeclarations(Decls: TCSSDeclarations; var Style: TComputedStyle; const ParentStyle: TComputedStyle); static;
     class function ParseColor(const S: string): TAlphaColor; static;
     class function ParseLength(const S: string; EmSize: Single = 14): Single; static;
     class procedure ParseEdgeShorthand(const S: string; var E: TEdgeValues; EmSize: Single); static;
@@ -157,6 +194,7 @@ type
   private
     FRoot: TLayoutBox;
     FImageCache: TImageCache;
+    FStyleSheet: TCSSStyleSheet;
     FTotalHeight: Single;
     function BuildBoxTree(Tag: THTMLTag; const ParentStyle: TComputedStyle): TLayoutBox;
     procedure LayoutBlock(Box: TLayoutBox; AvailWidth: Single);
@@ -172,7 +210,7 @@ type
   public
     constructor Create(AImageCache: TImageCache);
     destructor Destroy; override;
-    procedure Layout(DOMRoot: THTMLTag; AvailWidth: Single);
+    procedure Layout(DOMRoot: THTMLTag; AvailWidth: Single; AStyleSheet: TCSSStyleSheet = nil);
     property Root: TLayoutBox read FRoot;
     property TotalHeight: Single read FTotalHeight;
   end;
@@ -188,6 +226,7 @@ type
     FParser: THTMLParser;
     FLayoutEngine: TLayoutEngine;
     FImageCache: TImageCache;
+    FStyleSheet: TCSSStyleSheet;
     FScrollY: Single;
     FContentHeight: Single;
     FNeedRelayout: Boolean;
@@ -281,6 +320,314 @@ begin
 end;
 
 // ═══════════════════════════════════════════════════════════════════════════
+// TCSSRule / TCSSStyleSheet
+// ═══════════════════════════════════════════════════════════════════════════
+
+constructor TCSSRule.Create;
+begin
+  inherited;
+  Declarations := TCSSDeclarations.Create;
+end;
+
+destructor TCSSRule.Destroy;
+begin
+  Declarations.Free;
+  inherited;
+end;
+
+constructor TCSSStyleSheet.Create;
+begin
+  inherited;
+  FRules := TObjectList<TCSSRule>.Create(True);
+end;
+
+destructor TCSSStyleSheet.Destroy;
+begin
+  FRules.Free;
+  inherited;
+end;
+
+procedure TCSSStyleSheet.Clear;
+begin
+  FRules.Clear;
+end;
+
+procedure TCSSStyleSheet.ParseCSS(const CSSText: string);
+var
+  S, SelectorPart, DeclBlock, DeclStr: string;
+  BraceStart, BraceEnd, I: Integer;
+  Rule: TCSSRule;
+  Decls: TArray<string>;
+  KV: TArray<string>;
+  Selectors: TArray<string>;
+begin
+  // Strip CSS comments /* ... */
+  S := CSSText;
+  I := S.IndexOf('/*');
+  while I >= 0 do
+  begin
+    var EndComment := S.IndexOf('*/', I + 2);
+    if EndComment >= 0 then
+      S := S.Remove(I, EndComment - I + 2)
+    else
+      S := S.Remove(I);
+    I := S.IndexOf('/*');
+  end;
+
+  I := 0;
+  while I < Length(S) do
+  begin
+    // Find opening brace
+    BraceStart := S.IndexOf('{', I);
+    if BraceStart < 0 then Break;
+
+    // Find matching closing brace
+    BraceEnd := S.IndexOf('}', BraceStart + 1);
+    if BraceEnd < 0 then Break;
+
+    SelectorPart := S.Substring(I, BraceStart - I).Trim;
+    DeclBlock := S.Substring(BraceStart + 1, BraceEnd - BraceStart - 1).Trim;
+
+    // Skip @rules (media queries, keyframes, etc.)
+    if SelectorPart.StartsWith('@') then
+    begin
+      I := BraceEnd + 1;
+      Continue;
+    end;
+
+    // Parse declarations
+    if (SelectorPart <> '') and (DeclBlock <> '') then
+    begin
+      // Handle comma-separated selectors: "h1, h2, h3 { ... }"
+      Selectors := SelectorPart.Split([',']);
+      Decls := DeclBlock.Split([';']);
+
+      for var Sel in Selectors do
+      begin
+        var TrimmedSel := Sel.Trim;
+        if TrimmedSel = '' then Continue;
+
+        Rule := TCSSRule.Create;
+        Rule.Selector := TrimmedSel;
+
+        for var D in Decls do
+        begin
+          DeclStr := D.Trim;
+          if DeclStr = '' then Continue;
+          KV := DeclStr.Split([':'], 2);
+          if Length(KV) = 2 then
+            Rule.Declarations.AddOrSetValue(KV[0].Trim.ToLower, KV[1].Trim);
+        end;
+
+        if Rule.Declarations.Count > 0 then
+          FRules.Add(Rule)
+        else
+          Rule.Free;
+      end;
+    end;
+
+    I := BraceEnd + 1;
+  end;
+end;
+
+procedure TCSSStyleSheet.AddCSS(const CSSText: string);
+begin
+  ParseCSS(CSSText);
+end;
+
+procedure TCSSStyleSheet.LoadFromURL(const URL: string);
+var
+  Client: THTTPClient;
+  Response: IHTTPResponse;
+begin
+  Client := THTTPClient.Create;
+  try
+    try
+      Response := Client.Get(URL);
+      if Response.StatusCode = 200 then
+        AddCSS(Response.ContentAsString);
+    except
+      // Silently fail on network errors
+    end;
+  finally
+    Client.Free;
+  end;
+end;
+
+function TCSSStyleSheet.SelectorSpecificity(const Selector: string): Integer;
+var
+  S: string;
+begin
+  // Simple specificity: ID=100, class/attr=10, tag=1
+  Result := 0;
+  S := Selector;
+  for var C in S do
+  begin
+    if C = '#' then Inc(Result, 100)
+    else if C = '.' then Inc(Result, 10);
+  end;
+  // Count tag-level selectors (parts that don't start with # or .)
+  var Parts := S.Split([' ']);
+  for var P in Parts do
+  begin
+    var T := P.Trim;
+    if (T <> '') and not T.StartsWith('#') and not T.StartsWith('.') and not T.StartsWith(':') then
+      Inc(Result, 1);
+  end;
+end;
+
+function MatchesSingleSelector(const Sel: string; Tag: THTMLTag): Boolean;
+var
+  SelTag, SelClass, SelId: string;
+  DotPos, HashPos: Integer;
+begin
+  Result := False;
+  if not Assigned(Tag) or (Tag.TagName = '#text') or (Tag.TagName = 'root') then
+    Exit;
+
+  // Parse selector into tag, class, id parts
+  // e.g., "div.container#main" -> tag=div, class=container, id=main
+  SelTag := '';
+  SelClass := '';
+  SelId := '';
+
+  var S := Sel;
+  HashPos := S.IndexOf('#');
+  DotPos := S.IndexOf('.');
+
+  if (HashPos >= 0) and ((DotPos < 0) or (HashPos < DotPos)) then
+  begin
+    SelTag := S.Substring(0, HashPos);
+    var Rest := S.Substring(HashPos + 1);
+    DotPos := Rest.IndexOf('.');
+    if DotPos >= 0 then
+    begin
+      SelId := Rest.Substring(0, DotPos);
+      SelClass := Rest.Substring(DotPos + 1);
+    end
+    else
+      SelId := Rest;
+  end
+  else if DotPos >= 0 then
+  begin
+    SelTag := S.Substring(0, DotPos);
+    var Rest := S.Substring(DotPos + 1);
+    HashPos := Rest.IndexOf('#');
+    if HashPos >= 0 then
+    begin
+      SelClass := Rest.Substring(0, HashPos);
+      SelId := Rest.Substring(HashPos + 1);
+    end
+    else
+      SelClass := Rest;
+  end
+  else
+    SelTag := S;
+
+  // Match tag name
+  if (SelTag <> '') and (SelTag <> '*') then
+  begin
+    if not SameText(SelTag, Tag.TagName) then Exit;
+  end;
+
+  // Match class
+  if SelClass <> '' then
+  begin
+    var TagClass := Tag.GetAttribute('class', '').ToLower;
+    // Support multiple classes on element
+    var Classes := TagClass.Split([' ']);
+    var Found := False;
+    for var C in Classes do
+      if SameText(C.Trim, SelClass) then
+      begin
+        Found := True;
+        Break;
+      end;
+    if not Found then Exit;
+  end;
+
+  // Match ID
+  if SelId <> '' then
+  begin
+    var TagId := Tag.GetAttribute('id', '').ToLower;
+    if not SameText(TagId, SelId) then Exit;
+  end;
+
+  // Must have matched at least something
+  if (SelTag = '') and (SelClass = '') and (SelId = '') then Exit;
+
+  Result := True;
+end;
+
+function TCSSStyleSheet.SelectorMatches(const Selector: string; Tag: THTMLTag): Boolean;
+var
+  Sel: string;
+  Parts: TArray<string>;
+begin
+  Result := False;
+  if not Assigned(Tag) or (Tag.TagName = '#text') or (Tag.TagName = 'root') then
+    Exit;
+
+  Sel := Selector.Trim.ToLower;
+  if Sel = '' then Exit;
+
+  // Handle descendant selectors (e.g., "div p", "ul li a")
+  Parts := Sel.Split([' ']);
+
+  // Match the last selector part against the current tag
+  var LastPart := Parts[Length(Parts) - 1].Trim;
+  if not MatchesSingleSelector(LastPart, Tag) then
+    Exit;
+
+  // If single selector, we're done
+  if Length(Parts) = 1 then
+    Exit(True);
+
+  // For descendant selectors, walk up ancestor chain
+  var Current := Tag.Parent;
+  var PartIdx := Length(Parts) - 2;
+  while (PartIdx >= 0) and Assigned(Current) do
+  begin
+    if MatchesSingleSelector(Parts[PartIdx].Trim, Current) then
+      Dec(PartIdx);
+    Current := Current.Parent;
+  end;
+
+  Result := PartIdx < 0;
+end;
+
+procedure TCSSStyleSheet.ApplyTo(Tag: THTMLTag; Declarations: TCSSDeclarations);
+var
+  MatchedRules: TList<TCSSRule>;
+begin
+  // Collect matching rules and sort by specificity (lower first, so higher overrides)
+  MatchedRules := TList<TCSSRule>.Create;
+  try
+    for var Rule in FRules do
+    begin
+      if SelectorMatches(Rule.Selector, Tag) then
+        MatchedRules.Add(Rule);
+    end;
+
+    // Sort by specificity ascending — higher specificity applied last wins
+    MatchedRules.Sort(TComparer<TCSSRule>.Construct(
+      function(const A, B: TCSSRule): Integer
+      begin
+        Result := SelectorSpecificity(A.Selector) - SelectorSpecificity(B.Selector);
+      end
+    ));
+
+    for var Rule in MatchedRules do
+    begin
+      for var Pair in Rule.Declarations do
+        Declarations.AddOrSetValue(Pair.Key, Pair.Value);
+    end;
+  finally
+    MatchedRules.Free;
+  end;
+end;
+
+// ═══════════════════════════════════════════════════════════════════════════
 // THTMLParser
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -289,11 +636,15 @@ begin
   inherited;
   FRoot := THTMLTag.Create;
   FRoot.TagName := 'root';
+  FStyleBlocks := TStringList.Create;
+  FLinkHrefs := TStringList.Create;
 end;
 
 destructor THTMLParser.Destroy;
 begin
   FRoot.Free;
+  FStyleBlocks.Free;
+  FLinkHrefs.Free;
   inherited;
 end;
 
@@ -385,6 +736,44 @@ begin
     end;
     Advance;
   end;
+end;
+
+function THTMLParser.ReadRawContent(const TagName: string): string;
+var
+  CloseTag: string;
+  StartPos: Integer;
+begin
+  Result := '';
+  CloseTag := '</' + TagName;
+  StartPos := FPos;
+  while not AtEnd do
+  begin
+    if (Peek = '<') and (PeekAt(1) = '/') then
+    begin
+      var Match := True;
+      for var I := 0 to Length(CloseTag) - 1 do
+      begin
+        var C := PeekAt(I);
+        if LowerCase(C) <> LowerCase(CloseTag[I + 1]) then
+        begin
+          Match := False;
+          Break;
+        end;
+      end;
+      if Match then
+      begin
+        Result := Copy(FHTML, StartPos, FPos - StartPos);
+        Advance(Length(CloseTag));
+        while not AtEnd and (Peek <> '>') do
+          Advance;
+        if not AtEnd then
+          Advance;
+        Exit;
+      end;
+    end;
+    Advance;
+  end;
+  Result := Copy(FHTML, StartPos, FPos - StartPos);
 end;
 
 function THTMLParser.ReadTagName: string;
@@ -587,8 +976,7 @@ end;
 class function THTMLParser.IsIgnoredTag(const Name: string): Boolean;
 begin
   Result := SameText(Name, 'head') or SameText(Name, 'meta') or
-    SameText(Name, 'link') or SameText(Name, 'title') or
-    SameText(Name, 'script') or SameText(Name, 'style');
+    SameText(Name, 'title');
 end;
 
 procedure THTMLParser.ParseChildren(Parent: THTMLTag; const StopTag: string);
@@ -695,15 +1083,35 @@ begin
         if not AtEnd and (Peek = '>') then
           Advance; // skip '>'
 
-        // Raw content tags (script, style) — skip content
-        if IsRawTag(TagName) and not SelfClose then
+        // <style> — capture CSS content
+        if SameText(TagName, 'style') and not SelfClose then
+        begin
+          var CSSContent := ReadRawContent(TagName);
+          FStyleBlocks.Add(CSSContent);
+          ChildTag.Free;
+          Continue;
+        end;
+
+        // <script> — skip content
+        if SameText(TagName, 'script') and not SelfClose then
         begin
           SkipRawContent(TagName);
           ChildTag.Free;
           Continue;
         end;
 
-        // Ignored tags — skip the tag node but parse children for body-like containers
+        // <link rel="stylesheet" href="..."> — capture href
+        if SameText(TagName, 'link') then
+        begin
+          var Rel := ChildTag.GetAttribute('rel', '').ToLower;
+          var Href := ChildTag.GetAttribute('href', '');
+          if (Rel = 'stylesheet') and (Href <> '') then
+            FLinkHrefs.Add(Href);
+          ChildTag.Free;
+          Continue;
+        end;
+
+        // Other ignored tags (head, meta, title)
         if IsIgnoredTag(TagName) then
         begin
           ChildTag.Free;
@@ -775,6 +1183,8 @@ begin
   for var Child in FRoot.Children do
     Child.Free;
   FRoot.Children.Clear;
+  FStyleBlocks.Clear;
+  FLinkHrefs.Clear;
 
   FHTML := HTML;
   FLen := Length(FHTML);
@@ -975,7 +1385,7 @@ begin
   end;
 end;
 
-class function TComputedStyle.ForTag(Tag: THTMLTag; const ParentStyle: TComputedStyle): TComputedStyle;
+class function TComputedStyle.ForTag(Tag: THTMLTag; const ParentStyle: TComputedStyle; StyleSheet: TCSSStyleSheet): TComputedStyle;
 var
   TN, Temp: string;
   Level: Integer;
@@ -1159,94 +1569,114 @@ begin
       Result.BorderColor := TAlphaColors.Black;
   end;
 
-  // Inline style overrides
-  if Tag.Style.TryGetValue('color', Temp) then
-    Result.Color := ParseColor(Temp);
-  if Tag.Style.TryGetValue('background-color', Temp) then
-    Result.BackgroundColor := ParseColor(Temp);
-  if Tag.Style.TryGetValue('background', Temp) then
+  // Stylesheet rules (lower priority than inline)
+  if Assigned(StyleSheet) then
   begin
-    // Simple background — just color
-    if not Temp.Contains('url') then
-      Result.BackgroundColor := ParseColor(Temp);
+    var CSSDecls := TCSSDeclarations.Create;
+    try
+      StyleSheet.ApplyTo(Tag, CSSDecls);
+      if CSSDecls.Count > 0 then
+        ApplyDeclarations(CSSDecls, Result, ParentStyle);
+    finally
+      CSSDecls.Free;
+    end;
   end;
-  if Tag.Style.TryGetValue('font-family', Temp) then
-    Result.FontFamily := Temp.DeQuotedString('''').DeQuotedString('"');
-  if Tag.Style.TryGetValue('font-size', Temp) then
-    Result.FontSize := ParseLength(Temp, ParentStyle.FontSize);
-  if Tag.Style.TryGetValue('font-weight', Temp) then
-    Result.Bold := SameText(Temp, 'bold') or (StrToIntDef(Temp, 400) >= 700);
-  if Tag.Style.TryGetValue('font-style', Temp) then
-    Result.Italic := SameText(Temp, 'italic') or SameText(Temp, 'oblique');
-  if Tag.Style.TryGetValue('text-decoration', Temp) then
-    Result.TextDecoration := Temp.ToLower;
-  if Tag.Style.TryGetValue('text-align', Temp) then
+
+  // Inline style overrides (highest priority)
+  if Tag.Style.Count > 0 then
+    ApplyDeclarations(Tag.Style, Result, ParentStyle);
+end;
+
+class procedure TComputedStyle.ApplyDeclarations(Decls: TCSSDeclarations; var Style: TComputedStyle; const ParentStyle: TComputedStyle);
+var
+  Temp: string;
+begin
+  if Decls.TryGetValue('color', Temp) then
+    Style.Color := ParseColor(Temp);
+  if Decls.TryGetValue('background-color', Temp) then
+    Style.BackgroundColor := ParseColor(Temp);
+  if Decls.TryGetValue('background', Temp) then
+  begin
+    if not Temp.Contains('url') then
+      Style.BackgroundColor := ParseColor(Temp);
+  end;
+  if Decls.TryGetValue('font-family', Temp) then
+    Style.FontFamily := Temp.DeQuotedString('''').DeQuotedString('"');
+  if Decls.TryGetValue('font-size', Temp) then
+    Style.FontSize := ParseLength(Temp, ParentStyle.FontSize);
+  if Decls.TryGetValue('font-weight', Temp) then
+    Style.Bold := SameText(Temp, 'bold') or (StrToIntDef(Temp, 400) >= 700);
+  if Decls.TryGetValue('font-style', Temp) then
+    Style.Italic := SameText(Temp, 'italic') or SameText(Temp, 'oblique');
+  if Decls.TryGetValue('text-decoration', Temp) then
+    Style.TextDecoration := Temp.ToLower;
+  if Decls.TryGetValue('text-align', Temp) then
   begin
     Temp := Temp.ToLower;
-    if Temp = 'center' then Result.TextAlign := TTextAlign.Center
-    else if Temp = 'right' then Result.TextAlign := TTextAlign.Trailing
-    else if Temp = 'justify' then Result.TextAlign := TTextAlign.Leading
-    else Result.TextAlign := TTextAlign.Leading;
+    if Temp = 'center' then Style.TextAlign := TTextAlign.Center
+    else if Temp = 'right' then Style.TextAlign := TTextAlign.Trailing
+    else if Temp = 'justify' then Style.TextAlign := TTextAlign.Leading
+    else Style.TextAlign := TTextAlign.Leading;
   end;
-  if Tag.Style.TryGetValue('line-height', Temp) then
+  if Decls.TryGetValue('line-height', Temp) then
   begin
     var LH := StrToFloatDef(Temp.Replace('px', '').Replace('em', ''), 0);
     if LH > 0 then
     begin
       if Temp.Contains('px') then
-        Result.LineHeight := LH / Result.FontSize
+        Style.LineHeight := LH / Style.FontSize
       else
-        Result.LineHeight := LH;
+        Style.LineHeight := LH;
     end;
   end;
-  if Tag.Style.TryGetValue('margin', Temp) then
-    ParseEdgeShorthand(Temp, Result.Margin, Result.FontSize);
-  if Tag.Style.TryGetValue('margin-top', Temp) then
-    Result.Margin.Top := ParseLength(Temp, Result.FontSize);
-  if Tag.Style.TryGetValue('margin-right', Temp) then
-    Result.Margin.Right := ParseLength(Temp, Result.FontSize);
-  if Tag.Style.TryGetValue('margin-bottom', Temp) then
-    Result.Margin.Bottom := ParseLength(Temp, Result.FontSize);
-  if Tag.Style.TryGetValue('margin-left', Temp) then
-    Result.Margin.Left := ParseLength(Temp, Result.FontSize);
-  if Tag.Style.TryGetValue('padding', Temp) then
-    ParseEdgeShorthand(Temp, Result.Padding, Result.FontSize);
-  if Tag.Style.TryGetValue('padding-top', Temp) then
-    Result.Padding.Top := ParseLength(Temp, Result.FontSize);
-  if Tag.Style.TryGetValue('padding-right', Temp) then
-    Result.Padding.Right := ParseLength(Temp, Result.FontSize);
-  if Tag.Style.TryGetValue('padding-bottom', Temp) then
-    Result.Padding.Bottom := ParseLength(Temp, Result.FontSize);
-  if Tag.Style.TryGetValue('padding-left', Temp) then
-    Result.Padding.Left := ParseLength(Temp, Result.FontSize);
-  if Tag.Style.TryGetValue('border', Temp) then
+  if Decls.TryGetValue('margin', Temp) then
+    ParseEdgeShorthand(Temp, Style.Margin, Style.FontSize);
+  if Decls.TryGetValue('margin-top', Temp) then
+    Style.Margin.Top := ParseLength(Temp, Style.FontSize);
+  if Decls.TryGetValue('margin-right', Temp) then
+    Style.Margin.Right := ParseLength(Temp, Style.FontSize);
+  if Decls.TryGetValue('margin-bottom', Temp) then
+    Style.Margin.Bottom := ParseLength(Temp, Style.FontSize);
+  if Decls.TryGetValue('margin-left', Temp) then
+    Style.Margin.Left := ParseLength(Temp, Style.FontSize);
+  if Decls.TryGetValue('padding', Temp) then
+    ParseEdgeShorthand(Temp, Style.Padding, Style.FontSize);
+  if Decls.TryGetValue('padding-top', Temp) then
+    Style.Padding.Top := ParseLength(Temp, Style.FontSize);
+  if Decls.TryGetValue('padding-right', Temp) then
+    Style.Padding.Right := ParseLength(Temp, Style.FontSize);
+  if Decls.TryGetValue('padding-bottom', Temp) then
+    Style.Padding.Bottom := ParseLength(Temp, Style.FontSize);
+  if Decls.TryGetValue('padding-left', Temp) then
+    Style.Padding.Left := ParseLength(Temp, Style.FontSize);
+  if Decls.TryGetValue('border', Temp) then
   begin
     var BParts := Temp.Split([' ']);
     for var BP in BParts do
     begin
       var BT := BP.Trim.ToLower;
       if (BT.EndsWith('px')) or (StrToFloatDef(BT, -1) >= 0) then
-        Result.BorderWidth := StrToFloatDef(BT.Replace('px', ''), 1)
+        Style.BorderWidth := StrToFloatDef(BT.Replace('px', ''), 1)
       else if BT = 'solid' then
         // border style is solid, default
       else if BT <> 'none' then
-        Result.BorderColor := ParseColor(BT);
+        Style.BorderColor := ParseColor(BT);
     end;
   end;
-  if Tag.Style.TryGetValue('border-color', Temp) then
-    Result.BorderColor := ParseColor(Temp);
-  if Tag.Style.TryGetValue('border-width', Temp) then
-    Result.BorderWidth := ParseLength(Temp, Result.FontSize);
-  if Tag.Style.TryGetValue('width', Temp) then
-    Result.ExplicitWidth := ParseLength(Temp, Result.FontSize);
-  if Tag.Style.TryGetValue('height', Temp) then
-    Result.ExplicitHeight := ParseLength(Temp, Result.FontSize);
-  if Tag.Style.TryGetValue('display', Temp) then
-    Result.Display := Temp.ToLower;
-  if Tag.Style.TryGetValue('vertical-align', Temp) then
-    Result.VerticalAlign := Temp.ToLower;
-  if Tag.Style.TryGetValue('white-space', Temp) then
-    Result.WhiteSpace := Temp.ToLower;
+  if Decls.TryGetValue('border-color', Temp) then
+    Style.BorderColor := ParseColor(Temp);
+  if Decls.TryGetValue('border-width', Temp) then
+    Style.BorderWidth := ParseLength(Temp, Style.FontSize);
+  if Decls.TryGetValue('width', Temp) then
+    Style.ExplicitWidth := ParseLength(Temp, Style.FontSize);
+  if Decls.TryGetValue('height', Temp) then
+    Style.ExplicitHeight := ParseLength(Temp, Style.FontSize);
+  if Decls.TryGetValue('display', Temp) then
+    Style.Display := Temp.ToLower;
+  if Decls.TryGetValue('vertical-align', Temp) then
+    Style.VerticalAlign := Temp.ToLower;
+  if Decls.TryGetValue('white-space', Temp) then
+    Style.WhiteSpace := Temp.ToLower;
 end;
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1491,7 +1921,7 @@ var
   Kind: TLayoutBoxKind;
   ChildBox: TLayoutBox;
 begin
-  Style := TComputedStyle.ForTag(Tag, ParentStyle);
+  Style := TComputedStyle.ForTag(Tag, ParentStyle, FStyleSheet);
 
   if Style.Display = 'none' then
     Exit(nil);
@@ -2110,10 +2540,11 @@ begin
   Box.ContentHeight := 2;
 end;
 
-procedure TLayoutEngine.Layout(DOMRoot: THTMLTag; AvailWidth: Single);
+procedure TLayoutEngine.Layout(DOMRoot: THTMLTag; AvailWidth: Single; AStyleSheet: TCSSStyleSheet);
 begin
   FRoot.Free;
   FRoot := nil;
+  FStyleSheet := AStyleSheet;
 
   if not Assigned(DOMRoot) then Exit;
 
@@ -2141,6 +2572,7 @@ begin
   FImageCache.OnImageLoaded := OnImageLoaded;
   FParser := THTMLParser.Create;
   FLayoutEngine := TLayoutEngine.Create(FImageCache);
+  FStyleSheet := TCSSStyleSheet.Create;
   FHTML.OnChange := FHTMLChange;
   FScrollY := 0;
   FContentHeight := 0;
@@ -2156,6 +2588,7 @@ end;
 
 destructor TTina4HTMLRender.Destroy;
 begin
+  FStyleSheet.Free;
   FLayoutEngine.Free;
   FParser.Free;
   FImageCache.Free;
@@ -2193,10 +2626,18 @@ begin
   FIsLayoutting := True;
   try
     FParser.Parse(FHTML.Text);
+
+    // Build stylesheet from <style> blocks and <link rel="stylesheet"> hrefs
+    FStyleSheet.Clear;
+    for var I := 0 to FParser.StyleBlocks.Count - 1 do
+      FStyleSheet.AddCSS(FParser.StyleBlocks[I]);
+    for var I := 0 to FParser.LinkHrefs.Count - 1 do
+      FStyleSheet.LoadFromURL(FParser.LinkHrefs[I]);
+
     var AvailW := Width;
     if ScrollBarVisible then
       AvailW := AvailW - FScrollBarWidth;
-    FLayoutEngine.Layout(FParser.Root, AvailW);
+    FLayoutEngine.Layout(FParser.Root, AvailW, FStyleSheet);
     FContentHeight := FLayoutEngine.TotalHeight;
     ClampScroll;
     FNeedRelayout := False;

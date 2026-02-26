@@ -7,6 +7,7 @@ uses
   System.Generics.Collections, System.Generics.Defaults,
   System.UITypes, System.UIConsts,
   System.NetEncoding, System.Net.HttpClient,
+  System.IOUtils, System.Hash,
   FMX.Types, FMX.Controls, FMX.Graphics, FMX.TextLayout;
 
 type
@@ -70,6 +71,27 @@ type
   end;
 
   // ─────────────────────────────────────────────────────────────────────────
+  // File Cache (disk-based caching for HTTP downloads)
+  // ─────────────────────────────────────────────────────────────────────────
+
+  TFileCache = class
+  private
+    FCacheDir: string;
+    FEnabled: Boolean;
+    procedure EnsureCacheDir;
+    function URLToFileName(const URL: string): string;
+  public
+    constructor Create;
+    function TryLoadBytes(const URL: string; out Bytes: TBytes): Boolean;
+    procedure SaveBytes(const URL: string; const Bytes: TBytes);
+    function TryLoadString(const URL: string; out Content: string): Boolean;
+    procedure SaveString(const URL: string; const Content: string);
+    procedure ClearCache;
+    property CacheDir: string read FCacheDir write FCacheDir;
+    property Enabled: Boolean read FEnabled write FEnabled;
+  end;
+
+  // ─────────────────────────────────────────────────────────────────────────
   // CSS Stylesheet
   // ─────────────────────────────────────────────────────────────────────────
 
@@ -86,6 +108,7 @@ type
   TCSSStyleSheet = class
   private
     FRules: TObjectList<TCSSRule>;
+    FFileCache: TFileCache;
     procedure ParseCSS(const CSSText: string);
     function SelectorMatches(const Selector: string; Tag: THTMLTag): Boolean;
     function SelectorSpecificity(const Selector: string): Integer;
@@ -97,6 +120,7 @@ type
     procedure Clear;
     procedure ApplyTo(Tag: THTMLTag; Declarations: TCSSDeclarations);
     property Rules: TObjectList<TCSSRule> read FRules;
+    property FileCache: TFileCache read FFileCache write FFileCache;
   end;
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -177,6 +201,7 @@ type
     FPending: TDictionary<string, Boolean>;
     FOnImageLoaded: TNotifyEvent;
     FDestroying: Boolean;
+    FFileCache: TFileCache;
   public
     constructor Create;
     destructor Destroy; override;
@@ -184,6 +209,7 @@ type
     procedure RequestImage(const Src: string);
     procedure Clear;
     property OnImageLoaded: TNotifyEvent read FOnImageLoaded write FOnImageLoaded;
+    property FileCache: TFileCache read FFileCache write FFileCache;
   end;
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -227,6 +253,9 @@ type
     FLayoutEngine: TLayoutEngine;
     FImageCache: TImageCache;
     FStyleSheet: TCSSStyleSheet;
+    FFileCache: TFileCache;
+    FCacheEnabled: Boolean;
+    FCacheDir: string;
     FScrollY: Single;
     FContentHeight: Single;
     FNeedRelayout: Boolean;
@@ -237,6 +266,8 @@ type
     FScrollDragThumbStart: Single;
     procedure SetHTML(const Value: TStringList);
     function GetHTML: TStringList;
+    procedure SetCacheEnabled(Value: Boolean);
+    procedure SetCacheDir(const Value: string);
     procedure FHTMLChange(Sender: TObject);
     procedure OnImageLoaded(Sender: TObject);
     procedure DoLayout;
@@ -264,9 +295,12 @@ type
   public
     constructor Create(AOwner: TComponent); override;
     destructor Destroy; override;
+    procedure ClearCache;
   published
     property HTML: TStringList read GetHTML write SetHTML;
     property Debug: TStringList read FDebug write FDebug;
+    property CacheEnabled: Boolean read FCacheEnabled write SetCacheEnabled default False;
+    property CacheDir: string read FCacheDir write SetCacheDir;
     property Align;
     property Position;
     property Width;
@@ -317,6 +351,102 @@ end;
 function THTMLTag.HasAttribute(const Name: string): Boolean;
 begin
   Result := Attributes.ContainsKey(Name.ToLower);
+end;
+
+// ═══════════════════════════════════════════════════════════════════════════
+// TFileCache
+// ═══════════════════════════════════════════════════════════════════════════
+
+constructor TFileCache.Create;
+begin
+  inherited;
+  FEnabled := False;
+  FCacheDir := TPath.Combine(TPath.GetTempPath, 'Tina4Cache');
+end;
+
+procedure TFileCache.EnsureCacheDir;
+begin
+  if not TDirectory.Exists(FCacheDir) then
+    TDirectory.CreateDirectory(FCacheDir);
+end;
+
+function TFileCache.URLToFileName(const URL: string): string;
+begin
+  Result := THashMD5.GetHashString(URL);
+end;
+
+function TFileCache.TryLoadBytes(const URL: string; out Bytes: TBytes): Boolean;
+var
+  FilePath: string;
+begin
+  Result := False;
+  if not FEnabled then Exit;
+  FilePath := TPath.Combine(FCacheDir, URLToFileName(URL));
+  if TFile.Exists(FilePath) then
+  begin
+    try
+      Bytes := TFile.ReadAllBytes(FilePath);
+      Result := True;
+    except
+      Result := False;
+    end;
+  end;
+end;
+
+procedure TFileCache.SaveBytes(const URL: string; const Bytes: TBytes);
+var
+  FilePath: string;
+begin
+  if not FEnabled then Exit;
+  try
+    EnsureCacheDir;
+    FilePath := TPath.Combine(FCacheDir, URLToFileName(URL));
+    TFile.WriteAllBytes(FilePath, Bytes);
+  except
+    // Silently fail on disk write errors
+  end;
+end;
+
+function TFileCache.TryLoadString(const URL: string; out Content: string): Boolean;
+var
+  FilePath: string;
+begin
+  Result := False;
+  if not FEnabled then Exit;
+  FilePath := TPath.Combine(FCacheDir, URLToFileName(URL));
+  if TFile.Exists(FilePath) then
+  begin
+    try
+      Content := TFile.ReadAllText(FilePath);
+      Result := True;
+    except
+      Result := False;
+    end;
+  end;
+end;
+
+procedure TFileCache.SaveString(const URL: string; const Content: string);
+var
+  FilePath: string;
+begin
+  if not FEnabled then Exit;
+  try
+    EnsureCacheDir;
+    FilePath := TPath.Combine(FCacheDir, URLToFileName(URL));
+    TFile.WriteAllText(FilePath, Content);
+  except
+    // Silently fail on disk write errors
+  end;
+end;
+
+procedure TFileCache.ClearCache;
+begin
+  try
+    if TDirectory.Exists(FCacheDir) then
+      TDirectory.Delete(FCacheDir, True);
+  except
+    // Silently fail
+  end;
 end;
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -439,13 +569,30 @@ procedure TCSSStyleSheet.LoadFromURL(const URL: string);
 var
   Client: THTTPClient;
   Response: IHTTPResponse;
+  Content, CachedContent: string;
 begin
+  // Check disk cache first
+  if Assigned(FFileCache) and FFileCache.Enabled then
+  begin
+    if FFileCache.TryLoadString(URL, CachedContent) then
+    begin
+      AddCSS(CachedContent);
+      Exit;
+    end;
+  end;
+
   Client := THTTPClient.Create;
   try
     try
       Response := Client.Get(URL);
       if Response.StatusCode = 200 then
-        AddCSS(Response.ContentAsString);
+      begin
+        Content := Response.ContentAsString;
+        AddCSS(Content);
+        // Save to disk cache
+        if Assigned(FFileCache) and FFileCache.Enabled then
+          FFileCache.SaveString(URL, Content);
+      end;
     except
       // Silently fail on network errors
     end;
@@ -1794,9 +1941,32 @@ begin
     Exit;
   end;
 
-  // HTTP URL — async load
+  // HTTP URL — check disk cache then async load
   if Src.ToLower.StartsWith('http') then
   begin
+    // Check disk cache first (synchronous, fast)
+    if Assigned(FFileCache) and FFileCache.Enabled then
+    begin
+      var CachedBytes: TBytes;
+      if FFileCache.TryLoadBytes(Src, CachedBytes) then
+      begin
+        var CacheStream := TBytesStream.Create(CachedBytes);
+        try
+          var Bmp := TBitmap.Create;
+          try
+            Bmp.LoadFromStream(CacheStream);
+            FCache.AddOrSetValue(Src, Bmp);
+          except
+            Bmp.Free;
+          end;
+        finally
+          CacheStream.Free;
+        end;
+        Exit;
+      end;
+    end;
+
+    // Not in disk cache — fetch via HTTP asynchronously
     FPending.AddOrSetValue(Src, True);
     var URL := Src;
     var Cache := Self;
@@ -1813,6 +1983,17 @@ begin
           Response := Client.Get(URL, Stream);
           if Response.StatusCode = 200 then
           begin
+            // Save to disk cache from background thread
+            if Assigned(Cache.FFileCache) and Cache.FFileCache.Enabled then
+            begin
+              Stream.Position := 0;
+              var FileBytes: TBytes;
+              SetLength(FileBytes, Stream.Size);
+              if Stream.Size > 0 then
+                Stream.ReadBuffer(FileBytes[0], Stream.Size);
+              Cache.FFileCache.SaveBytes(URL, FileBytes);
+            end;
+
             Stream.Position := 0;
             TThread.Synchronize(nil, procedure
             begin
@@ -2568,11 +2749,24 @@ begin
   inherited;
   FHTML := TStringList.Create;
   FDebug := TStringList.Create;
+
+  // Create shared file cache — off by default in debug, on in release
+  FFileCache := TFileCache.Create;
+  {$IFDEF DEBUG}
+  FCacheEnabled := False;
+  {$ELSE}
+  FCacheEnabled := True;
+  {$ENDIF}
+  FFileCache.Enabled := FCacheEnabled;
+  FCacheDir := '';
+
   FImageCache := TImageCache.Create;
   FImageCache.OnImageLoaded := OnImageLoaded;
+  FImageCache.FileCache := FFileCache;
   FParser := THTMLParser.Create;
   FLayoutEngine := TLayoutEngine.Create(FImageCache);
   FStyleSheet := TCSSStyleSheet.Create;
+  FStyleSheet.FileCache := FFileCache;
   FHTML.OnChange := FHTMLChange;
   FScrollY := 0;
   FContentHeight := 0;
@@ -2592,6 +2786,7 @@ begin
   FLayoutEngine.Free;
   FParser.Free;
   FImageCache.Free;
+  FFileCache.Free;
   FHTML.Free;
   FDebug.Free;
   inherited;
@@ -2606,6 +2801,26 @@ procedure TTina4HTMLRender.SetHTML(const Value: TStringList);
 begin
   FHTML.Assign(Value);
   Repaint;
+end;
+
+procedure TTina4HTMLRender.SetCacheEnabled(Value: Boolean);
+begin
+  FCacheEnabled := Value;
+  FFileCache.Enabled := Value;
+end;
+
+procedure TTina4HTMLRender.SetCacheDir(const Value: string);
+begin
+  FCacheDir := Value;
+  if Value <> '' then
+    FFileCache.CacheDir := Value
+  else
+    FFileCache.CacheDir := TPath.Combine(TPath.GetTempPath, 'Tina4Cache');
+end;
+
+procedure TTina4HTMLRender.ClearCache;
+begin
+  FFileCache.ClearCache;
 end;
 
 procedure TTina4HTMLRender.FHTMLChange(Sender: TObject);

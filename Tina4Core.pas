@@ -1374,7 +1374,7 @@ begin
       end;
 
       //Only do batching when we don't have to refresh or update records
-      if (not Assigned(OnAddRecord)) then
+      if (not Assigned(OnAddRecord)) and (SyncMode = Clear) then
       begin
         MemTable.BeginBatch;
       end;
@@ -1557,7 +1557,7 @@ begin
               CreateOrUpdateRecord(JSONInfo);
             end;
             //Only do batching when we don't have to refresh or update records
-            if Initialized and (not Assigned(OnAddRecord)) then
+            if Initialized and (not Assigned(OnAddRecord)) and (SyncMode = Clear) then
             begin
               MemTable.EndBatch;
             end;

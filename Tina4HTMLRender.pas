@@ -280,6 +280,7 @@ type
     procedure PaintFormControl(Canvas: TCanvas; Box: TLayoutBox; X, Y: Single);
     procedure PaintHR(Canvas: TCanvas; Box: TLayoutBox; X, Y: Single);
     procedure PaintListMarker(Canvas: TCanvas; Box: TLayoutBox; X, Y: Single);
+    procedure PaintTableCellBorders(Canvas: TCanvas; Box: TLayoutBox; CX, CY: Single);
     procedure PaintScrollBar(Canvas: TCanvas);
     function ScrollBarVisible: Boolean;
     procedure ClampScroll;
@@ -2225,16 +2226,46 @@ begin
   // Resolve explicit height (may be percentage — but no reference, ignore for now)
   // Percentages on height are complex in CSS; we skip them
 
-  // Check if we have any inline children
+  // Determine layout mode: inline vs block
+  // When a container has block children, whitespace-only text nodes should be
+  // ignored (CSS "inter-element whitespace" rule). Only non-whitespace inline
+  // content triggers mixed inline/block layout.
   HasInline := False;
+  var HasBlock := False;
   for var Child in Box.Children do
   begin
-    if (Child.Kind = lbkText) or (Child.Kind = lbkInline) or
-       (Child.Kind = lbkBR) or (Child.Kind = lbkImage) or
-       (Child.Kind = lbkFormControl) then
+    case Child.Kind of
+      lbkBlock, lbkTable, lbkListItem, lbkHR:
+        HasBlock := True;
+      lbkImage, lbkFormControl, lbkBR, lbkInline:
+        HasInline := True;
+      lbkText:
+        if Assigned(Child.Tag) and (Child.Tag.Text.Trim <> '') then
+          HasInline := True;
+    end;
+  end;
+
+  // If both block and inline exist, only keep HasInline if there are
+  // non-whitespace inline elements (images, form controls, real inline boxes,
+  // or non-blank text). Whitespace-only text nodes between block elements
+  // are discarded in block formatting context.
+  if HasBlock and HasInline then
+  begin
+    HasInline := False;
+    for var Child in Box.Children do
     begin
-      HasInline := True;
-      Break;
+      if (Child.Kind = lbkImage) or (Child.Kind = lbkFormControl) or
+         (Child.Kind = lbkBR) or (Child.Kind = lbkInline) then
+      begin
+        HasInline := True;
+        Break;
+      end
+      else if (Child.Kind = lbkText) and Assigned(Child.Tag) and
+              (Child.Tag.Text.Trim <> '') then
+      begin
+        HasInline := True;
+        Break;
+      end;
     end;
   end;
 
@@ -2599,13 +2630,6 @@ begin
           CellW := CellW + ColWidths[CI];
         if CS > 1 then
           CellW := CellW + CellBorderW * (CS - 1);
-
-        // Propagate table border to cells that don't have their own
-        if (Cell.Style.BorderWidth <= 0) and (BorderW > 0) then
-        begin
-          Cell.Style.BorderWidth := BorderW;
-          Cell.Style.BorderColor := Box.Style.BorderColor;
-        end;
 
         // Layout cell content
         var CellContentW := CellW - Cell.Style.Padding.Left - Cell.Style.Padding.Right;
@@ -3070,6 +3094,9 @@ begin
       PaintHR(Canvas, Box, AbsX, AbsY);
     lbkListItem:
       PaintListMarker(Canvas, Box, AbsX, AbsY);
+    lbkTable:
+      if Box.Style.BorderWidth > 0 then
+        PaintTableCellBorders(Canvas, Box, AbsX + Box.ContentLeft, AbsY + Box.ContentTop);
   end;
 
   // Recurse children
@@ -3119,14 +3146,16 @@ begin
     Exit;
   end;
 
-  // Table cell borders
-  if (Box.Kind = lbkTableCell) or (Box.Kind = lbkTable) then
+  // Table outer border (cell borders are drawn by PaintTableCellBorders)
+  if Box.Kind = lbkTable then
   begin
     R := RectF(
       X + Box.Style.Margin.Left,
       Y + Box.Style.Margin.Top,
-      X + Box.Style.Margin.Left + Box.ContentWidth + Box.Style.Padding.Left + Box.Style.Padding.Right,
-      Y + Box.Style.Margin.Top + Box.ContentHeight + Box.Style.Padding.Top + Box.Style.Padding.Bottom
+      X + Box.Style.Margin.Left + Box.Style.BorderWidth * 2 +
+        Box.Style.Padding.Left + Box.ContentWidth + Box.Style.Padding.Right,
+      Y + Box.Style.Margin.Top + Box.Style.BorderWidth * 2 +
+        Box.Style.Padding.Top + Box.ContentHeight + Box.Style.Padding.Bottom
     );
     Canvas.Stroke.Kind := TBrushKind.Solid;
     Canvas.Stroke.Color := Box.Style.BorderColor;
@@ -3134,6 +3163,10 @@ begin
     Canvas.DrawRect(R, 1.0);
     Exit;
   end;
+
+  // Skip cell borders (handled by table's PaintTableCellBorders)
+  if Box.Kind = lbkTableCell then
+    Exit;
 
   // General border
   R := RectF(
@@ -3470,6 +3503,56 @@ begin
     Layout.RenderLayout(Canvas);
   finally
     Layout.Free;
+  end;
+end;
+
+procedure TTina4HTMLRender.PaintTableCellBorders(Canvas: TCanvas; Box: TLayoutBox; CX, CY: Single);
+var
+  R: TRectF;
+begin
+  // Draw borders around each cell using the table's border style
+  Canvas.Stroke.Kind := TBrushKind.Solid;
+  Canvas.Stroke.Color := Box.Style.BorderColor;
+  Canvas.Stroke.Thickness := Box.Style.BorderWidth;
+
+  for var Row in Box.Children do
+  begin
+    if Row.Kind <> lbkTableRow then Continue;
+    // Check for row groups (thead/tbody/tfoot) that contain actual rows
+    var HasSubRows := False;
+    for var Sub in Row.Children do
+    begin
+      if Sub.Kind = lbkTableRow then
+      begin
+        HasSubRows := True;
+        // Draw cells for sub-row
+        for var Cell in Sub.Children do
+        begin
+          if Cell.Kind <> lbkTableCell then Continue;
+          R := RectF(
+            CX + Sub.X + Cell.X,
+            CY + Row.Y + Sub.Y + Cell.Y,
+            CX + Sub.X + Cell.X + Cell.ContentWidth + Cell.Style.Padding.Left + Cell.Style.Padding.Right,
+            CY + Row.Y + Sub.Y + Cell.Y + Cell.ContentHeight + Cell.Style.Padding.Top + Cell.Style.Padding.Bottom
+          );
+          Canvas.DrawRect(R, 1.0);
+        end;
+      end;
+    end;
+    if not HasSubRows then
+    begin
+      for var Cell in Row.Children do
+      begin
+        if Cell.Kind <> lbkTableCell then Continue;
+        R := RectF(
+          CX + Cell.X,
+          CY + Row.Y + Cell.Y,
+          CX + Cell.X + Cell.ContentWidth + Cell.Style.Padding.Left + Cell.Style.Padding.Right,
+          CY + Row.Y + Cell.Y + Cell.ContentHeight + Cell.Style.Padding.Top + Cell.Style.Padding.Bottom
+        );
+        Canvas.DrawRect(R, 1.0);
+      end;
+    end;
   end;
 end;
 

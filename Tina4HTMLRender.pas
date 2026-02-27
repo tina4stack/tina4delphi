@@ -1820,6 +1820,12 @@ begin
   Result.LineHeight := ParentStyle.LineHeight;
   Result.WhiteSpace := ParentStyle.WhiteSpace;
   Result.ListStyleType := ParentStyle.ListStyleType;
+  Result.TextTransform := ParentStyle.TextTransform;
+  Result.LetterSpacing := ParentStyle.LetterSpacing;
+  Result.TextIndent := ParentStyle.TextIndent;
+  Result.Visibility := ParentStyle.Visibility;
+  Result.WordBreak := ParentStyle.WordBreak;
+  Result.OverflowWrap := ParentStyle.OverflowWrap;
   Result.VerticalAlign := 'baseline';
 
   // Non-inherited defaults
@@ -1835,18 +1841,12 @@ begin
   Result.Display := 'inline';
   Result.BoxSizing := 'content-box';
   Result.CSSCursor := '';
-  Result.TextTransform := 'none';
   Result.Opacity := 1.0;
   Result.MinWidth := -1;
   Result.MaxWidth := -1;
   Result.MinHeight := -1;
   Result.MaxHeight := -1;
-  Result.LetterSpacing := 0;
-  Result.TextIndent := 0;
-  Result.Visibility := 'visible';
   Result.Overflow := 'visible';
-  Result.WordBreak := 'normal';
-  Result.OverflowWrap := 'normal';
   Result.TextOverflow := 'clip';
 
   if Tag = nil then Exit;

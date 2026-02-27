@@ -9,7 +9,7 @@ uses
   System.NetEncoding, System.Net.HttpClient,
   System.IOUtils, System.Hash,
   FMX.Types, FMX.Controls, FMX.Graphics, FMX.TextLayout,
-  FMX.Edit, FMX.StdCtrls, FMX.Memo, FMX.ListBox, FMX.Layouts;
+  FMX.Edit, FMX.StdCtrls, FMX.Memo, FMX.ListBox, FMX.Layouts, FMX.Objects;
 
 type
   // ─────────────────────────────────────────────────────────────────────────
@@ -3511,14 +3511,18 @@ begin
           TS.TextSettings.FontColor := Box.Style.Color;
       end;
 
-      // Apply tint color for buttons based on CSS background or Bootstrap classes
+      // Style buttons with background color using a colored rectangle overlay
       if Ctl is TButton then
       begin
         var BtnColor: TAlphaColor := TAlphaColors.Null;
         var BtnTextColor: TAlphaColor := TAlphaColors.Null;
         // Use computed background color if available
         if Box.Style.BackgroundColor <> TAlphaColors.Null then
-          BtnColor := Box.Style.BackgroundColor
+        begin
+          BtnColor := Box.Style.BackgroundColor;
+          if Box.Style.Color <> TAlphaColors.Null then
+            BtnTextColor := Box.Style.Color;
+        end
         else if Assigned(Box.Tag) then
         begin
           // Fall back to Bootstrap button class mapping
@@ -3532,13 +3536,34 @@ begin
           else if BtnClass.Contains('btn-dark') then begin BtnColor := $FF212529; BtnTextColor := TAlphaColors.White; end
           else if BtnClass.Contains('btn-light') then begin BtnColor := $FFF8F9FA; BtnTextColor := TAlphaColors.Black; end;
         end;
+        // Replace TButton with a styled TRectangle + TLabel for colored buttons
         if BtnColor <> TAlphaColors.Null then
-          TButton(Ctl).TintColor := BtnColor;
-        if BtnTextColor <> TAlphaColors.Null then
         begin
-          var BtnTS: ITextSettings;
-          if Supports(Ctl, ITextSettings, BtnTS) then
-            BtnTS.TextSettings.FontColor := BtnTextColor;
+          var BtnText := TButton(Ctl).Text;
+          Ctl.Free;
+          var Rect := TRectangle.Create(Self);
+          Rect.Fill.Kind := TBrushKind.Solid;
+          Rect.Fill.Color := BtnColor;
+          Rect.Stroke.Kind := TBrushKind.None;
+          Rect.XRadius := 4;
+          Rect.YRadius := 4;
+          Rect.HitTest := True;
+          Rect.OnClick := HandleFormControlClick;
+          var Lbl := TLabel.Create(Rect);
+          Lbl.Parent := Rect;
+          Lbl.Align := TAlignLayout.Client;
+          Lbl.Text := BtnText;
+          Lbl.HitTest := False;
+          Lbl.StyledSettings := Lbl.StyledSettings - [TStyledSetting.FontColor,
+            TStyledSetting.Size, TStyledSetting.Family];
+          if BtnTextColor <> TAlphaColors.Null then
+            Lbl.FontColor := BtnTextColor
+          else
+            Lbl.FontColor := TAlphaColors.White;
+          Lbl.Font.Size := Box.Style.FontSize;
+          Lbl.Font.Family := Box.Style.FontFamily;
+          Lbl.TextSettings.HorzAlign := TTextAlign.Center;
+          Ctl := Rect;
         end;
       end;
 

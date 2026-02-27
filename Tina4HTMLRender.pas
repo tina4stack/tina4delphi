@@ -3695,21 +3695,41 @@ begin
     else if BtnClass.Contains('btn-light') then begin BtnColor := $FFF8F9FA; BtnTextColor := TAlphaColors.Black; end;
   end;
 
-  // Default to a standard gray button
+  // Default: buttons with a Bootstrap .btn class but no recognized color variant
+  // should be transparent (matching browser behaviour). Plain buttons without
+  // .btn get a standard gray background so they remain visible.
   if BtnColor = TAlphaColors.Null then
   begin
-    BtnColor := $FFE0E0E0;
-    BtnTextColor := TAlphaColors.Black;
+    var HasBtnClass := Assigned(Box.Tag) and
+      Box.Tag.GetAttribute('class', '').ToLower.Contains('btn');
+    if HasBtnClass then
+    begin
+      BtnColor := TAlphaColors.Null;  // transparent — drawn with no fill
+      BtnTextColor := TAlphaColors.Black;
+    end
+    else
+    begin
+      BtnColor := $FFE0E0E0;
+      BtnTextColor := TAlphaColors.Black;
+    end;
   end;
 
   var Radius: Single := Box.Style.BorderRadius;
   if Radius < 0 then Radius := 4;  // -1 = not set, default to 4px
 
   var Rect := TRectangle.Create(Self);
-  Rect.Fill.Kind := TBrushKind.Solid;
-  Rect.Fill.Color := BtnColor;
-  Rect.Stroke.Kind := TBrushKind.Solid;
-  Rect.Stroke.Color := $FFB0B0B0;
+  if BtnColor = TAlphaColors.Null then
+  begin
+    Rect.Fill.Kind := TBrushKind.None;
+    Rect.Stroke.Kind := TBrushKind.None;
+  end
+  else
+  begin
+    Rect.Fill.Kind := TBrushKind.Solid;
+    Rect.Fill.Color := BtnColor;
+    Rect.Stroke.Kind := TBrushKind.Solid;
+    Rect.Stroke.Color := $FFB0B0B0;
+  end;
   Rect.XRadius := Radius;
   Rect.YRadius := Radius;
   Rect.HitTest := True;

@@ -163,6 +163,20 @@ type
     WhiteSpace: string;
     BoxSizing: string;
     CSSCursor: string;
+    TextTransform: string;
+    Opacity: Single;
+    MinWidth: Single;
+    MaxWidth: Single;
+    MinHeight: Single;
+    MaxHeight: Single;
+    LetterSpacing: Single;
+    TextIndent: Single;
+    Visibility: string;
+    ListStyleType: string;
+    Overflow: string;
+    WordBreak: string;
+    OverflowWrap: string;
+    TextOverflow: string;
     class function Default: TComputedStyle; static;
     class function ForTag(Tag: THTMLTag; const ParentStyle: TComputedStyle; StyleSheet: TCSSStyleSheet = nil): TComputedStyle; static;
     class procedure ApplyDeclarations(Decls: TCSSDeclarations; var Style: TComputedStyle; const ParentStyle: TComputedStyle); static;
@@ -1321,7 +1335,7 @@ begin
     SameText(Name, 'figcaption') or SameText(Name, 'dl') or
     SameText(Name, 'dt') or SameText(Name, 'dd') or
     SameText(Name, 'details') or SameText(Name, 'summary') or
-    SameText(Name, 'address');
+    SameText(Name, 'address') or SameText(Name, 'fieldset');
 end;
 
 class function THTMLParser.IsRawTag(const Name: string): Boolean;
@@ -1593,6 +1607,20 @@ begin
   Result.WhiteSpace := 'normal';
   Result.BoxSizing := 'content-box';
   Result.CSSCursor := '';
+  Result.TextTransform := 'none';
+  Result.Opacity := 1.0;
+  Result.MinWidth := -1;
+  Result.MaxWidth := -1;
+  Result.MinHeight := -1;
+  Result.MaxHeight := -1;
+  Result.LetterSpacing := 0;
+  Result.TextIndent := 0;
+  Result.Visibility := 'visible';
+  Result.ListStyleType := '';
+  Result.Overflow := 'visible';
+  Result.WordBreak := 'normal';
+  Result.OverflowWrap := 'normal';
+  Result.TextOverflow := 'clip';
 end;
 
 class function TComputedStyle.ParseColor(const S: string): TAlphaColor;
@@ -1791,6 +1819,7 @@ begin
   Result.TextAlign := ParentStyle.TextAlign;
   Result.LineHeight := ParentStyle.LineHeight;
   Result.WhiteSpace := ParentStyle.WhiteSpace;
+  Result.ListStyleType := ParentStyle.ListStyleType;
   Result.VerticalAlign := 'baseline';
 
   // Non-inherited defaults
@@ -1806,6 +1835,19 @@ begin
   Result.Display := 'inline';
   Result.BoxSizing := 'content-box';
   Result.CSSCursor := '';
+  Result.TextTransform := 'none';
+  Result.Opacity := 1.0;
+  Result.MinWidth := -1;
+  Result.MaxWidth := -1;
+  Result.MinHeight := -1;
+  Result.MaxHeight := -1;
+  Result.LetterSpacing := 0;
+  Result.TextIndent := 0;
+  Result.Visibility := 'visible';
+  Result.Overflow := 'visible';
+  Result.WordBreak := 'normal';
+  Result.OverflowWrap := 'normal';
+  Result.TextOverflow := 'clip';
 
   if Tag = nil then Exit;
   TN := Tag.TagName.ToLower;
@@ -1893,12 +1935,14 @@ begin
     Result.Margin.Top := ParentStyle.FontSize * 0.5;
     Result.Margin.Bottom := ParentStyle.FontSize * 0.5;
     Result.Padding.Left := 24;
+    Result.ListStyleType := 'disc';
   end
   else if TN = 'ol' then
   begin
     Result.Margin.Top := ParentStyle.FontSize * 0.5;
     Result.Margin.Bottom := ParentStyle.FontSize * 0.5;
     Result.Padding.Left := 24;
+    Result.ListStyleType := 'decimal';
   end
   else if TN = 'li' then
   begin
@@ -1942,7 +1986,43 @@ begin
   else if TN = 'dt' then
     Result.Bold := True
   else if TN = 'dd' then
-    Result.Margin.Left := 40;
+    Result.Margin.Left := 40
+  else if TN = 'kbd' then
+  begin
+    Result.FontFamily := 'Courier New';
+    Result.FontSize := ParentStyle.FontSize * 0.9;
+    Result.BackgroundColor := $FFF0F0F0;
+    Result.BorderColor := $FFCCCCCC;
+    Result.BorderWidth := 1;
+    Result.BorderRadius := 3;
+    Result.Padding.SetAll(2);
+  end
+  else if TN = 'abbr' then
+    Result.TextDecoration := 'underline'
+  else if (TN = 'cite') or (TN = 'dfn') then
+    Result.Italic := True
+  else if (TN = 'var') then
+  begin
+    Result.Italic := True;
+    Result.FontFamily := 'Courier New';
+  end
+  else if TN = 'samp' then
+    Result.FontFamily := 'Courier New'
+  else if TN = 'fieldset' then
+  begin
+    Result.BorderColor := $FF808080;
+    Result.BorderWidth := 2;
+    Result.BorderRadius := 4;
+    Result.Padding.SetAll(10);
+    Result.Margin.Top := 8;
+    Result.Margin.Bottom := 8;
+  end
+  else if TN = 'legend' then
+  begin
+    Result.Bold := True;
+    Result.Padding.Left := 4;
+    Result.Padding.Right := 4;
+  end;
 
   // HTML attribute overrides
   if Tag.HasAttribute('width') then
@@ -2134,6 +2214,52 @@ begin
     Style.BoxSizing := Temp.ToLower;
   if Decls.TryGetValue('cursor', Temp) and not ShouldSkip(Temp) then
     Style.CSSCursor := Temp.ToLower;
+
+  if Decls.TryGetValue('text-transform', Temp) and not ShouldSkip(Temp) then
+    Style.TextTransform := Temp.ToLower;
+
+  if Decls.TryGetValue('opacity', Temp) and not ShouldSkip(Temp) then
+    Style.Opacity := Max(0, Min(1, StrToFloatDef(Temp, 1.0)));
+
+  if Decls.TryGetValue('min-width', Temp) and not ShouldSkip(Temp) then
+    Style.MinWidth := ParseLength(Temp, Style.FontSize);
+  if Decls.TryGetValue('max-width', Temp) and not ShouldSkip(Temp) then
+    Style.MaxWidth := ParseLength(Temp, Style.FontSize);
+  if Decls.TryGetValue('min-height', Temp) and not ShouldSkip(Temp) then
+    Style.MinHeight := ParseLength(Temp, Style.FontSize);
+  if Decls.TryGetValue('max-height', Temp) and not ShouldSkip(Temp) then
+    Style.MaxHeight := ParseLength(Temp, Style.FontSize);
+
+  if Decls.TryGetValue('letter-spacing', Temp) and not ShouldSkip(Temp) then
+    Style.LetterSpacing := ParseLength(Temp, Style.FontSize);
+
+  if Decls.TryGetValue('text-indent', Temp) and not ShouldSkip(Temp) then
+    Style.TextIndent := ParseLength(Temp, Style.FontSize);
+
+  if Decls.TryGetValue('visibility', Temp) and not ShouldSkip(Temp) then
+    Style.Visibility := Temp.ToLower;
+
+  if Decls.TryGetValue('list-style-type', Temp) and not ShouldSkip(Temp) then
+    Style.ListStyleType := Temp.ToLower;
+  if Decls.TryGetValue('list-style', Temp) and not ShouldSkip(Temp) then
+    Style.ListStyleType := Temp.ToLower;
+
+  if Decls.TryGetValue('overflow', Temp) and not ShouldSkip(Temp) then
+    Style.Overflow := Temp.ToLower;
+  if Decls.TryGetValue('overflow-x', Temp) and not ShouldSkip(Temp) then
+    Style.Overflow := Temp.ToLower;
+  if Decls.TryGetValue('overflow-y', Temp) and not ShouldSkip(Temp) then
+    Style.Overflow := Temp.ToLower;
+
+  if Decls.TryGetValue('word-break', Temp) and not ShouldSkip(Temp) then
+    Style.WordBreak := Temp.ToLower;
+  if Decls.TryGetValue('overflow-wrap', Temp) and not ShouldSkip(Temp) then
+    Style.OverflowWrap := Temp.ToLower;
+  if Decls.TryGetValue('word-wrap', Temp) and not ShouldSkip(Temp) then
+    Style.OverflowWrap := Temp.ToLower;  // word-wrap is legacy alias
+
+  if Decls.TryGetValue('text-overflow', Temp) and not ShouldSkip(Temp) then
+    Style.TextOverflow := Temp.ToLower;
 end;
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -2387,6 +2513,8 @@ begin
     Layout.MaxSize := PointF(10000, 10000);
     Layout.EndUpdate;
     Result := Layout.Width;
+    if (Style.LetterSpacing <> 0) and (Text.Length > 1) then
+      Result := Result + Style.LetterSpacing * (Text.Length - 1);
   finally
     Layout.Free;
   end;
@@ -2678,6 +2806,18 @@ begin
     else
       Box.ContentHeight := Box.Style.ExplicitHeight;
   end;
+
+  // Clamp to min/max width
+  if (Box.Style.MinWidth >= 0) and (Box.ContentWidth < Box.Style.MinWidth) then
+    Box.ContentWidth := Box.Style.MinWidth;
+  if (Box.Style.MaxWidth >= 0) and (Box.ContentWidth > Box.Style.MaxWidth) then
+    Box.ContentWidth := Box.Style.MaxWidth;
+
+  // Clamp to min/max height
+  if (Box.Style.MinHeight >= 0) and (Box.ContentHeight < Box.Style.MinHeight) then
+    Box.ContentHeight := Box.Style.MinHeight;
+  if (Box.Style.MaxHeight >= 0) and (Box.ContentHeight > Box.Style.MaxHeight) then
+    Box.ContentHeight := Box.Style.MaxHeight;
 end;
 
 procedure TLayoutEngine.LayoutInlineChildren(Box: TLayoutBox; AvailWidth: Single);
@@ -2793,6 +2933,24 @@ var
       var Text := Child.Tag.Text;
       if Text = '' then Exit;
 
+      // Apply text-transform
+      if Child.Style.TextTransform = 'uppercase' then
+        Text := Text.ToUpper
+      else if Child.Style.TextTransform = 'lowercase' then
+        Text := Text.ToLower
+      else if Child.Style.TextTransform = 'capitalize' then
+      begin
+        var Chars := Text.ToCharArray;
+        var PrevSpace := True;
+        for var C := 0 to Length(Chars) - 1 do
+        begin
+          if PrevSpace and Chars[C].IsLetter then
+            Chars[C] := Chars[C].ToUpper;
+          PrevSpace := Chars[C].IsWhiteSpace;
+        end;
+        Text := string.Create(Chars);
+      end;
+
       // Whitespace-only text between inline elements creates a space gap
       if (Text.Trim = '') and (Child.Style.WhiteSpace <> 'pre') then
       begin
@@ -2826,17 +2984,76 @@ var
       end;
 
       SpaceW := MeasureTextWidth(' ', Child.Style);
-      Words := Text.Split([' ']);
+      var BreakAll := (Child.Style.WordBreak = 'break-all');
+      var BreakWord := (Child.Style.OverflowWrap = 'break-word') or
+                        (Child.Style.OverflowWrap = 'anywhere');
+
+      if BreakAll then
+      begin
+        // word-break: break-all — split text into individual characters
+        SetLength(Words, Text.Length);
+        for var CI := 0 to Text.Length - 1 do
+          Words[CI] := Text[CI + 1];
+      end
+      else
+        Words := Text.Split([' ']);
+
       Child.X := CursorX;
       Child.Y := CursorY;
 
       var IsFirst := True;
-      for var Word in Words do
+      for var WI := 0 to Length(Words) - 1 do
       begin
-        if Word = '' then Continue;
+        var W := Words[WI];
+        if W = '' then Continue;
 
-        WordW := MeasureTextWidth(Word, Child.Style);
+        WordW := MeasureTextWidth(W, Child.Style);
         WordH := GetLineHeight(Child.Style);
+
+        // overflow-wrap: break-word — break long words that overflow
+        if BreakWord and (not BreakAll) and (WordW > AvailWidth) and (W.Length > 1) then
+        begin
+          // Split the word character by character
+          var Remaining := W;
+          while Remaining <> '' do
+          begin
+            var Chunk := '';
+            var ChunkW: Single := 0;
+            for var CI := 1 to Remaining.Length do
+            begin
+              var TestChunk := Remaining.Substring(0, CI);
+              var TestW := MeasureTextWidth(TestChunk, Child.Style);
+              if (ChunkW > 0) and (CursorX + TestW > AvailWidth) then
+                Break;
+              Chunk := TestChunk;
+              ChunkW := TestW;
+            end;
+            if Chunk = '' then
+            begin
+              Chunk := Remaining[1];
+              ChunkW := MeasureTextWidth(Chunk, Child.Style);
+            end;
+
+            Frag.Text := Chunk;
+            Frag.X := CursorX - Child.X;
+            Frag.Y := CursorY - Child.Y;
+            Frag.W := ChunkW;
+            Frag.H := WordH;
+            Child.Fragments.Add(Frag);
+            CursorX := CursorX + ChunkW;
+            LineH := Max(LineH, WordH);
+            Remaining := Remaining.Substring(Chunk.Length);
+            if (Remaining <> '') and (CursorX >= AvailWidth) then
+            begin
+              CursorY := CursorY + LineH;
+              CursorX := 0;
+              LineH := WordH;
+            end;
+          end;
+          CursorX := CursorX + SpaceW;
+          IsFirst := False;
+          Continue;
+        end;
 
         // Wrap if needed
         if (CursorX > 0) and (CursorX + WordW > AvailWidth) then
@@ -2846,14 +3063,17 @@ var
           LineH := WordH;
         end;
 
-        Frag.Text := Word;
+        Frag.Text := W;
         Frag.X := CursorX - Child.X;  // relative to text node start
         Frag.Y := CursorY - Child.Y;  // relative to text node start
         Frag.W := WordW;
         Frag.H := WordH;
         Child.Fragments.Add(Frag);
 
-        CursorX := CursorX + WordW + SpaceW;
+        if BreakAll then
+          CursorX := CursorX + WordW  // no space between chars
+        else
+          CursorX := CursorX + WordW + SpaceW;
         LineH := Max(LineH, WordH);
         IsFirst := False;
       end;
@@ -2951,7 +3171,7 @@ var
   end;
 
 begin
-  CursorX := 0;
+  CursorX := Box.Style.TextIndent;
   CursorY := 0;
   LineH := GetLineHeight(Box.Style);
 
@@ -4468,6 +4688,29 @@ var
   AbsX, AbsY, CX, CY: Single;
 begin
   if Box.Style.Display = 'none' then Exit;
+  if Box.Style.Visibility = 'hidden' then Exit;
+
+  // Apply opacity by modifying alpha channels
+  if Box.Style.Opacity < 1.0 then
+  begin
+    var OpacityByte := Round(Box.Style.Opacity * 255);
+    if Box.Style.BackgroundColor <> TAlphaColors.Null then
+    begin
+      var Rec := TAlphaColorRec(Box.Style.BackgroundColor);
+      Rec.A := (Rec.A * OpacityByte) div 255;
+      Box.Style.BackgroundColor := Rec.Color;
+    end;
+    begin
+      var Rec := TAlphaColorRec(Box.Style.Color);
+      Rec.A := (Rec.A * OpacityByte) div 255;
+      Box.Style.Color := Rec.Color;
+    end;
+    begin
+      var Rec := TAlphaColorRec(Box.Style.BorderColor);
+      Rec.A := (Rec.A * OpacityByte) div 255;
+      Box.Style.BorderColor := Rec.Color;
+    end;
+  end;
 
   // Skip form control boxes — they are rendered as native FMX controls
   if Assigned(Box.Tag) and
@@ -4523,8 +4766,68 @@ begin
   // Recurse children
   CX := AbsX + Box.ContentLeft;
   CY := AbsY + Box.ContentTop;
-  for var Child in Box.Children do
-    PaintBox(Canvas, Child, CX, CY);
+
+  if (Box.Style.Overflow = 'hidden') or (Box.Style.Overflow = 'scroll') or
+     (Box.Style.Overflow = 'auto') then
+  begin
+    var SaveState := Canvas.SaveState;
+    try
+      Canvas.IntersectClipRect(RectF(CX, CY, CX + Box.ContentWidth, CY + Box.ContentHeight));
+      for var Child in Box.Children do
+        PaintBox(Canvas, Child, CX, CY);
+
+      // text-overflow: ellipsis — paint "..." at right edge when content overflows
+      if (Box.Style.TextOverflow = 'ellipsis') and (Box.Style.WhiteSpace = 'nowrap') then
+      begin
+        // Check if any child overflows
+        var ChildOverflows := False;
+        for var Child in Box.Children do
+          if Child.X + Child.ContentWidth > Box.ContentWidth then
+          begin
+            ChildOverflows := True;
+            Break;
+          end;
+        if ChildOverflows then
+        begin
+          var EllipsisLayout := TTextLayoutManager.DefaultTextLayout.Create;
+          try
+            EllipsisLayout.BeginUpdate;
+            EllipsisLayout.Text := '...';
+            EllipsisLayout.Font.Family := Box.Style.FontFamily;
+            EllipsisLayout.Font.Size := Box.Style.FontSize;
+            if Box.Style.Bold then
+              EllipsisLayout.Font.Style := [TFontStyle.fsBold];
+            EllipsisLayout.Color := Box.Style.Color;
+            EllipsisLayout.WordWrap := False;
+            var EW := Box.Style.FontSize * 1.5;  // approximate "..." width
+            // Paint a background rect to cover clipped text, then the ellipsis
+            EllipsisLayout.TopLeft := PointF(CX + Box.ContentWidth - EW, CY);
+            EllipsisLayout.MaxSize := PointF(EW, Box.Style.FontSize * Box.Style.LineHeight);
+            EllipsisLayout.HorizontalAlign := TTextAlign.Trailing;
+            EllipsisLayout.EndUpdate;
+            // Paint background to cover text underneath
+            Canvas.Fill.Kind := TBrushKind.Solid;
+            if Box.Style.BackgroundColor <> TAlphaColors.Null then
+              Canvas.Fill.Color := Box.Style.BackgroundColor
+            else
+              Canvas.Fill.Color := TAlphaColors.White;
+            Canvas.FillRect(RectF(CX + Box.ContentWidth - EW, CY,
+              CX + Box.ContentWidth, CY + Box.Style.FontSize * Box.Style.LineHeight), 0, 0, [], 1.0);
+            EllipsisLayout.RenderLayout(Canvas);
+          finally
+            EllipsisLayout.Free;
+          end;
+        end;
+      end;
+    finally
+      Canvas.RestoreState(SaveState);
+    end;
+  end
+  else
+  begin
+    for var Child in Box.Children do
+      PaintBox(Canvas, Child, CX, CY);
+  end;
 end;
 
 procedure TTina4HTMLRender.PaintBackground(Canvas: TCanvas; Box: TLayoutBox; X, Y: Single);
@@ -4632,19 +4935,43 @@ begin
 
     Layout := TTextLayoutManager.DefaultTextLayout.Create;
     try
-      Layout.BeginUpdate;
-      Layout.Text := Frag.Text;
-      Layout.Font.Family := Box.Style.FontFamily;
-      Layout.Font.Size := Box.Style.FontSize;
-      Layout.Font.Style := FontStyles;
-      Layout.Color := Box.Style.Color;
-      Layout.WordWrap := Box.Style.WhiteSpace <> 'pre';
-      Layout.HorizontalAlign := TTextAlign.Leading;
-      Layout.TopLeft := PointF(X + Box.ContentLeft + Frag.X,
-                               Y + Box.ContentTop + Frag.Y);
-      Layout.MaxSize := PointF(Frag.W + 2, Frag.H + 2);
-      Layout.EndUpdate;
-      Layout.RenderLayout(Canvas);
+      if (Box.Style.LetterSpacing <> 0) and (Frag.Text.Length > 1) then
+      begin
+        // Render character-by-character with spacing
+        var CharX := X + Box.ContentLeft + Frag.X;
+        for var CI := 1 to Frag.Text.Length do
+        begin
+          Layout.BeginUpdate;
+          Layout.Text := Frag.Text[CI];
+          Layout.Font.Family := Box.Style.FontFamily;
+          Layout.Font.Size := Box.Style.FontSize;
+          Layout.Font.Style := FontStyles;
+          Layout.Color := Box.Style.Color;
+          Layout.WordWrap := False;
+          Layout.HorizontalAlign := TTextAlign.Leading;
+          Layout.TopLeft := PointF(CharX, Y + Box.ContentTop + Frag.Y);
+          Layout.MaxSize := PointF(Box.Style.FontSize * 2, Frag.H + 2);
+          Layout.EndUpdate;
+          Layout.RenderLayout(Canvas);
+          CharX := CharX + Layout.Width + Box.Style.LetterSpacing;
+        end;
+      end
+      else
+      begin
+        Layout.BeginUpdate;
+        Layout.Text := Frag.Text;
+        Layout.Font.Family := Box.Style.FontFamily;
+        Layout.Font.Size := Box.Style.FontSize;
+        Layout.Font.Style := FontStyles;
+        Layout.Color := Box.Style.Color;
+        Layout.WordWrap := Box.Style.WhiteSpace <> 'pre';
+        Layout.HorizontalAlign := TTextAlign.Leading;
+        Layout.TopLeft := PointF(X + Box.ContentLeft + Frag.X,
+                                 Y + Box.ContentTop + Frag.Y);
+        Layout.MaxSize := PointF(Frag.W + 2, Frag.H + 2);
+        Layout.EndUpdate;
+        Layout.RenderLayout(Canvas);
+      end;
 
       // Text decoration
       if Box.Style.TextDecoration = 'underline' then
@@ -4738,13 +5065,46 @@ var
   Layout: TTextLayout;
   MarkerText: string;
   MarkerY, LineH, BulletR, BulletCX, BulletCY: Single;
+  LST: string;
+
+  function ToRoman(N: Integer): string;
+  const
+    Values: array[0..12] of Integer = (1000,900,500,400,100,90,50,40,10,9,5,4,1);
+    Numerals: array[0..12] of string = ('m','cm','d','cd','c','xc','l','xl','x','ix','v','iv','i');
+  var
+    I: Integer;
+  begin
+    Result := '';
+    for I := 0 to High(Values) do
+      while N >= Values[I] do
+      begin
+        Result := Result + Numerals[I];
+        Dec(N, Values[I]);
+      end;
+  end;
+
 begin
   MarkerY := Y + Box.ContentTop;
   LineH := Box.Style.FontSize * Box.Style.LineHeight;
 
-  if Box.IsOrdered then
+  LST := Box.Style.ListStyleType;
+  if LST = 'none' then Exit;
+
+  // Determine marker text for ordered types
+  if (LST = 'decimal') or (LST = 'lower-alpha') or (LST = 'upper-alpha') or
+     (LST = 'lower-roman') or (LST = 'upper-roman') or Box.IsOrdered then
   begin
-    MarkerText := IntToStr(Box.ListIndex) + '.';
+    if (LST = 'lower-alpha') and (Box.ListIndex >= 1) and (Box.ListIndex <= 26) then
+      MarkerText := Chr(Ord('a') + Box.ListIndex - 1) + '.'
+    else if (LST = 'upper-alpha') and (Box.ListIndex >= 1) and (Box.ListIndex <= 26) then
+      MarkerText := Chr(Ord('A') + Box.ListIndex - 1) + '.'
+    else if LST = 'lower-roman' then
+      MarkerText := ToRoman(Box.ListIndex) + '.'
+    else if LST = 'upper-roman' then
+      MarkerText := ToRoman(Box.ListIndex).ToUpper + '.'
+    else
+      MarkerText := IntToStr(Box.ListIndex) + '.';
+
     Layout := TTextLayoutManager.DefaultTextLayout.Create;
     try
       Layout.BeginUpdate;
@@ -4763,15 +5123,34 @@ begin
   end
   else
   begin
-    // Draw a filled circle bullet — radius scales with font size
+    // Draw bullet markers
     BulletR := Box.Style.FontSize * 0.18;
     if BulletR < 2.5 then BulletR := 2.5;
     BulletCX := X + Box.ContentLeft;
     BulletCY := MarkerY + LineH * 0.5;
-    Canvas.Fill.Kind := TBrushKind.Solid;
-    Canvas.Fill.Color := Box.Style.Color;
-    Canvas.FillEllipse(RectF(BulletCX - BulletR, BulletCY - BulletR,
-      BulletCX + BulletR, BulletCY + BulletR), 1.0);
+
+    if LST = 'square' then
+    begin
+      Canvas.Fill.Kind := TBrushKind.Solid;
+      Canvas.Fill.Color := Box.Style.Color;
+      Canvas.FillRect(RectF(BulletCX - BulletR, BulletCY - BulletR,
+        BulletCX + BulletR, BulletCY + BulletR), 0, 0, [], 1.0);
+    end
+    else if LST = 'circle' then
+    begin
+      Canvas.Stroke.Kind := TBrushKind.Solid;
+      Canvas.Stroke.Color := Box.Style.Color;
+      Canvas.Stroke.Thickness := 1;
+      Canvas.DrawEllipse(RectF(BulletCX - BulletR, BulletCY - BulletR,
+        BulletCX + BulletR, BulletCY + BulletR), 1.0);
+    end
+    else // disc (default)
+    begin
+      Canvas.Fill.Kind := TBrushKind.Solid;
+      Canvas.Fill.Color := Box.Style.Color;
+      Canvas.FillEllipse(RectF(BulletCX - BulletR, BulletCY - BulletR,
+        BulletCX + BulletR, BulletCY + BulletR), 1.0);
+    end;
   end;
 end;
 

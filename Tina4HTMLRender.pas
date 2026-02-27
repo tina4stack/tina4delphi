@@ -10,6 +10,7 @@ uses
   System.Hash,
   FMX.Types, FMX.Controls, FMX.Graphics, FMX.TextLayout,
   FMX.Edit, FMX.StdCtrls, FMX.Memo, FMX.ListBox, FMX.Layouts, FMX.Objects,
+  FMX.DialogService, FMX.Dialogs,
   System.IOUtils;
 
 type
@@ -256,6 +257,8 @@ type
   // ─────────────────────────────────────────────────────────────────────────
 
   THTMLFormControlEvent = procedure(Sender: TObject; const Name, Value: string) of object;
+  THTMLFormSubmitEvent = procedure(Sender: TObject; const FormName: string; FormData: TStrings) of object;
+  THTMLElementClickEvent = procedure(Sender: TObject; const ObjectName, MethodName: string; Params: TStrings) of object;
 
   TNativeFormControl = record
     Control: TControl;
@@ -290,6 +293,8 @@ type
     FOnClick: THTMLFormControlEvent;
     FOnEnter: THTMLFormControlEvent;
     FOnExit: THTMLFormControlEvent;
+    FOnSubmit: THTMLFormSubmitEvent;
+    FOnElementClick: THTMLElementClickEvent;
     procedure SetHTML(const Value: TStringList);
     function GetHTML: TStringList;
     procedure SetCacheEnabled(Value: Boolean);
@@ -303,9 +308,12 @@ type
     procedure PositionFormControls;
     procedure HandleFormControlChange(Sender: TObject);
     procedure HandleFormControlClick(Sender: TObject);
+    procedure HandleFileInputClick(Sender: TObject);
     procedure HandleFormControlEnter(Sender: TObject);
     procedure HandleFormControlExit(Sender: TObject);
     function GetFormControlNameValue(Control: TControl; out AName, AValue: string): Boolean;
+    function ResolveOnClickParam(const Expr: string; ClickedTag: THTMLTag): string;
+    procedure FireOnClick(ClickedTag: THTMLTag);
     procedure PaintBox(Canvas: TCanvas; Box: TLayoutBox; OffX, OffY: Single);
     procedure PaintBackground(Canvas: TCanvas; Box: TLayoutBox; X, Y: Single);
     procedure PaintBorder(Canvas: TCanvas; Box: TLayoutBox; X, Y: Single);
@@ -331,6 +339,16 @@ type
     constructor Create(AOwner: TComponent); override;
     destructor Destroy; override;
     procedure ClearCache;
+    // DOM manipulation: find and modify elements by id
+    function GetElementById(const Id: string): THTMLTag;
+    function GetElementValue(const Id: string): string;
+    procedure SetElementValue(const Id: string; const Value: string);
+    procedure SetElementAttribute(const Id, AttrName, AttrValue: string);
+    procedure SetElementEnabled(const Id: string; Enabled: Boolean);
+    procedure SetElementVisible(const Id: string; Visible: Boolean);
+    procedure SetElementText(const Id: string; const Text: string);
+    procedure SetElementStyle(const Id, StyleProp, StyleValue: string);
+    procedure RefreshElement(const Id: string);
   published
     property HTML: TStringList read GetHTML write SetHTML;
     property Debug: TStringList read FDebug write FDebug;
@@ -340,6 +358,8 @@ type
     property OnFormControlClick: THTMLFormControlEvent read FOnClick write FOnClick;
     property OnFormControlEnter: THTMLFormControlEvent read FOnEnter write FOnEnter;
     property OnFormControlExit: THTMLFormControlEvent read FOnExit write FOnExit;
+    property OnFormSubmit: THTMLFormSubmitEvent read FOnSubmit write FOnSubmit;
+    property OnElementClick: THTMLElementClickEvent read FOnElementClick write FOnElementClick;
     property Align;
     property Position;
     property Width;
@@ -2556,7 +2576,13 @@ begin
       Box.Style.Padding.Left - Box.Style.Padding.Right;
     if ContentW < 0 then ContentW := 0;
     LayoutFormControl(Box, ContentW);
-    if (InputType <> 'checkbox') and (InputType <> 'radio') then
+    // Text inputs, textareas, and selects stretch to full available width
+    // (Bootstrap .form-control sets width:100%).  Buttons and checkbox/radio
+    // keep their intrinsic size from LayoutFormControl.
+    if (not SameText(Box.Tag.TagName, 'button')) and
+       (InputType <> 'checkbox') and (InputType <> 'radio') and
+       (InputType <> 'submit') and (InputType <> 'button') and (InputType <> 'reset') and
+       (InputType <> 'file') then
       Box.ContentWidth := ContentW;
     Exit;
   end;
@@ -2918,6 +2944,12 @@ begin
   CursorX := 0;
   CursorY := 0;
   LineH := GetLineHeight(Box.Style);
+
+  // Clear any fragments from a previous layout pass (e.g. when an inline-block
+  // is laid out twice — first to measure, then again after wrapping).
+  for var Child in Box.Children do
+    if Child.Kind = lbkText then
+      Child.Fragments.Clear;
 
   for var Child in Box.Children do
     ProcessInlineBox(Child);
@@ -3373,6 +3405,12 @@ begin
       Box.ContentWidth := 16;
       Box.ContentHeight := 16;
     end
+    else if InputType = 'file' then
+    begin
+      // "Choose File" button + filename label
+      Box.ContentWidth := Min(250, AvailWidth);
+      Box.ContentHeight := Max(24, Box.Style.FontSize * Box.Style.LineHeight);
+    end
     else if (InputType = 'button') or (InputType = 'submit') or (InputType = 'reset') then
     begin
       var BtnText := '';
@@ -3511,6 +3549,205 @@ begin
   FFileCache.ClearCache;
 end;
 
+function TTina4HTMLRender.GetElementById(const Id: string): THTMLTag;
+
+  function FindById(Tag: THTMLTag; const AId: string): THTMLTag;
+  begin
+    Result := nil;
+    if not Assigned(Tag) then Exit;
+    if SameText(Tag.GetAttribute('id', ''), AId) then
+      Exit(Tag);
+    for var C in Tag.Children do
+    begin
+      Result := FindById(C, AId);
+      if Result <> nil then Exit;
+    end;
+  end;
+
+begin
+  Result := nil;
+  if Assigned(FParser) and Assigned(FParser.Root) then
+    Result := FindById(FParser.Root, Id);
+end;
+
+function TTina4HTMLRender.GetElementValue(const Id: string): string;
+begin
+  Result := '';
+  // First check native form controls for live value
+  for var Rec in FFormControls do
+  begin
+    if Assigned(Rec.Box.Tag) and
+       SameText(Rec.Box.Tag.GetAttribute('id', ''), Id) then
+    begin
+      var N: string;
+      GetFormControlNameValue(Rec.Control, N, Result);
+      Exit;
+    end;
+  end;
+  // Fall back to DOM attribute
+  var Tag := GetElementById(Id);
+  if Assigned(Tag) then
+    Result := Tag.GetAttribute('value', '');
+end;
+
+procedure TTina4HTMLRender.SetElementValue(const Id: string; const Value: string);
+begin
+  // Update native form control if it exists
+  for var Rec in FFormControls do
+  begin
+    if Assigned(Rec.Box.Tag) and
+       SameText(Rec.Box.Tag.GetAttribute('id', ''), Id) then
+    begin
+      if Rec.Control is TEdit then
+        TEdit(Rec.Control).Text := Value
+      else if Rec.Control is TMemo then
+        TMemo(Rec.Control).Lines.Text := Value
+      else if Rec.Control is TCheckBox then
+        TCheckBox(Rec.Control).IsChecked := SameText(Value, 'true') or (Value = '1')
+      else if Rec.Control is TRadioButton then
+        TRadioButton(Rec.Control).IsChecked := SameText(Value, 'true') or (Value = '1');
+      // Also update the DOM attribute
+      if Assigned(Rec.Box.Tag.Attributes) then
+        Rec.Box.Tag.Attributes.AddOrSetValue('value', Value);
+      Exit;
+    end;
+  end;
+  // Update DOM attribute directly
+  var Tag := GetElementById(Id);
+  if Assigned(Tag) and Assigned(Tag.Attributes) then
+    Tag.Attributes.AddOrSetValue('value', Value);
+end;
+
+procedure TTina4HTMLRender.SetElementAttribute(const Id, AttrName, AttrValue: string);
+begin
+  var Tag := GetElementById(Id);
+  if Assigned(Tag) and Assigned(Tag.Attributes) then
+  begin
+    Tag.Attributes.AddOrSetValue(AttrName, AttrValue);
+    // If changing class or style, trigger relayout
+    if SameText(AttrName, 'class') or SameText(AttrName, 'style') then
+    begin
+      FNeedRelayout := True;
+      Repaint;
+    end;
+  end;
+end;
+
+procedure TTina4HTMLRender.SetElementEnabled(const Id: string; Enabled: Boolean);
+begin
+  // Update native control
+  for var Rec in FFormControls do
+  begin
+    if Assigned(Rec.Box.Tag) and
+       SameText(Rec.Box.Tag.GetAttribute('id', ''), Id) then
+    begin
+      Rec.Control.Enabled := Enabled;
+      Rec.Control.Opacity := IfThen(Enabled, 1.0, 0.5);
+      Exit;
+    end;
+  end;
+  // For non-form elements, set a disabled attribute and repaint
+  var Tag := GetElementById(Id);
+  if Assigned(Tag) and Assigned(Tag.Attributes) then
+  begin
+    if Enabled then
+      Tag.Attributes.Remove('disabled')
+    else
+      Tag.Attributes.AddOrSetValue('disabled', 'disabled');
+  end;
+end;
+
+procedure TTina4HTMLRender.SetElementVisible(const Id: string; Visible: Boolean);
+begin
+  // Update native control visibility
+  for var Rec in FFormControls do
+  begin
+    if Assigned(Rec.Box.Tag) and
+       SameText(Rec.Box.Tag.GetAttribute('id', ''), Id) then
+    begin
+      Rec.Control.Visible := Visible;
+      // Also update the style so layout respects it
+      if Assigned(Rec.Box.Tag.Style) then
+      begin
+        if Visible then
+          Rec.Box.Tag.Style.Remove('display')
+        else
+          Rec.Box.Tag.Style.AddOrSetValue('display', 'none');
+      end;
+      FNeedRelayout := True;
+      Repaint;
+      Exit;
+    end;
+  end;
+  // For non-form elements
+  var Tag := GetElementById(Id);
+  if Assigned(Tag) and Assigned(Tag.Style) then
+  begin
+    if Visible then
+      Tag.Style.Remove('display')
+    else
+      Tag.Style.AddOrSetValue('display', 'none');
+    FNeedRelayout := True;
+    Repaint;
+  end;
+end;
+
+procedure TTina4HTMLRender.SetElementText(const Id: string; const Text: string);
+begin
+  var Tag := GetElementById(Id);
+  if not Assigned(Tag) then Exit;
+  // For elements with text children, update the first #text child
+  for var C in Tag.Children do
+  begin
+    if C.TagName = '#text' then
+    begin
+      C.Text := Text;
+      // Update native control label if it's a styled button (TRectangle with TLabel)
+      for var Rec in FFormControls do
+        if Assigned(Rec.Box.Tag) and (Rec.Box.Tag = Tag) then
+        begin
+          if Rec.Control is TRectangle then
+            for var I := 0 to TRectangle(Rec.Control).ChildrenCount - 1 do
+              if TRectangle(Rec.Control).Children[I] is TLabel then
+              begin
+                TLabel(TRectangle(Rec.Control).Children[I]).Text := Text;
+                Break;
+              end;
+          Break;
+        end;
+      FNeedRelayout := True;
+      Repaint;
+      Exit;
+    end;
+  end;
+  // No text child exists — create one
+  var TextNode := THTMLTag.Create;
+  TextNode.TagName := '#text';
+  TextNode.Text := Text;
+  TextNode.Parent := Tag;
+  Tag.Children.Add(TextNode);
+  FNeedRelayout := True;
+  Repaint;
+end;
+
+procedure TTina4HTMLRender.SetElementStyle(const Id, StyleProp, StyleValue: string);
+begin
+  var Tag := GetElementById(Id);
+  if Assigned(Tag) and Assigned(Tag.Style) then
+  begin
+    Tag.Style.AddOrSetValue(StyleProp, StyleValue);
+    FNeedRelayout := True;
+    Repaint;
+  end;
+end;
+
+procedure TTina4HTMLRender.RefreshElement(const Id: string);
+begin
+  // Force a full re-layout and repaint
+  FNeedRelayout := True;
+  Repaint;
+end;
+
 procedure TTina4HTMLRender.FHTMLChange(Sender: TObject);
 begin
   FNeedRelayout := True;
@@ -3583,7 +3820,8 @@ begin
   begin
     var C := Controls[I];
     if (C is TEdit) or (C is TButton) or (C is TMemo) or (C is TComboBox)
-      or (C is TCheckBox) or (C is TRadioButton) or (C is TRectangle) then
+      or (C is TCheckBox) or (C is TRadioButton) or (C is TRectangle)
+      or (C is TLayout) then
     begin
       C.Parent := nil;
       C.DisposeOf;
@@ -3621,6 +3859,11 @@ begin
       if TComboBox(Control).Selected <> nil then
         AValue := TComboBox(Control).Selected.Text;
     end
+    else if Control is TLayout then
+    begin
+      // File input: selected filename is stored in TagString
+      AValue := TLayout(Control).TagString;
+    end
     else if Control is TRectangle then
     begin
       // Styled button: extract text from child TLabel
@@ -3646,9 +3889,178 @@ end;
 procedure TTina4HTMLRender.HandleFormControlClick(Sender: TObject);
 var N, V: string;
 begin
-  if Assigned(FOnClick) and (Sender is TControl) and
-     GetFormControlNameValue(TControl(Sender), N, V) then
+  if Assigned(FOnClick) and (Sender is TControl) then
+  begin
+    GetFormControlNameValue(TControl(Sender), N, V);
     FOnClick(Sender, N, V);
+  end;
+
+  // Fire OnElementClick if the form control has an onclick attribute
+  if Assigned(FOnElementClick) and (Sender is TControl) then
+  begin
+    for var Rec in FFormControls do
+      if Rec.Control = TControl(Sender) then
+      begin
+        if Assigned(Rec.Box.Tag) then
+          FireOnClick(Rec.Box.Tag);
+        Break;
+      end;
+  end;
+
+  // Fire OnFormSubmit when a submit button is clicked
+  if Assigned(FOnSubmit) and (Sender is TControl) then
+  begin
+    // Find the Box for this control and check if it's a submit trigger
+    for var Rec in FFormControls do
+    begin
+      if Rec.Control <> TControl(Sender) then Continue;
+      if not Assigned(Rec.Box.Tag) then Break;
+
+      var IsSubmit := False;
+      var TN := Rec.Box.Tag.TagName.ToLower;
+      if TN = 'button' then
+      begin
+        // <button> defaults to type=submit; only type=button is non-submit
+        var BtnType := Rec.Box.Tag.GetAttribute('type', 'submit').ToLower;
+        IsSubmit := (BtnType = 'submit');
+      end
+      else if TN = 'input' then
+      begin
+        var InputType := Rec.Box.Tag.GetAttribute('type', 'text').ToLower;
+        IsSubmit := (InputType = 'submit');
+      end;
+
+      if not IsSubmit then Break;
+
+      // Walk up the DOM to find the enclosing <form>
+      var FormTag: THTMLTag := Rec.Box.Tag.Parent;
+      while Assigned(FormTag) and not SameText(FormTag.TagName, 'form') do
+        FormTag := FormTag.Parent;
+
+      var FormName := '';
+      if Assigned(FormTag) then
+        FormName := FormTag.GetAttribute('name', FormTag.GetAttribute('id', ''));
+
+      // Collect all form control values that belong to this form
+      var FormData := TStringList.Create;
+      try
+        for var FRec in FFormControls do
+        begin
+          if not Assigned(FRec.Box.Tag) then Continue;
+          var CtlName := FRec.Box.Tag.GetAttribute('name', '');
+          if CtlName = '' then Continue;
+
+          // Check this control belongs to the same form
+          var CtlForm: THTMLTag := FRec.Box.Tag.Parent;
+          while Assigned(CtlForm) and not SameText(CtlForm.TagName, 'form') do
+            CtlForm := CtlForm.Parent;
+          if CtlForm <> FormTag then Continue;
+
+          // Get the value
+          var CtlValue := '';
+          if FRec.Control is TEdit then
+            CtlValue := TEdit(FRec.Control).Text
+          else if FRec.Control is TMemo then
+            CtlValue := TMemo(FRec.Control).Lines.Text
+          else if FRec.Control is TCheckBox then
+          begin
+            if not TCheckBox(FRec.Control).IsChecked then Continue;
+            CtlValue := FRec.Box.Tag.GetAttribute('value', 'on');
+          end
+          else if FRec.Control is TRadioButton then
+          begin
+            if not TRadioButton(FRec.Control).IsChecked then Continue;
+            CtlValue := FRec.Box.Tag.GetAttribute('value', 'on');
+          end
+          else if FRec.Control is TComboBox then
+          begin
+            if TComboBox(FRec.Control).Selected <> nil then
+              CtlValue := TComboBox(FRec.Control).Selected.Text;
+          end
+          else if FRec.Control is TLayout then
+          begin
+            // File input: selected filename stored in TagString
+            CtlValue := TLayout(FRec.Control).TagString;
+          end
+          else if FRec.Control is TRectangle then
+          begin
+            // Styled button — include its value attribute
+            CtlValue := FRec.Box.Tag.GetAttribute('value', '');
+          end;
+
+          FormData.Add(CtlName + '=' + CtlValue);
+        end;
+
+        FOnSubmit(Sender, FormName, FormData);
+      finally
+        FormData.Free;
+      end;
+      Break;
+    end;
+  end;
+end;
+
+procedure TTina4HTMLRender.HandleFileInputClick(Sender: TObject);
+var
+  Dlg: TOpenDialog;
+begin
+  Dlg := TOpenDialog.Create(nil);
+  try
+    Dlg.Title := 'Choose File';
+    // Use the accept attribute to set file filters if available
+    if (Sender is TRectangle) and (TRectangle(Sender).TagString <> '') then
+    begin
+      var Accept := TRectangle(Sender).TagString;
+      // Convert HTML accept patterns to dialog filters
+      if Accept.Contains('image/') or Accept.Contains('.png') or
+         Accept.Contains('.jpg') or Accept.Contains('.gif') then
+        Dlg.Filter := 'Image files|*.png;*.jpg;*.jpeg;*.gif;*.bmp;*.webp|All files|*.*'
+      else if Accept.Contains('.pdf') then
+        Dlg.Filter := 'PDF files|*.pdf|All files|*.*'
+      else
+        Dlg.Filter := 'All files|*.*';
+    end
+    else
+      Dlg.Filter := 'All files|*.*';
+
+    if Dlg.Execute then
+    begin
+      // Update the filename label — it's a sibling of the button inside the TLayout
+      if (Sender is TControl) and (TControl(Sender).Parent is TLayout) then
+      begin
+        var Container := TLayout(TControl(Sender).Parent);
+        for var I := 0 to Container.ChildrenCount - 1 do
+          if (Container.Children[I] is TLabel) and
+             (Container.Children[I] <> TControl(Sender)) and
+             not (Container.Children[I].Parent is TRectangle) then
+          begin
+            TLabel(Container.Children[I]).Text := ExtractFileName(Dlg.FileName);
+            TLabel(Container.Children[I]).FontColor := TAlphaColors.Black;
+            Break;
+          end;
+        // Store the full path on the container's TagString for form submission
+        Container.TagString := Dlg.FileName;
+      end;
+
+      // Fire OnChange
+      if Assigned(FOnChange) and (Sender is TControl) then
+      begin
+        // Find the Box for the parent container
+        for var Rec in FFormControls do
+        begin
+          if Rec.Control = TControl(Sender).Parent then
+          begin
+            if Assigned(Rec.Box.Tag) then
+              FOnChange(Sender, Rec.Box.Tag.GetAttribute('name', ''),
+                Dlg.FileName);
+            Break;
+          end;
+        end;
+      end;
+    end;
+  finally
+    Dlg.Free;
+  end;
 end;
 
 procedure TTina4HTMLRender.HandleFormControlEnter(Sender: TObject);
@@ -3789,6 +4201,53 @@ begin
         RB.GroupName := Box.Tag.GetAttribute('name', 'radio');
         RB.OnChange := HandleFormControlChange;
         Ctl := RB;
+      end
+      else if InputType = 'file' then
+      begin
+        // Container layout for "Choose File" button + filename label
+        var Container := TLayout.Create(Self);
+        Container.HitTest := False;
+
+        var FileBtn := TRectangle.Create(Container);
+        FileBtn.Parent := Container;
+        FileBtn.Fill.Kind := TBrushKind.Solid;
+        FileBtn.Fill.Color := $FFE0E0E0;
+        FileBtn.Stroke.Kind := TBrushKind.Solid;
+        FileBtn.Stroke.Color := $FFB0B0B0;
+        FileBtn.XRadius := 4;
+        FileBtn.YRadius := 4;
+        FileBtn.Width := 90;
+        FileBtn.Align := TAlignLayout.Left;
+        FileBtn.HitTest := True;
+        FileBtn.Cursor := crHandPoint;
+        FileBtn.OnClick := HandleFileInputClick;
+        FileBtn.TagString := Box.Tag.GetAttribute('accept', '');
+
+        var BtnLbl := TLabel.Create(FileBtn);
+        BtnLbl.Parent := FileBtn;
+        BtnLbl.Align := TAlignLayout.Client;
+        BtnLbl.Text := 'Choose File';
+        BtnLbl.HitTest := False;
+        BtnLbl.StyledSettings := BtnLbl.StyledSettings - [TStyledSetting.FontColor,
+          TStyledSetting.Size, TStyledSetting.Family];
+        BtnLbl.FontColor := TAlphaColors.Black;
+        BtnLbl.Font.Size := Box.Style.FontSize;
+        BtnLbl.Font.Family := Box.Style.FontFamily;
+        BtnLbl.TextSettings.HorzAlign := TTextAlign.Center;
+
+        var FileLbl := TLabel.Create(Container);
+        FileLbl.Parent := Container;
+        FileLbl.Align := TAlignLayout.Client;
+        FileLbl.Text := 'No file chosen';
+        FileLbl.HitTest := False;
+        FileLbl.StyledSettings := FileLbl.StyledSettings - [TStyledSetting.FontColor,
+          TStyledSetting.Size, TStyledSetting.Family];
+        FileLbl.FontColor := $FF6C757D;
+        FileLbl.Font.Size := Box.Style.FontSize;
+        FileLbl.Font.Family := Box.Style.FontFamily;
+        FileLbl.Margins.Left := 8;
+
+        Ctl := Container;
       end
       else if (InputType = 'submit') or (InputType = 'button') or (InputType = 'reset') then
       begin
@@ -4371,6 +4830,228 @@ begin
   Handled := True;
 end;
 
+function TTina4HTMLRender.ResolveOnClickParam(const Expr: string;
+  ClickedTag: THTMLTag): string;
+
+  function FindTagById(Tag: THTMLTag; const Id: string): THTMLTag;
+  begin
+    Result := nil;
+    if not Assigned(Tag) then Exit;
+    if SameText(Tag.GetAttribute('id', ''), Id) then
+      Exit(Tag);
+    for var C in Tag.Children do
+    begin
+      Result := FindTagById(C, Id);
+      if Result <> nil then Exit;
+    end;
+  end;
+
+  function GetTagValue(Tag: THTMLTag): string;
+  begin
+    Result := '';
+    if not Assigned(Tag) then Exit;
+    // For input elements, get the value attribute or current control value
+    var TN := Tag.TagName.ToLower;
+    if (TN = 'input') or (TN = 'textarea') or (TN = 'select') or (TN = 'button') then
+    begin
+      // Try to find the native control and get its live value
+      for var Rec in FFormControls do
+      begin
+        if Rec.Box.Tag = Tag then
+        begin
+          var N, V: string;
+          GetFormControlNameValue(Rec.Control, N, V);
+          Exit(V);
+        end;
+      end;
+      // Fallback to HTML attribute
+      Result := Tag.GetAttribute('value', '');
+    end
+    else
+    begin
+      // For other elements, get inner text
+      for var C in Tag.Children do
+        if C.TagName = '#text' then
+          Result := Result + C.Text;
+    end;
+  end;
+
+  function GetTagAttribute(Tag: THTMLTag; const AttrName: string): string;
+  begin
+    Result := '';
+    if Assigned(Tag) then
+      Result := Tag.GetAttribute(AttrName, '');
+  end;
+
+var
+  S: string;
+begin
+  S := Expr.Trim;
+
+  // this.value — value of the clicked element
+  if SameText(S, 'this.value') then
+    Exit(GetTagValue(ClickedTag));
+
+  // this.id — id of the clicked element
+  if SameText(S, 'this.id') then
+    Exit(GetTagAttribute(ClickedTag, 'id'));
+
+  // this.name — name of the clicked element
+  if SameText(S, 'this.name') then
+    Exit(GetTagAttribute(ClickedTag, 'name'));
+
+  // this.className — class attribute
+  if SameText(S, 'this.className') or SameText(S, 'this.classname') then
+    Exit(GetTagAttribute(ClickedTag, 'class'));
+
+  // this.<attr> — any attribute of clicked element
+  if S.ToLower.StartsWith('this.') then
+  begin
+    var AttrName := Copy(S, 6, Length(S));
+    Exit(GetTagAttribute(ClickedTag, AttrName));
+  end;
+
+  // document.getElementById('id').value
+  if S.ToLower.StartsWith('document.getelementbyid(') then
+  begin
+    var P1 := Pos('(', S);
+    var P2 := Pos(')', S);
+    if (P1 > 0) and (P2 > P1) then
+    begin
+      var IdExpr := Copy(S, P1 + 1, P2 - P1 - 1).Trim;
+      // Remove quotes
+      if (Length(IdExpr) >= 2) and
+         ((IdExpr[1] = '''') or (IdExpr[1] = '"')) then
+        IdExpr := Copy(IdExpr, 2, Length(IdExpr) - 2);
+      var FoundTag := FindTagById(FParser.Root, IdExpr);
+      // Check what property is being accessed after the closing paren
+      var Rest := Copy(S, P2 + 1, Length(S)).Trim;
+      if Rest.StartsWith('.') then
+        Rest := Copy(Rest, 2, Length(Rest));
+      if SameText(Rest, 'value') then
+        Exit(GetTagValue(FoundTag))
+      else if SameText(Rest, 'id') then
+        Exit(GetTagAttribute(FoundTag, 'id'))
+      else if SameText(Rest, 'name') then
+        Exit(GetTagAttribute(FoundTag, 'name'))
+      else if Rest <> '' then
+        Exit(GetTagAttribute(FoundTag, Rest))
+      else
+        Exit(GetTagValue(FoundTag));
+    end;
+  end;
+
+  // String literal: 'text' or "text"
+  if (Length(S) >= 2) and ((S[1] = '''') or (S[1] = '"')) and
+     (S[Length(S)] = S[1]) then
+    Exit(Copy(S, 2, Length(S) - 2));
+
+  // Numeric literal
+  var DummyInt: Integer;
+  if TryStrToInt(S, DummyInt) then
+    Exit(S);
+  var DummyFloat: Double;
+  if TryStrToFloat(S, DummyFloat) then
+    Exit(S);
+
+  // Unrecognized expression — pass through as-is
+  Result := S;
+end;
+
+procedure TTina4HTMLRender.FireOnClick(ClickedTag: THTMLTag);
+var
+  OnClickAttr, ObjName, MethodName, ParamStr: string;
+  P1, P2, ColonPos: Integer;
+  Params: TStringList;
+begin
+  if not Assigned(FOnElementClick) then Exit;
+  if not Assigned(ClickedTag) then Exit;
+
+  OnClickAttr := ClickedTag.GetAttribute('onclick', '');
+  if OnClickAttr = '' then Exit;
+
+  // Parse format: "ObjectName:MethodName(param1, param2, ...)"
+  // or just: "MethodName(param1, param2, ...)"
+  P1 := Pos('(', OnClickAttr);
+  P2 := LastDelimiter(')', OnClickAttr);
+
+  if P1 > 0 then
+  begin
+    var Prefix := Copy(OnClickAttr, 1, P1 - 1).Trim;
+    ColonPos := Pos(':', Prefix);
+    if ColonPos > 0 then
+    begin
+      ObjName := Copy(Prefix, 1, ColonPos - 1).Trim;
+      MethodName := Copy(Prefix, ColonPos + 1, Length(Prefix)).Trim;
+    end
+    else
+    begin
+      ObjName := '';
+      MethodName := Prefix;
+    end;
+
+    // Extract parameters between ( and )
+    if (P2 > P1) then
+      ParamStr := Copy(OnClickAttr, P1 + 1, P2 - P1 - 1).Trim
+    else
+      ParamStr := '';
+  end
+  else
+  begin
+    // No parentheses — treat entire string as method call with no params
+    ColonPos := Pos(':', OnClickAttr);
+    if ColonPos > 0 then
+    begin
+      ObjName := Copy(OnClickAttr, 1, ColonPos - 1).Trim;
+      MethodName := Copy(OnClickAttr, ColonPos + 1, Length(OnClickAttr)).Trim;
+    end
+    else
+    begin
+      ObjName := '';
+      MethodName := OnClickAttr.Trim;
+    end;
+    ParamStr := '';
+  end;
+
+  // Parse and resolve parameters
+  Params := TStringList.Create;
+  try
+    if ParamStr <> '' then
+    begin
+      // Split by comma, respecting quoted strings and parentheses
+      var Depth := 0;
+      var InQuote: Char := #0;
+      var Start := 1;
+      for var I := 1 to Length(ParamStr) do
+      begin
+        var Ch := ParamStr[I];
+        if InQuote <> #0 then
+        begin
+          if Ch = InQuote then InQuote := #0;
+        end
+        else if (Ch = '''') or (Ch = '"') then
+          InQuote := Ch
+        else if Ch = '(' then Inc(Depth)
+        else if Ch = ')' then Dec(Depth)
+        else if (Ch = ',') and (Depth = 0) then
+        begin
+          var Param := Copy(ParamStr, Start, I - Start).Trim;
+          Params.Add(ResolveOnClickParam(Param, ClickedTag));
+          Start := I + 1;
+        end;
+      end;
+      // Last parameter
+      var LastParam := Copy(ParamStr, Start, Length(ParamStr) - Start + 1).Trim;
+      if LastParam <> '' then
+        Params.Add(ResolveOnClickParam(LastParam, ClickedTag));
+    end;
+
+    FOnElementClick(Self, ObjName, MethodName, Params);
+  finally
+    Params.Free;
+  end;
+end;
+
 procedure TTina4HTMLRender.MouseDown(Button: TMouseButton; Shift: TShiftState;
   X, Y: Single);
 begin
@@ -4406,9 +5087,97 @@ end;
 
 procedure TTina4HTMLRender.MouseUp(Button: TMouseButton; Shift: TShiftState;
   X, Y: Single);
+
+  // General hit-test: find the deepest element at (HitX, HitY).
+  // Returns the THTMLTag of the innermost element hit.
+  function HitTestElement(Box: TLayoutBox; OffX, OffY: Single;
+    HitX, HitY: Single): THTMLTag;
+  var
+    AbsX, AbsY, CX, CY: Single;
+    Left, Top, Right, Bottom: Single;
+    ChildResult: THTMLTag;
+  begin
+    Result := nil;
+    if Box.Style.Display = 'none' then Exit;
+    AbsX := OffX + Box.X;
+    AbsY := OffY + Box.Y;
+
+    // Check if click is inside this box
+    if Assigned(Box.Tag) and (Box.Tag.TagName <> '#text') then
+    begin
+      Left := AbsX + ResolveAutoMargin(Box.Style.Margin.Left);
+      Top := AbsY + ResolveAutoMargin(Box.Style.Margin.Top);
+      Right := Left + Box.Style.BorderWidth * 2 +
+        Box.Style.Padding.Left + Box.ContentWidth + Box.Style.Padding.Right;
+      Bottom := Top + Box.Style.BorderWidth * 2 +
+        Box.Style.Padding.Top + Box.ContentHeight + Box.Style.Padding.Bottom;
+      if (HitX >= Left) and (HitX <= Right) and
+         (HitY >= Top) and (HitY <= Bottom) then
+        Result := Box.Tag;  // Candidate — may be overridden by a deeper child
+    end;
+
+    // Recurse children — deepest match wins
+    CX := AbsX + Box.ContentLeft;
+    CY := AbsY + Box.ContentTop;
+    for var Child in Box.Children do
+    begin
+      ChildResult := HitTestElement(Child, CX, CY, HitX, HitY);
+      if ChildResult <> nil then
+        Result := ChildResult;
+    end;
+  end;
+
 begin
   inherited;
+  if FMouseDownOnScroll then
+  begin
+    FMouseDownOnScroll := False;
+    Exit;
+  end;
   FMouseDownOnScroll := False;
+
+  if (Button = TMouseButton.mbLeft) and Assigned(FLayoutEngine) and
+     Assigned(FLayoutEngine.Root) then
+  begin
+    var HitTag := HitTestElement(FLayoutEngine.Root, 0, 0, X, Y + FScrollY);
+
+    // Check if a <label> was clicked — toggle associated checkbox/radio
+    if Assigned(HitTag) then
+    begin
+      // Walk up to find a <label> (the hit might be on a child of the label)
+      var LabelTag := HitTag;
+      while Assigned(LabelTag) and not SameText(LabelTag.TagName, 'label') do
+        LabelTag := LabelTag.Parent;
+      if Assigned(LabelTag) then
+      begin
+        var ForId := LabelTag.GetAttribute('for', '');
+        if ForId <> '' then
+          for var Rec in FFormControls do
+            if Assigned(Rec.Box.Tag) and
+               SameText(Rec.Box.Tag.GetAttribute('id', ''), ForId) then
+            begin
+              if Rec.Control is TCheckBox then
+                TCheckBox(Rec.Control).IsChecked := not TCheckBox(Rec.Control).IsChecked
+              else if Rec.Control is TRadioButton then
+                TRadioButton(Rec.Control).IsChecked := True;
+              Break;
+            end;
+      end;
+
+      // Fire OnElementClick for elements with onclick attribute.
+      // Walk up from the hit element to find the nearest onclick handler (bubbling).
+      var OnClickTag := HitTag;
+      while Assigned(OnClickTag) do
+      begin
+        if OnClickTag.GetAttribute('onclick', '') <> '' then
+        begin
+          FireOnClick(OnClickTag);
+          Break;
+        end;
+        OnClickTag := OnClickTag.Parent;
+      end;
+    end;
+  end;
 end;
 
 procedure TTina4HTMLRender.Resize;

@@ -2547,9 +2547,9 @@ begin
     if (InputType = 'checkbox') or (InputType = 'radio') then
     begin
       Box.Style.Padding.Clear;
-      if Box.Style.Margin.Left < 0 then Box.Style.Margin.Left := 0;
-      if Box.Style.Margin.Right < 0 then Box.Style.Margin.Right := 0;
-      Box.Style.Margin.Right := Max(Box.Style.Margin.Right, 4);
+      // Keep negative margins (used by Bootstrap form-check layout)
+      Box.Style.Margin.Top := 0;
+      Box.Style.Margin.Bottom := 0;
     end;
     // Recalculate content width without border
     ContentW := AvailWidth - MarginL - MarginR -
@@ -3876,15 +3876,18 @@ begin
     AX := 0;
     AY := 0;
     FindBoxAbsPos(FLayoutEngine.Root, Rec.Box, 0, 0, AX, AY);
-    Rec.Control.Position.X := AX;
-    Rec.Control.Position.Y := AY - FScrollY;
+    // Checkbox/radio: position at content area (includes negative margin offset)
     if (Rec.Control is TCheckBox) or (Rec.Control is TRadioButton) then
     begin
+      Rec.Control.Position.X := AX + Rec.Box.ContentLeft;
+      Rec.Control.Position.Y := AY + Rec.Box.ContentTop - FScrollY;
       Rec.Control.Width := Rec.Box.ContentWidth;
       Rec.Control.Height := Rec.Box.ContentHeight;
     end
     else
     begin
+      Rec.Control.Position.X := AX;
+      Rec.Control.Position.Y := AY - FScrollY;
       Rec.Control.Width := Rec.Box.ContentWidth + Rec.Box.Style.Padding.Left + Rec.Box.Style.Padding.Right;
       Rec.Control.Height := Rec.Box.ContentHeight + Rec.Box.Style.Padding.Top + Rec.Box.Style.Padding.Bottom;
     end;

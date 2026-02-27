@@ -103,6 +103,7 @@ type
   public
     Selector: string;
     Declarations: TCSSDeclarations;
+    SourceOrder: Integer;  // Order in which rule appeared in CSS (for stable sorting)
     constructor Create;
     destructor Destroy; override;
   end;
@@ -614,7 +615,10 @@ begin
         end;
 
         if Rule.Declarations.Count > 0 then
-          FRules.Add(Rule)
+        begin
+          Rule.SourceOrder := FRules.Count;
+          FRules.Add(Rule);
+        end
         else
           Rule.Free;
       end;
@@ -908,11 +912,14 @@ begin
         MatchedRules.Add(Rule);
     end;
 
-    // Sort by specificity ascending — higher specificity applied last wins
+    // Sort by specificity ascending (stable: use SourceOrder as tiebreaker).
+    // Later rules with equal specificity override earlier ones, matching CSS cascade.
     MatchedRules.Sort(TComparer<TCSSRule>.Construct(
       function(const A, B: TCSSRule): Integer
       begin
         Result := SelectorSpecificity(A.Selector) - SelectorSpecificity(B.Selector);
+        if Result = 0 then
+          Result := A.SourceOrder - B.SourceOrder;
       end
     ));
 

@@ -161,6 +161,7 @@ type
     Display: string;
     WhiteSpace: string;
     BoxSizing: string;
+    CSSCursor: string;
     class function Default: TComputedStyle; static;
     class function ForTag(Tag: THTMLTag; const ParentStyle: TComputedStyle; StyleSheet: TCSSStyleSheet = nil): TComputedStyle; static;
     class procedure ApplyDeclarations(Decls: TCSSDeclarations; var Style: TComputedStyle; const ParentStyle: TComputedStyle); static;
@@ -602,6 +603,9 @@ begin
           begin
             var PropName := KV[0].Trim.ToLower;
             var PropVal := KV[1].Trim;
+            // Strip !important (we don't track priority yet but must strip for parsing)
+            if PropVal.EndsWith('!important') then
+              PropVal := PropVal.Substring(0, PropVal.Length - 10).Trim;
             // Collect CSS custom properties (--var-name) from :root as globals
             if PropName.StartsWith('--') then
             begin
@@ -1552,12 +1556,13 @@ begin
   Result.Padding.Clear;
   Result.BorderColor := TAlphaColors.Black;
   Result.BorderWidth := 0;
-  Result.BorderRadius := 0;
+  Result.BorderRadius := -1;
   Result.ExplicitWidth := -1;
   Result.ExplicitHeight := -1;
   Result.Display := 'block';
   Result.WhiteSpace := 'normal';
   Result.BoxSizing := 'content-box';
+  Result.CSSCursor := '';
 end;
 
 class function TComputedStyle.ParseColor(const S: string): TAlphaColor;
@@ -1765,11 +1770,12 @@ begin
   Result.Padding.Clear;
   Result.BorderColor := TAlphaColors.Black;
   Result.BorderWidth := 0;
-  Result.BorderRadius := 0;
+  Result.BorderRadius := -1;
   Result.ExplicitWidth := -1;
   Result.ExplicitHeight := -1;
   Result.Display := 'inline';
   Result.BoxSizing := 'content-box';
+  Result.CSSCursor := '';
 
   if Tag = nil then Exit;
   TN := Tag.TagName.ToLower;
@@ -2056,6 +2062,8 @@ begin
     Style.WhiteSpace := Temp.ToLower;
   if Decls.TryGetValue('box-sizing', Temp) and not ShouldSkip(Temp) then
     Style.BoxSizing := Temp.ToLower;
+  if Decls.TryGetValue('cursor', Temp) and not ShouldSkip(Temp) then
+    Style.CSSCursor := Temp.ToLower;
 end;
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -2492,10 +2500,15 @@ begin
     var InputType := '';
     if Assigned(Box.Tag) then
       InputType := Box.Tag.GetAttribute('type', 'text').ToLower;
-    // Checkbox/radio are small fixed-size controls — clear padding so
-    // it doesn't offset them from the left edge
+    // Checkbox/radio are small fixed-size controls — clear padding and
+    // negative margins so they render inline without CSS float offset
     if (InputType = 'checkbox') or (InputType = 'radio') then
+    begin
       Box.Style.Padding.Clear;
+      if Box.Style.Margin.Left < 0 then Box.Style.Margin.Left := 0;
+      if Box.Style.Margin.Right < 0 then Box.Style.Margin.Right := 0;
+      Box.Style.Margin.Right := Max(Box.Style.Margin.Right, 4);
+    end;
     // Recalculate content width without border
     ContentW := AvailWidth - MarginL - MarginR -
       Box.Style.Padding.Left - Box.Style.Padding.Right;
@@ -3578,7 +3591,7 @@ begin
   end;
 
   var Radius: Single := Box.Style.BorderRadius;
-  if Radius <= 0 then Radius := 4;
+  if Radius < 0 then Radius := 4;  // -1 = not set, default to 4px
 
   var Rect := TRectangle.Create(Self);
   Rect.Fill.Kind := TBrushKind.Solid;
@@ -3588,6 +3601,7 @@ begin
   Rect.XRadius := Radius;
   Rect.YRadius := Radius;
   Rect.HitTest := True;
+  Rect.Cursor := crHandPoint;
   Rect.OnClick := HandleFormControlClick;
 
   var Lbl := TLabel.Create(Rect);
@@ -3902,7 +3916,7 @@ begin
     Canvas.FillRect(R, Box.Style.BorderRadius, Box.Style.BorderRadius,
       AllCorners, 1.0)
   else
-    Canvas.FillRect(R, 1.0);
+    Canvas.FillRect(R, 0);
 end;
 
 procedure TTina4HTMLRender.PaintBorder(Canvas: TCanvas; Box: TLayoutBox; X, Y: Single);

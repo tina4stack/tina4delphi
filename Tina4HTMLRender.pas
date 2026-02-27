@@ -3511,6 +3511,37 @@ begin
           TS.TextSettings.FontColor := Box.Style.Color;
       end;
 
+      // Apply tint color for buttons based on CSS background or Bootstrap classes
+      if Ctl is TButton then
+      begin
+        var BtnColor: TAlphaColor := TAlphaColors.Null;
+        var BtnTextColor: TAlphaColor := TAlphaColors.Null;
+        // Use computed background color if available
+        if Box.Style.BackgroundColor <> TAlphaColors.Null then
+          BtnColor := Box.Style.BackgroundColor
+        else if Assigned(Box.Tag) then
+        begin
+          // Fall back to Bootstrap button class mapping
+          var BtnClass := Box.Tag.GetAttribute('class', '').ToLower;
+          if BtnClass.Contains('btn-primary') then begin BtnColor := $FF0D6EFD; BtnTextColor := TAlphaColors.White; end
+          else if BtnClass.Contains('btn-secondary') then begin BtnColor := $FF6C757D; BtnTextColor := TAlphaColors.White; end
+          else if BtnClass.Contains('btn-success') then begin BtnColor := $FF198754; BtnTextColor := TAlphaColors.White; end
+          else if BtnClass.Contains('btn-danger') then begin BtnColor := $FFDC3545; BtnTextColor := TAlphaColors.White; end
+          else if BtnClass.Contains('btn-warning') then begin BtnColor := $FFFFC107; BtnTextColor := TAlphaColors.Black; end
+          else if BtnClass.Contains('btn-info') then begin BtnColor := $FF0DCAF0; BtnTextColor := TAlphaColors.Black; end
+          else if BtnClass.Contains('btn-dark') then begin BtnColor := $FF212529; BtnTextColor := TAlphaColors.White; end
+          else if BtnClass.Contains('btn-light') then begin BtnColor := $FFF8F9FA; BtnTextColor := TAlphaColors.Black; end;
+        end;
+        if BtnColor <> TAlphaColors.Null then
+          TButton(Ctl).TintColor := BtnColor;
+        if BtnTextColor <> TAlphaColors.Null then
+        begin
+          var BtnTS: ITextSettings;
+          if Supports(Ctl, ITextSettings, BtnTS) then
+            BtnTS.TextSettings.FontColor := BtnTextColor;
+        end;
+      end;
+
       Rec.Control := Ctl;
       Rec.Box := Box;
       FFormControls.Add(Rec);

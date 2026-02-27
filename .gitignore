@@ -63,3 +63,11 @@ Example/Test/__history
 Example/Test/Win32/Debug/Tina4DelphiExampleTests.exe
 Example/Test/TestTina4Twig.dcu
 Example/Test/Tina4Twig.dcu
+/Example/Test/TestTina4Components.dcu
+/Example/Test/TestTina4Core.dcu
+/Example/Test/Tina4Core.dcu
+/Example/Test/Tina4JSONAdapter.dcu
+/Example/Test/Tina4REST.dcu
+/Example/Test/Tina4RESTRequest.dcu
+/Example/Test/Tina4Route.dcu
+/Example/Test/Tina4WebServer.dcu

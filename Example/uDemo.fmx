@@ -2,7 +2,7 @@ object Form2: TForm2
   Left = 0
   Top = 0
   Caption = 'Twig Demo Form'
-  ClientHeight = 598
+  ClientHeight = 600
   ClientWidth = 916
   FormFactor.Width = 320
   FormFactor.Height = 480
@@ -36,50 +36,30 @@ object Form2: TForm2
     Size.Height = 560.000000000000000000
     Size.PlatformDefault = False
     TabOrder = 4
-    object HtPanel1: THtPanel
-      Align = Left
-      Size.Width = 337.000000000000000000
-      Size.Height = 560.000000000000000000
-      Size.PlatformDefault = False
-      TabOrder = 0
-      OnClick = HtPanel1Click
-      AutoHeight = False
-      Active = True
-      TouchScroll = True
-      ContentScale = 1.000000000000000000
-      AdaptiveZoom = False
-      EnableSelection = False
-      SelectHandleStyle = shPlatform
-      WebLoading = False
-      ScaleMin = 0.100000001490116100
-      ScaleMax = 100.000000000000000000
-      Viewport.Width = 337.000000000000000000
-      Viewport.Height = 560.000000000000000000
-    end
     object Splitter1: TSplitter
       Align = Left
       Cursor = crHSplit
       MinSize = 20.000000000000000000
-      Position.X = 337.000000000000000000
+      Position.X = 369.000000000000000000
       Size.Width = 24.000000000000000000
       Size.Height = 560.000000000000000000
       Size.PlatformDefault = False
     end
     object Panel2: TPanel
       Align = Client
-      Size.Width = 555.000000000000000000
+      Size.Width = 523.000000000000000000
       Size.Height = 560.000000000000000000
       Size.PlatformDefault = False
-      TabOrder = 2
+      TabOrder = 1
       object memTwig: TMemo
         Touch.InteractiveGestures = [Pan, LongTap, DoubleTap]
         DataDetectorTypes = []
         Align = Top
-        Size.Width = 555.000000000000000000
+        Size.Width = 523.000000000000000000
         Size.Height = 441.000000000000000000
         Size.PlatformDefault = False
         TabOrder = 2
-        Viewport.Width = 551.000000000000000000
+        Viewport.Width = 519.000000000000000000
         Viewport.Height = 437.000000000000000000
         object Grid1: TGrid
           CanFocus = True
@@ -99,13 +79,17 @@ object Form2: TForm2
         Touch.InteractiveGestures = [Pan, LongTap, DoubleTap]
         DataDetectorTypes = []
         Align = Client
-        Size.Width = 555.000000000000000000
+        Size.Width = 523.000000000000000000
         Size.Height = 119.000000000000000000
         Size.PlatformDefault = False
         TabOrder = 0
-        Viewport.Width = 551.000000000000000000
+        Viewport.Width = 519.000000000000000000
         Viewport.Height = 115.000000000000000000
       end
+    end
+    object Tina4HTMLRender1: TTina4HTMLRender
+      Align = Left
+      ClipChildren = True
     end
   end
   object Button1: TButton
@@ -450,6 +434,7 @@ object Form2: TForm2
   object Tina4JSONAdapter1: TTina4JSONAdapter
     DataKey = 'results'
     MemTable = FDMemTable1
+    SyncMode = Clear
     MasterSource = Tina4RESTRequest1
     Left = 433
     Top = 128
@@ -482,6 +467,7 @@ object Form2: TForm2
   end
   object Tina4JSONAdapter2: TTina4JSONAdapter
     DataKey = 'persons'
+    SyncMode = Clear
     MasterSource = Tina4RESTRequest1
     Left = 585
     Top = 352

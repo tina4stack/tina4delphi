@@ -2,18 +2,16 @@ unit uDemo;
 
 interface
 
-uses
-  System.SysUtils, System.Types, System.UITypes, System.Classes, System.Variants,
-  FMX.Types, FMX.Controls, FMX.Forms, FMX.Graphics, FMX.Dialogs, Tina4Twig,
-  FMX.Layouts, fmx.fhtmlcomp, FMX.Controls.Presentation, FMX.StdCtrls,
-  FMX.Memo.Types, FMX.ScrollBox, FMX.Memo, FireDAC.Stan.Intf,
+uses System.SysUtils, FMX.StdCtrls, FMX.Forms, FMX.Memo.Types, System.Rtti, FMX.Grid.Style, FireDAC.Stan.Intf,
   FireDAC.Stan.Option, FireDAC.Stan.Param, FireDAC.Stan.Error, FireDAC.DatS,
-  FireDAC.Phys.Intf, FireDAC.DApt.Intf, Data.DB, FireDAC.Comp.DataSet,
-  FireDAC.Comp.Client, Tina4RESTRequest, Tina4REST, FireDAC.Stan.StorageBin,
-  System.Rtti, FMX.Grid.Style, Data.Bind.EngExt, Fmx.Bind.DBEngExt,
-  Fmx.Bind.Grid, System.Bindings.Outputs, Fmx.Bind.Editors,
-  Data.Bind.Components, Data.Bind.Grid, Data.Bind.DBScope, FMX.Grid,
-  Tina4JSONAdapter;
+  FireDAC.Phys.Intf, FireDAC.DApt.Intf, FireDAC.Stan.StorageBin,
+  Data.Bind.EngExt, Fmx.Bind.DBEngExt, Fmx.Bind.Grid, System.Bindings.Outputs,
+  Fmx.Bind.Editors, Tina4HtmlRender, Data.Bind.Components, Data.Bind.Grid,
+  Data.Bind.DBScope, Tina4JSONAdapter, Data.DB, FireDAC.Comp.DataSet,
+  FireDAC.Comp.Client, Tina4RESTRequest, Tina4REST, FMX.Grid, FMX.ScrollBox,
+  FMX.Memo, FMX.Dialogs, System.Classes, FMX.Types, FMX.Controls,
+  FMX.Controls.Presentation, Tina4Twig;
+
 
 type
   TForm2 = class(TForm)
@@ -21,7 +19,6 @@ type
     btnSave: TButton;
     SaveDialog1: TSaveDialog;
     Panel1: TPanel;
-    HtPanel1: THtPanel;
     Splitter1: TSplitter;
     memOutput: TMemo;
     Panel2: TPanel;
@@ -37,6 +34,7 @@ type
     LinkGridToDataSourceBindSourceDB1: TLinkGridToDataSource;
     Tina4JSONAdapter2: TTina4JSONAdapter;
     FDMemTable2: TFDMemTable;
+    Tina4HTMLRender1: TTina4HTMLRender;
     procedure HtPanel1Click(Sender: TObject);
     procedure btnRenderClick(Sender: TObject);
     procedure btnSaveClick(Sender: TObject);
@@ -59,8 +57,8 @@ procedure TForm2.btnRenderClick(Sender: TObject);
 begin
   var Twig := TTina4Twig.Create();
   try
-    HtPanel1.Html.Text := Twig.Render(memTwig.Text, nil);
-    memOutput.Text := HtPanel1.Html.Text;
+    Tina4HTMLRender1.Html.Text := Twig.Render(memTwig.Text, nil);
+    memOutput.Text := Tina4HTMLRender1.Html.Text;
   finally
     Twig.Free;
   end;

@@ -3,16 +3,44 @@ object Form3: TForm3
   Top = 0
   Caption = 'Tina4 HTML Render - Bootstrap Test'
   ClientHeight = 700
-  ClientWidth = 900
+  ClientWidth = 744
   FormFactor.Width = 320
   FormFactor.Height = 480
   FormFactor.Devices = [Desktop]
   OnCreate = FormCreate
   DesignerMasterStyle = 0
   object Tina4HTMLRender1: TTina4HTMLRender
-    Align = Client
-    Size.Width = 900.000000000000000000
-    Size.Height = 700.000000000000000000
-    Size.PlatformDefault = False
+    HTML.Strings = (
+      '<head>'
+      
+        '<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootst' +
+        'rap@5.3.3/dist/css/bootstrap.min.css">'
+      '</head>'
+      '<form>'
+      
+        '<button style="background: blue" class="btn btn-primary">Test</b' +
+        'utton>'
+      '</form>')
+    Position.X = 8.000000000000000000
+    Position.Y = 16.000000000000000000
+    ClipChildren = True
+    object TButton
+      StyledSettings = []
+      Size.Width = 60.000000000000000000
+      Size.Height = 24.000000000000000000
+      Size.PlatformDefault = False
+      TabOrder = 0
+      Text = 'Test'
+      TextSettings.Font.Size = 14.000000000000000000
+    end
+    object TButton
+      StyledSettings = []
+      Size.Width = 60.000000000000000000
+      Size.Height = 24.000000000000000000
+      Size.PlatformDefault = False
+      TabOrder = 1
+      Text = 'Test'
+      TextSettings.Font.Size = 14.000000000000000000
+    end
   end
 end

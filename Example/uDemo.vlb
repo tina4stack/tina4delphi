@@ -23,9 +23,6 @@ Coordinates=263,160,75,33
 [Panel2]
 Coordinates=132,359,47,33
 
-[HtPanel1]
-Coordinates=189,359,58,33
-
 [btnSave]
 Coordinates=226,10,54,51
 
@@ -46,7 +43,7 @@ Visible=True
 Coordinates=404,53,113,33
 
 []
-Coordinates=404,1,82,33
+Coordinates=189,359,58,33
 
 [BindSourceDB1]
 Coordinates=10,10,92,357

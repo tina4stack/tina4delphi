@@ -1967,9 +1967,11 @@ begin
       else if BtnClass.Contains('btn-info') then begin Result.BackgroundColor := $FF0DCAF0; Result.Color := TAlphaColors.Black; end
       else if BtnClass.Contains('btn-dark') then begin Result.BackgroundColor := $FF212529; Result.Color := TAlphaColors.White; end
       else if BtnClass.Contains('btn-light') then begin Result.BackgroundColor := $FFF8F9FA; Result.Color := TAlphaColors.Black; end;
-      // Apply default btn padding and radius only if a color variant was matched
+      // Apply default btn properties only if a color variant was matched
       if Result.BackgroundColor <> TAlphaColors.Null then
       begin
+        Result.Display := 'inline-block';
+        Result.TextAlign := TTextAlign.Center;
         if (Result.Padding.Top = 0) and (Result.Padding.Bottom = 0) then
         begin
           Result.Padding.Top := 6;    // 0.375rem ≈ 6px

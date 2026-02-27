@@ -265,6 +265,11 @@ type
     Box: TLayoutBox;
   end;
 
+  TClickableRegion = record
+    Rect: TRectF;
+    Tag: THTMLTag;
+  end;
+
   // ─────────────────────────────────────────────────────────────────────────
   // HTML Render Control
   // ─────────────────────────────────────────────────────────────────────────
@@ -289,6 +294,7 @@ type
     FScrollDragStart: Single;
     FScrollDragThumbStart: Single;
     FFormControls: TList<TNativeFormControl>;
+    FClickableRegions: TList<TClickableRegion>;
     FOnChange: THTMLFormControlEvent;
     FOnClick: THTMLFormControlEvent;
     FOnEnter: THTMLFormControlEvent;
@@ -3500,6 +3506,7 @@ begin
   Width := 320;
   Height := 240;
   FFormControls := TList<TNativeFormControl>.Create;
+  FClickableRegions := TList<TClickableRegion>.Create;
   ClipChildren := True;
   HitTest := True;
 end;
@@ -3508,6 +3515,7 @@ destructor TTina4HTMLRender.Destroy;
 begin
   ClearFormControls;
   FFormControls.Free;
+  FClickableRegions.Free;
   FStyleSheet.Free;
   FLayoutEngine.Free;
   FParser.Free;
@@ -4414,6 +4422,8 @@ begin
   if FNeedRelayout then
     DoLayout;
 
+  FClickableRegions.Clear;
+
   Canvas.BeginScene;
   try
     // Background
@@ -4459,6 +4469,24 @@ begin
 
   // Border
   PaintBorder(Canvas, Box, AbsX, AbsY);
+
+  // Record clickable regions for elements with onclick attribute
+  if Assigned(Box.Tag) and (Box.Tag.TagName <> '#text') and
+     (Box.Tag.GetAttribute('onclick', '') <> '') then
+  begin
+    var ML := ResolveAutoMargin(Box.Style.Margin.Left);
+    var MT := ResolveAutoMargin(Box.Style.Margin.Top);
+    var Region: TClickableRegion;
+    Region.Tag := Box.Tag;
+    Region.Rect := RectF(
+      AbsX + ML,
+      AbsY + MT,
+      AbsX + ML + Box.Style.BorderWidth * 2 +
+        Box.Style.Padding.Left + Box.ContentWidth + Box.Style.Padding.Right,
+      AbsY + MT + Box.Style.BorderWidth * 2 +
+        Box.Style.Padding.Top + Box.ContentHeight + Box.Style.Padding.Bottom);
+    FClickableRegions.Add(Region);
+  end;
 
   // Content-specific rendering
   case Box.Kind of
@@ -5167,17 +5195,21 @@ begin
             end;
       end;
 
-      // Fire OnElementClick for elements with onclick attribute.
-      // Walk up from the hit element to find the nearest onclick handler (bubbling).
-      var OnClickTag := HitTag;
-      while Assigned(OnClickTag) do
+    end;
+  end;
+
+  // Check pre-recorded clickable regions for onclick attribute handling.
+  // Regions are in screen coordinates, recorded during Paint.
+  // Search in reverse order so deeper (later-painted) elements are found first.
+  if Assigned(FOnElementClick) and (Button = TMouseButton.mbLeft) then
+  begin
+    for var I := FClickableRegions.Count - 1 downto 0 do
+    begin
+      var Region := FClickableRegions[I];
+      if Region.Rect.Contains(PointF(X, Y)) then
       begin
-        if OnClickTag.GetAttribute('onclick', '') <> '' then
-        begin
-          FireOnClick(OnClickTag);
-          Break;
-        end;
-        OnClickTag := OnClickTag.Parent;
+        FireOnClick(Region.Tag);
+        Break;
       end;
     end;
   end;

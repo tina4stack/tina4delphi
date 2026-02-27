@@ -1,0 +1,15 @@
+{
+  "name": "pascal-dev",
+  "displayName": "Pascal/Delphi Development Tools",
+  "description": "Compile and run Pascal, Delphi, and Lazarus code directly from Claude. Supports Free Pascal (fpc), Delphi 32-bit (dcc32), and Delphi 64-bit (dcc64) compilers.",
+  "version": "0.1.0",
+  "type": "mcp",
+  "mcp": {
+    "command": "uv",
+    "args": ["run", "--directory", ".", "pascal-mcp"]
+  },
+  "keywords": ["pascal", "delphi", "lazarus", "freepascal", "fpc", "compiler"],
+  "author": "Tina4 Community",
+  "license": "MIT",
+  "homepage": "https://github.com/niclasborgworx/claude-pascal-mcp"
+}

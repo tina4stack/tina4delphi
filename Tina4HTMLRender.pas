@@ -173,6 +173,7 @@ type
     TextIndent: Single;
     Visibility: string;
     ListStyleType: string;
+    Overflow: string;
     class function Default: TComputedStyle; static;
     class function ForTag(Tag: THTMLTag; const ParentStyle: TComputedStyle; StyleSheet: TCSSStyleSheet = nil): TComputedStyle; static;
     class procedure ApplyDeclarations(Decls: TCSSDeclarations; var Style: TComputedStyle; const ParentStyle: TComputedStyle); static;
@@ -1613,6 +1614,7 @@ begin
   Result.TextIndent := 0;
   Result.Visibility := 'visible';
   Result.ListStyleType := '';
+  Result.Overflow := 'visible';
 end;
 
 class function TComputedStyle.ParseColor(const S: string): TAlphaColor;
@@ -1836,6 +1838,7 @@ begin
   Result.LetterSpacing := 0;
   Result.TextIndent := 0;
   Result.Visibility := 'visible';
+  Result.Overflow := 'visible';
 
   if Tag = nil then Exit;
   TN := Tag.TagName.ToLower;
@@ -2231,6 +2234,13 @@ begin
     Style.ListStyleType := Temp.ToLower;
   if Decls.TryGetValue('list-style', Temp) and not ShouldSkip(Temp) then
     Style.ListStyleType := Temp.ToLower;
+
+  if Decls.TryGetValue('overflow', Temp) and not ShouldSkip(Temp) then
+    Style.Overflow := Temp.ToLower;
+  if Decls.TryGetValue('overflow-x', Temp) and not ShouldSkip(Temp) then
+    Style.Overflow := Temp.ToLower;
+  if Decls.TryGetValue('overflow-y', Temp) and not ShouldSkip(Temp) then
+    Style.Overflow := Temp.ToLower;
 end;
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -4675,8 +4685,24 @@ begin
   // Recurse children
   CX := AbsX + Box.ContentLeft;
   CY := AbsY + Box.ContentTop;
-  for var Child in Box.Children do
-    PaintBox(Canvas, Child, CX, CY);
+
+  if (Box.Style.Overflow = 'hidden') or (Box.Style.Overflow = 'scroll') or
+     (Box.Style.Overflow = 'auto') then
+  begin
+    var SaveState := Canvas.SaveState;
+    try
+      Canvas.IntersectClipRect(RectF(CX, CY, CX + Box.ContentWidth, CY + Box.ContentHeight));
+      for var Child in Box.Children do
+        PaintBox(Canvas, Child, CX, CY);
+    finally
+      Canvas.RestoreState(SaveState);
+    end;
+  end
+  else
+  begin
+    for var Child in Box.Children do
+      PaintBox(Canvas, Child, CX, CY);
+  end;
 end;
 
 procedure TTina4HTMLRender.PaintBackground(Canvas: TCanvas; Box: TLayoutBox; X, Y: Single);

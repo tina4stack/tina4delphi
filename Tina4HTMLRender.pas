@@ -169,6 +169,7 @@ type
     MaxWidth: Single;
     MinHeight: Single;
     MaxHeight: Single;
+    LetterSpacing: Single;
     class function Default: TComputedStyle; static;
     class function ForTag(Tag: THTMLTag; const ParentStyle: TComputedStyle; StyleSheet: TCSSStyleSheet = nil): TComputedStyle; static;
     class procedure ApplyDeclarations(Decls: TCSSDeclarations; var Style: TComputedStyle; const ParentStyle: TComputedStyle); static;
@@ -1605,6 +1606,7 @@ begin
   Result.MaxWidth := -1;
   Result.MinHeight := -1;
   Result.MaxHeight := -1;
+  Result.LetterSpacing := 0;
 end;
 
 class function TComputedStyle.ParseColor(const S: string): TAlphaColor;
@@ -2197,6 +2199,9 @@ begin
     Style.MinHeight := ParseLength(Temp, Style.FontSize);
   if Decls.TryGetValue('max-height', Temp) and not ShouldSkip(Temp) then
     Style.MaxHeight := ParseLength(Temp, Style.FontSize);
+
+  if Decls.TryGetValue('letter-spacing', Temp) and not ShouldSkip(Temp) then
+    Style.LetterSpacing := ParseLength(Temp, Style.FontSize);
 end;
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -2450,6 +2455,8 @@ begin
     Layout.MaxSize := PointF(10000, 10000);
     Layout.EndUpdate;
     Result := Layout.Width;
+    if (Style.LetterSpacing <> 0) and (Text.Length > 1) then
+      Result := Result + Style.LetterSpacing * (Text.Length - 1);
   finally
     Layout.Free;
   end;
@@ -4747,19 +4754,43 @@ begin
 
     Layout := TTextLayoutManager.DefaultTextLayout.Create;
     try
-      Layout.BeginUpdate;
-      Layout.Text := Frag.Text;
-      Layout.Font.Family := Box.Style.FontFamily;
-      Layout.Font.Size := Box.Style.FontSize;
-      Layout.Font.Style := FontStyles;
-      Layout.Color := Box.Style.Color;
-      Layout.WordWrap := Box.Style.WhiteSpace <> 'pre';
-      Layout.HorizontalAlign := TTextAlign.Leading;
-      Layout.TopLeft := PointF(X + Box.ContentLeft + Frag.X,
-                               Y + Box.ContentTop + Frag.Y);
-      Layout.MaxSize := PointF(Frag.W + 2, Frag.H + 2);
-      Layout.EndUpdate;
-      Layout.RenderLayout(Canvas);
+      if (Box.Style.LetterSpacing <> 0) and (Frag.Text.Length > 1) then
+      begin
+        // Render character-by-character with spacing
+        var CharX := X + Box.ContentLeft + Frag.X;
+        for var CI := 1 to Frag.Text.Length do
+        begin
+          Layout.BeginUpdate;
+          Layout.Text := Frag.Text[CI];
+          Layout.Font.Family := Box.Style.FontFamily;
+          Layout.Font.Size := Box.Style.FontSize;
+          Layout.Font.Style := FontStyles;
+          Layout.Color := Box.Style.Color;
+          Layout.WordWrap := False;
+          Layout.HorizontalAlign := TTextAlign.Leading;
+          Layout.TopLeft := PointF(CharX, Y + Box.ContentTop + Frag.Y);
+          Layout.MaxSize := PointF(Box.Style.FontSize * 2, Frag.H + 2);
+          Layout.EndUpdate;
+          Layout.RenderLayout(Canvas);
+          CharX := CharX + Layout.Width + Box.Style.LetterSpacing;
+        end;
+      end
+      else
+      begin
+        Layout.BeginUpdate;
+        Layout.Text := Frag.Text;
+        Layout.Font.Family := Box.Style.FontFamily;
+        Layout.Font.Size := Box.Style.FontSize;
+        Layout.Font.Style := FontStyles;
+        Layout.Color := Box.Style.Color;
+        Layout.WordWrap := Box.Style.WhiteSpace <> 'pre';
+        Layout.HorizontalAlign := TTextAlign.Leading;
+        Layout.TopLeft := PointF(X + Box.ContentLeft + Frag.X,
+                                 Y + Box.ContentTop + Frag.Y);
+        Layout.MaxSize := PointF(Frag.W + 2, Frag.H + 2);
+        Layout.EndUpdate;
+        Layout.RenderLayout(Canvas);
+      end;
 
       // Text decoration
       if Box.Style.TextDecoration = 'underline' then

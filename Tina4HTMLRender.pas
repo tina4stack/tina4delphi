@@ -1942,7 +1942,28 @@ begin
   else if TN = 'dt' then
     Result.Bold := True
   else if TN = 'dd' then
-    Result.Margin.Left := 40;
+    Result.Margin.Left := 40
+  else if TN = 'kbd' then
+  begin
+    Result.FontFamily := 'Courier New';
+    Result.FontSize := ParentStyle.FontSize * 0.9;
+    Result.BackgroundColor := $FFF0F0F0;
+    Result.BorderColor := $FFCCCCCC;
+    Result.BorderWidth := 1;
+    Result.BorderRadius := 3;
+    Result.Padding.SetAll(2);
+  end
+  else if TN = 'abbr' then
+    Result.TextDecoration := 'underline'
+  else if (TN = 'cite') or (TN = 'dfn') then
+    Result.Italic := True
+  else if (TN = 'var') then
+  begin
+    Result.Italic := True;
+    Result.FontFamily := 'Courier New';
+  end
+  else if TN = 'samp' then
+    Result.FontFamily := 'Courier New';
 
   // HTML attribute overrides
   if Tag.HasAttribute('width') then

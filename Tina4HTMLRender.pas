@@ -111,6 +111,7 @@ type
   private
     FRules: TObjectList<TCSSRule>;
     FFileCache: TFileCache;
+    FCustomProps: TDictionary<string, string>;
     procedure ParseCSS(const CSSText: string);
     function SelectorMatches(const Selector: string; Tag: THTMLTag): Boolean;
     function SelectorSpecificity(const Selector: string): Integer;
@@ -121,8 +122,10 @@ type
     procedure LoadFromURL(const URL: string);
     procedure Clear;
     procedure ApplyTo(Tag: THTMLTag; Declarations: TCSSDeclarations);
+    function ResolveVar(const Value: string): string;
     property Rules: TObjectList<TCSSRule> read FRules;
     property FileCache: TFileCache read FFileCache write FFileCache;
+    property CustomProps: TDictionary<string, string> read FCustomProps;
   end;
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -500,10 +503,12 @@ constructor TCSSStyleSheet.Create;
 begin
   inherited;
   FRules := TObjectList<TCSSRule>.Create(True);
+  FCustomProps := TDictionary<string, string>.Create;
 end;
 
 destructor TCSSStyleSheet.Destroy;
 begin
+  FCustomProps.Free;
   FRules.Free;
   inherited;
 end;
@@ -511,6 +516,7 @@ end;
 procedure TCSSStyleSheet.Clear;
 begin
   FRules.Clear;
+  FCustomProps.Clear;
 end;
 
 procedure TCSSStyleSheet.ParseCSS(const CSSText: string);
@@ -586,7 +592,15 @@ begin
           if DeclStr = '' then Continue;
           KV := DeclStr.Split([':'], 2);
           if Length(KV) = 2 then
-            Rule.Declarations.AddOrSetValue(KV[0].Trim.ToLower, KV[1].Trim);
+          begin
+            var PropName := KV[0].Trim.ToLower;
+            var PropVal := KV[1].Trim;
+            // Collect CSS custom properties (--var-name) globally
+            if PropName.StartsWith('--') then
+              FCustomProps.AddOrSetValue(PropName, PropVal)
+            else
+              Rule.Declarations.AddOrSetValue(PropName, PropVal);
+          end;
         end;
 
         if Rule.Declarations.Count > 0 then
@@ -603,6 +617,48 @@ end;
 procedure TCSSStyleSheet.AddCSS(const CSSText: string);
 begin
   ParseCSS(CSSText);
+end;
+
+function TCSSStyleSheet.ResolveVar(const Value: string): string;
+var
+  VarStart, VarEnd, CommaPos: Integer;
+  VarExpr, VarName, Fallback, Resolved: string;
+begin
+  Result := Value;
+  // Resolve all var() references in the value
+  VarStart := Result.IndexOf('var(');
+  while VarStart >= 0 do
+  begin
+    // Find matching closing paren
+    VarEnd := Result.IndexOf(')', VarStart + 4);
+    if VarEnd < 0 then Break;
+    VarExpr := Result.Substring(VarStart + 4, VarEnd - VarStart - 4).Trim;
+    // Check for fallback: var(--name, fallback)
+    CommaPos := VarExpr.IndexOf(',');
+    if CommaPos >= 0 then
+    begin
+      VarName := VarExpr.Substring(0, CommaPos).Trim;
+      Fallback := VarExpr.Substring(CommaPos + 1).Trim;
+    end
+    else
+    begin
+      VarName := VarExpr;
+      Fallback := '';
+    end;
+    // Look up the custom property
+    if FCustomProps.TryGetValue(VarName, Resolved) then
+    begin
+      // Recursively resolve if the value itself contains var()
+      if Resolved.Contains('var(') then
+        Resolved := ResolveVar(Resolved);
+      Result := Result.Substring(0, VarStart) + Resolved + Result.Substring(VarEnd + 1);
+    end
+    else if Fallback <> '' then
+      Result := Result.Substring(0, VarStart) + Fallback + Result.Substring(VarEnd + 1)
+    else
+      Break; // Can't resolve, leave as-is
+    VarStart := Result.IndexOf('var(');
+  end;
 end;
 
 procedure TCSSStyleSheet.LoadFromURL(const URL: string);
@@ -806,8 +862,23 @@ begin
 
     for var Rule in MatchedRules do
     begin
+      // Also collect any --custom-property declarations scoped to this element
       for var Pair in Rule.Declarations do
-        Declarations.AddOrSetValue(Pair.Key, Pair.Value);
+      begin
+        if Pair.Key.StartsWith('--') then
+          FCustomProps.AddOrSetValue(Pair.Key, Pair.Value);
+      end;
+      // Resolve var() references and add to output declarations
+      for var Pair in Rule.Declarations do
+      begin
+        if not Pair.Key.StartsWith('--') then
+        begin
+          var Val := Pair.Value;
+          if Val.Contains('var(') then
+            Val := ResolveVar(Val);
+          Declarations.AddOrSetValue(Pair.Key, Val);
+        end;
+      end;
     end;
   finally
     MatchedRules.Free;

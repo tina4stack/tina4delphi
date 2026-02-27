@@ -163,6 +163,7 @@ type
     WhiteSpace: string;
     BoxSizing: string;
     CSSCursor: string;
+    TextTransform: string;
     class function Default: TComputedStyle; static;
     class function ForTag(Tag: THTMLTag; const ParentStyle: TComputedStyle; StyleSheet: TCSSStyleSheet = nil): TComputedStyle; static;
     class procedure ApplyDeclarations(Decls: TCSSDeclarations; var Style: TComputedStyle; const ParentStyle: TComputedStyle); static;
@@ -1593,6 +1594,7 @@ begin
   Result.WhiteSpace := 'normal';
   Result.BoxSizing := 'content-box';
   Result.CSSCursor := '';
+  Result.TextTransform := 'none';
 end;
 
 class function TComputedStyle.ParseColor(const S: string): TAlphaColor;
@@ -2170,6 +2172,9 @@ begin
     Style.BoxSizing := Temp.ToLower;
   if Decls.TryGetValue('cursor', Temp) and not ShouldSkip(Temp) then
     Style.CSSCursor := Temp.ToLower;
+
+  if Decls.TryGetValue('text-transform', Temp) and not ShouldSkip(Temp) then
+    Style.TextTransform := Temp.ToLower;
 end;
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -2828,6 +2833,24 @@ var
     begin
       var Text := Child.Tag.Text;
       if Text = '' then Exit;
+
+      // Apply text-transform
+      if Child.Style.TextTransform = 'uppercase' then
+        Text := Text.ToUpper
+      else if Child.Style.TextTransform = 'lowercase' then
+        Text := Text.ToLower
+      else if Child.Style.TextTransform = 'capitalize' then
+      begin
+        var Chars := Text.ToCharArray;
+        var PrevSpace := True;
+        for var C := 0 to Length(Chars) - 1 do
+        begin
+          if PrevSpace and Chars[C].IsLetter then
+            Chars[C] := Chars[C].ToUpper;
+          PrevSpace := Chars[C].IsWhiteSpace;
+        end;
+        Text := string.Create(Chars);
+      end;
 
       // Whitespace-only text between inline elements creates a space gap
       if (Text.Trim = '') and (Child.Style.WhiteSpace <> 'pre') then

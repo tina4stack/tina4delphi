@@ -170,6 +170,7 @@ type
     MinHeight: Single;
     MaxHeight: Single;
     LetterSpacing: Single;
+    TextIndent: Single;
     class function Default: TComputedStyle; static;
     class function ForTag(Tag: THTMLTag; const ParentStyle: TComputedStyle; StyleSheet: TCSSStyleSheet = nil): TComputedStyle; static;
     class procedure ApplyDeclarations(Decls: TCSSDeclarations; var Style: TComputedStyle; const ParentStyle: TComputedStyle); static;
@@ -1607,6 +1608,7 @@ begin
   Result.MinHeight := -1;
   Result.MaxHeight := -1;
   Result.LetterSpacing := 0;
+  Result.TextIndent := 0;
 end;
 
 class function TComputedStyle.ParseColor(const S: string): TAlphaColor;
@@ -2202,6 +2204,9 @@ begin
 
   if Decls.TryGetValue('letter-spacing', Temp) and not ShouldSkip(Temp) then
     Style.LetterSpacing := ParseLength(Temp, Style.FontSize);
+
+  if Decls.TryGetValue('text-indent', Temp) and not ShouldSkip(Temp) then
+    Style.TextIndent := ParseLength(Temp, Style.FontSize);
 end;
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -3051,7 +3056,7 @@ var
   end;
 
 begin
-  CursorX := 0;
+  CursorX := Box.Style.TextIndent;
   CursorY := 0;
   LineH := GetLineHeight(Box.Style);
 

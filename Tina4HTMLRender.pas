@@ -7,7 +7,7 @@ uses
   System.Generics.Collections, System.Generics.Defaults,
   System.UITypes, System.UIConsts,
   System.NetEncoding, System.Net.HttpClient,
-  System.Hash, System.Rtti,
+  System.Hash, System.Rtti, System.Character,
   FMX.Types, FMX.Controls, FMX.Graphics, FMX.TextLayout,
   FMX.Edit, FMX.StdCtrls, FMX.Memo, FMX.ListBox, FMX.Layouts, FMX.Objects,
   FMX.DialogService, FMX.Dialogs,
@@ -2940,15 +2940,15 @@ var
         Text := Text.ToLower
       else if Child.Style.TextTransform = 'capitalize' then
       begin
-        var Chars := Text.ToCharArray;
+        var CapText := Text;
         var PrevSpace := True;
-        for var C := 0 to Length(Chars) - 1 do
+        for var C := 1 to Length(CapText) do
         begin
-          if PrevSpace and Chars[C].IsLetter then
-            Chars[C] := Chars[C].ToUpper;
-          PrevSpace := Chars[C].IsWhiteSpace;
+          if PrevSpace and CapText[C].IsLetter then
+            CapText[C] := CapText[C].ToUpper;
+          PrevSpace := CapText[C].IsWhiteSpace;
         end;
-        Text := string.Create(Chars);
+        Text := CapText;
       end;
 
       // Whitespace-only text between inline elements creates a space gap
@@ -2992,8 +2992,8 @@ var
       begin
         // word-break: break-all — split text into individual characters
         SetLength(Words, Text.Length);
-        for var CI := 0 to Text.Length - 1 do
-          Words[CI] := Text[CI + 1];
+        for var J := 0 to Text.Length - 1 do
+          Words[J] := string(Text[J + 1]);
       end
       else
         Words := Text.Split([' ']);
@@ -3019,9 +3019,9 @@ var
           begin
             var Chunk := '';
             var ChunkW: Single := 0;
-            for var CI := 1 to Remaining.Length do
+            for var K := 1 to Remaining.Length do
             begin
-              var TestChunk := Remaining.Substring(0, CI);
+              var TestChunk := Remaining.Substring(0, K);
               var TestW := MeasureTextWidth(TestChunk, Child.Style);
               if (ChunkW > 0) and (CursorX + TestW > AvailWidth) then
                 Break;
@@ -3030,7 +3030,7 @@ var
             end;
             if Chunk = '' then
             begin
-              Chunk := Remaining[1];
+              Chunk := string(Remaining[1]);
               ChunkW := MeasureTextWidth(Chunk, Child.Style);
             end;
 
@@ -4694,22 +4694,18 @@ begin
   if Box.Style.Opacity < 1.0 then
   begin
     var OpacityByte := Round(Box.Style.Opacity * 255);
+    var BgRec := TAlphaColorRec(Box.Style.BackgroundColor);
+    var FgRec := TAlphaColorRec(Box.Style.Color);
+    var BrRec := TAlphaColorRec(Box.Style.BorderColor);
     if Box.Style.BackgroundColor <> TAlphaColors.Null then
     begin
-      var Rec := TAlphaColorRec(Box.Style.BackgroundColor);
-      Rec.A := (Rec.A * OpacityByte) div 255;
-      Box.Style.BackgroundColor := Rec.Color;
+      BgRec.A := (BgRec.A * OpacityByte) div 255;
+      Box.Style.BackgroundColor := BgRec.Color;
     end;
-    begin
-      var Rec := TAlphaColorRec(Box.Style.Color);
-      Rec.A := (Rec.A * OpacityByte) div 255;
-      Box.Style.Color := Rec.Color;
-    end;
-    begin
-      var Rec := TAlphaColorRec(Box.Style.BorderColor);
-      Rec.A := (Rec.A * OpacityByte) div 255;
-      Box.Style.BorderColor := Rec.Color;
-    end;
+    FgRec.A := (FgRec.A * OpacityByte) div 255;
+    Box.Style.Color := FgRec.Color;
+    BrRec.A := (BrRec.A * OpacityByte) div 255;
+    Box.Style.BorderColor := BrRec.Color;
   end;
 
   // Skip form control boxes — they are rendered as native FMX controls
@@ -4942,7 +4938,7 @@ begin
         for var CI := 1 to Frag.Text.Length do
         begin
           Layout.BeginUpdate;
-          Layout.Text := Frag.Text[CI];
+          Layout.Text := string(Frag.Text[CI]);
           Layout.Font.Family := Box.Style.FontFamily;
           Layout.Font.Size := Box.Style.FontSize;
           Layout.Font.Style := FontStyles;

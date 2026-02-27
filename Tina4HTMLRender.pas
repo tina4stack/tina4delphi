@@ -1952,36 +1952,42 @@ begin
     ApplyDeclarations(Tag.Style, Result, ParentStyle);
 
   // Bootstrap button class fallback — for non-native elements (span, div, a)
-  // that have btn classes but CSS variable resolution didn't provide colors
-  if (Result.BackgroundColor = TAlphaColors.Null) and
-     not SameText(TN, 'button') and not SameText(TN, 'input') then
+  // that have btn classes. Always apply layout properties; only apply colors
+  // when CSS variable resolution didn't provide them.
+  if not SameText(TN, 'button') and not SameText(TN, 'input') and
+     not SameText(TN, '#text') then
   begin
     var BtnClass := Tag.GetAttribute('class', '').ToLower;
-    if BtnClass.Contains('btn') then
+    if BtnClass.Contains('btn-primary') or BtnClass.Contains('btn-secondary') or
+       BtnClass.Contains('btn-success') or BtnClass.Contains('btn-danger') or
+       BtnClass.Contains('btn-warning') or BtnClass.Contains('btn-info') or
+       BtnClass.Contains('btn-dark') or BtnClass.Contains('btn-light') then
     begin
-      if BtnClass.Contains('btn-primary') then begin Result.BackgroundColor := $FF0D6EFD; Result.Color := TAlphaColors.White; end
-      else if BtnClass.Contains('btn-secondary') then begin Result.BackgroundColor := $FF6C757D; Result.Color := TAlphaColors.White; end
-      else if BtnClass.Contains('btn-success') then begin Result.BackgroundColor := $FF198754; Result.Color := TAlphaColors.White; end
-      else if BtnClass.Contains('btn-danger') then begin Result.BackgroundColor := $FFDC3545; Result.Color := TAlphaColors.White; end
-      else if BtnClass.Contains('btn-warning') then begin Result.BackgroundColor := $FFFFC107; Result.Color := TAlphaColors.Black; end
-      else if BtnClass.Contains('btn-info') then begin Result.BackgroundColor := $FF0DCAF0; Result.Color := TAlphaColors.Black; end
-      else if BtnClass.Contains('btn-dark') then begin Result.BackgroundColor := $FF212529; Result.Color := TAlphaColors.White; end
-      else if BtnClass.Contains('btn-light') then begin Result.BackgroundColor := $FFF8F9FA; Result.Color := TAlphaColors.Black; end;
-      // Apply default btn properties only if a color variant was matched
-      if Result.BackgroundColor <> TAlphaColors.Null then
+      // Color fallback — only when CSS didn't provide a background
+      if Result.BackgroundColor = TAlphaColors.Null then
       begin
-        Result.Display := 'inline-block';
-        Result.TextAlign := TTextAlign.Center;
-        if (Result.Padding.Top = 0) and (Result.Padding.Bottom = 0) then
-        begin
-          Result.Padding.Top := 6;    // 0.375rem ≈ 6px
-          Result.Padding.Bottom := 6;
-          Result.Padding.Left := 12;  // 0.75rem ≈ 12px
-          Result.Padding.Right := 12;
-        end;
-        if Result.BorderRadius < 0 then
-          Result.BorderRadius := 6;   // 0.375rem ≈ 6px
+        if BtnClass.Contains('btn-primary') then begin Result.BackgroundColor := $FF0D6EFD; Result.Color := TAlphaColors.White; end
+        else if BtnClass.Contains('btn-secondary') then begin Result.BackgroundColor := $FF6C757D; Result.Color := TAlphaColors.White; end
+        else if BtnClass.Contains('btn-success') then begin Result.BackgroundColor := $FF198754; Result.Color := TAlphaColors.White; end
+        else if BtnClass.Contains('btn-danger') then begin Result.BackgroundColor := $FFDC3545; Result.Color := TAlphaColors.White; end
+        else if BtnClass.Contains('btn-warning') then begin Result.BackgroundColor := $FFFFC107; Result.Color := TAlphaColors.Black; end
+        else if BtnClass.Contains('btn-info') then begin Result.BackgroundColor := $FF0DCAF0; Result.Color := TAlphaColors.Black; end
+        else if BtnClass.Contains('btn-dark') then begin Result.BackgroundColor := $FF212529; Result.Color := TAlphaColors.White; end
+        else if BtnClass.Contains('btn-light') then begin Result.BackgroundColor := $FFF8F9FA; Result.Color := TAlphaColors.Black; end;
       end;
+      // Layout properties — always apply as defaults
+      if Result.Display <> 'inline-block' then
+        Result.Display := 'inline-block';
+      Result.TextAlign := TTextAlign.Center;
+      if (Result.Padding.Top = 0) and (Result.Padding.Bottom = 0) then
+      begin
+        Result.Padding.Top := 6;    // 0.375rem ≈ 6px
+        Result.Padding.Bottom := 6;
+        Result.Padding.Left := 12;  // 0.75rem ≈ 12px
+        Result.Padding.Right := 12;
+      end;
+      if Result.BorderRadius < 0 then
+        Result.BorderRadius := 6;   // 0.375rem ≈ 6px
     end;
   end;
 end;

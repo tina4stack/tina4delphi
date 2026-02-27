@@ -171,6 +171,7 @@ type
     MaxHeight: Single;
     LetterSpacing: Single;
     TextIndent: Single;
+    Visibility: string;
     class function Default: TComputedStyle; static;
     class function ForTag(Tag: THTMLTag; const ParentStyle: TComputedStyle; StyleSheet: TCSSStyleSheet = nil): TComputedStyle; static;
     class procedure ApplyDeclarations(Decls: TCSSDeclarations; var Style: TComputedStyle; const ParentStyle: TComputedStyle); static;
@@ -1609,6 +1610,7 @@ begin
   Result.MaxHeight := -1;
   Result.LetterSpacing := 0;
   Result.TextIndent := 0;
+  Result.Visibility := 'visible';
 end;
 
 class function TComputedStyle.ParseColor(const S: string): TAlphaColor;
@@ -2207,6 +2209,9 @@ begin
 
   if Decls.TryGetValue('text-indent', Temp) and not ShouldSkip(Temp) then
     Style.TextIndent := ParseLength(Temp, Style.FontSize);
+
+  if Decls.TryGetValue('visibility', Temp) and not ShouldSkip(Temp) then
+    Style.Visibility := Temp.ToLower;
 end;
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -4573,6 +4578,7 @@ var
   AbsX, AbsY, CX, CY: Single;
 begin
   if Box.Style.Display = 'none' then Exit;
+  if Box.Style.Visibility = 'hidden' then Exit;
 
   // Apply opacity by modifying alpha channels
   if Box.Style.Opacity < 1.0 then

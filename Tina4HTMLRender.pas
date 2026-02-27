@@ -7,9 +7,10 @@ uses
   System.Generics.Collections, System.Generics.Defaults,
   System.UITypes, System.UIConsts,
   System.NetEncoding, System.Net.HttpClient,
-  System.IOUtils, System.Hash,
+  System.Hash,
   FMX.Types, FMX.Controls, FMX.Graphics, FMX.TextLayout,
-  FMX.Edit, FMX.StdCtrls, FMX.Memo, FMX.ListBox, FMX.Layouts, FMX.Objects;
+  FMX.Edit, FMX.StdCtrls, FMX.Memo, FMX.ListBox, FMX.Layouts, FMX.Objects,
+  System.IOUtils;
 
 type
   // ─────────────────────────────────────────────────────────────────────────

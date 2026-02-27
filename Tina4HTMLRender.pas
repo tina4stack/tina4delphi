@@ -2700,6 +2700,15 @@ var
     // Inline-block: internally formatted as block, placed in inline flow
     if Child.Kind = lbkInlineBlock then
     begin
+      // For shrink-to-fit inline-blocks, temporarily disable text-align
+      // centering during layout. When there's no explicit width, the box
+      // shrinks to fit its content, making centering a no-op.  The centering
+      // code in LayoutInlineChildren uses the initial (large) available width,
+      // which would push text fragments outside the eventually-shrunk box.
+      var SavedAlign := Child.Style.TextAlign;
+      if Child.Style.ExplicitWidth < 0 then
+        Child.Style.TextAlign := TTextAlign.Leading;
+
       // Use shrink-to-fit width: lay out with available width, then shrink
       LayoutBlock(Child, AvailWidth - CursorX);
       // If no explicit width, shrink content width to fit children
@@ -2711,6 +2720,10 @@ var
         if MaxChildRight > 0 then
           Child.ContentWidth := MaxChildRight;
       end;
+
+      // Restore text-align
+      Child.Style.TextAlign := SavedAlign;
+
       var BoxW := Child.MarginBoxWidth;
       if (CursorX > 0) and (CursorX + BoxW > AvailWidth) then
       begin
@@ -2718,6 +2731,8 @@ var
         CursorX := 0;
         LineH := GetLineHeight(Child.Style);
         // Re-layout with full available width after wrap
+        if Child.Style.ExplicitWidth < 0 then
+          Child.Style.TextAlign := TTextAlign.Leading;
         LayoutBlock(Child, AvailWidth);
         if Child.Style.ExplicitWidth < 0 then
         begin
@@ -2727,6 +2742,7 @@ var
           if MaxChildRight2 > 0 then
             Child.ContentWidth := MaxChildRight2;
         end;
+        Child.Style.TextAlign := SavedAlign;
         BoxW := Child.MarginBoxWidth;
       end;
       Child.X := CursorX;
@@ -2740,6 +2756,18 @@ var
     begin
       var Text := Child.Tag.Text;
       if Text = '' then Exit;
+
+      // Whitespace-only text between inline elements creates a space gap
+      if (Text.Trim = '') and (Child.Style.WhiteSpace <> 'pre') then
+      begin
+        if CursorX > 0 then
+          CursorX := CursorX + MeasureTextWidth(' ', Child.Style);
+        Child.X := CursorX;
+        Child.Y := CursorY;
+        Child.ContentWidth := 0;
+        Child.ContentHeight := 0;
+        Exit;
+      end;
 
       // In pre mode, don't word-wrap
       if Child.Style.WhiteSpace = 'pre' then

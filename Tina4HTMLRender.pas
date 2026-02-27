@@ -7,7 +7,7 @@ uses
   System.Generics.Collections, System.Generics.Defaults,
   System.UITypes, System.UIConsts,
   System.NetEncoding, System.Net.HttpClient,
-  System.Hash,
+  System.Hash, System.Rtti,
   FMX.Types, FMX.Controls, FMX.Graphics, FMX.TextLayout,
   FMX.Edit, FMX.StdCtrls, FMX.Memo, FMX.ListBox, FMX.Layouts, FMX.Objects,
   FMX.DialogService, FMX.Dialogs,
@@ -265,6 +265,11 @@ type
     Box: TLayoutBox;
   end;
 
+  TClickableRegion = record
+    Rect: TRectF;
+    Tag: THTMLTag;
+  end;
+
   // ─────────────────────────────────────────────────────────────────────────
   // HTML Render Control
   // ─────────────────────────────────────────────────────────────────────────
@@ -289,6 +294,8 @@ type
     FScrollDragStart: Single;
     FScrollDragThumbStart: Single;
     FFormControls: TList<TNativeFormControl>;
+    FClickableRegions: TList<TClickableRegion>;
+    FRegisteredObjects: TDictionary<string, TObject>;
     FOnChange: THTMLFormControlEvent;
     FOnClick: THTMLFormControlEvent;
     FOnEnter: THTMLFormControlEvent;
@@ -339,6 +346,9 @@ type
     constructor Create(AOwner: TComponent); override;
     destructor Destroy; override;
     procedure ClearCache;
+    // Register objects for direct RTTI method invocation from onclick attributes
+    procedure RegisterObject(const Name: string; Obj: TObject);
+    procedure UnregisterObject(const Name: string);
     // DOM manipulation: find and modify elements by id
     function GetElementById(const Id: string): THTMLTag;
     function GetElementValue(const Id: string): string;
@@ -3500,6 +3510,8 @@ begin
   Width := 320;
   Height := 240;
   FFormControls := TList<TNativeFormControl>.Create;
+  FClickableRegions := TList<TClickableRegion>.Create;
+  FRegisteredObjects := TDictionary<string, TObject>.Create;
   ClipChildren := True;
   HitTest := True;
 end;
@@ -3508,6 +3520,8 @@ destructor TTina4HTMLRender.Destroy;
 begin
   ClearFormControls;
   FFormControls.Free;
+  FClickableRegions.Free;
+  FRegisteredObjects.Free;
   FStyleSheet.Free;
   FLayoutEngine.Free;
   FParser.Free;
@@ -3547,6 +3561,16 @@ end;
 procedure TTina4HTMLRender.ClearCache;
 begin
   FFileCache.ClearCache;
+end;
+
+procedure TTina4HTMLRender.RegisterObject(const Name: string; Obj: TObject);
+begin
+  FRegisteredObjects.AddOrSetValue(Name.ToLower, Obj);
+end;
+
+procedure TTina4HTMLRender.UnregisterObject(const Name: string);
+begin
+  FRegisteredObjects.Remove(Name.ToLower);
 end;
 
 function TTina4HTMLRender.GetElementById(const Id: string): THTMLTag;
@@ -4414,6 +4438,8 @@ begin
   if FNeedRelayout then
     DoLayout;
 
+  FClickableRegions.Clear;
+
   Canvas.BeginScene;
   try
     // Background
@@ -4459,6 +4485,24 @@ begin
 
   // Border
   PaintBorder(Canvas, Box, AbsX, AbsY);
+
+  // Record clickable regions for elements with onclick attribute
+  if Assigned(Box.Tag) and (Box.Tag.TagName <> '#text') and
+     (Box.Tag.GetAttribute('onclick', '') <> '') then
+  begin
+    var ML := ResolveAutoMargin(Box.Style.Margin.Left);
+    var MT := ResolveAutoMargin(Box.Style.Margin.Top);
+    var Region: TClickableRegion;
+    Region.Tag := Box.Tag;
+    Region.Rect := RectF(
+      AbsX + ML,
+      AbsY + MT,
+      AbsX + ML + Box.Style.BorderWidth * 2 +
+        Box.Style.Padding.Left + Box.ContentWidth + Box.Style.Padding.Right,
+      AbsY + MT + Box.Style.BorderWidth * 2 +
+        Box.Style.Padding.Top + Box.ContentHeight + Box.Style.Padding.Bottom);
+    FClickableRegions.Add(Region);
+  end;
 
   // Content-specific rendering
   case Box.Kind of
@@ -4967,7 +5011,6 @@ var
   P1, P2, ColonPos: Integer;
   Params: TStringList;
 begin
-  if not Assigned(FOnElementClick) then Exit;
   if not Assigned(ClickedTag) then Exit;
 
   OnClickAttr := ClickedTag.GetAttribute('onclick', '');
@@ -5049,7 +5092,39 @@ begin
         Params.Add(ResolveOnClickParam(LastParam, ClickedTag));
     end;
 
-    FOnElementClick(Self, ObjName, MethodName, Params);
+    // Try direct RTTI invocation on registered objects
+    var Handled := False;
+    if (ObjName <> '') and FRegisteredObjects.ContainsKey(ObjName.ToLower) then
+    begin
+      var TargetObj := FRegisteredObjects[ObjName.ToLower];
+      var Ctx := TRttiContext.Create;
+      try
+        var RttiType := Ctx.GetType(TargetObj.ClassType);
+        if Assigned(RttiType) then
+        begin
+          var Method := RttiType.GetMethod(MethodName);
+          if Assigned(Method) then
+          begin
+            var RttiParams := Method.GetParameters;
+            if Length(RttiParams) = Params.Count then
+            begin
+              var Args: TArray<TValue>;
+              SetLength(Args, Params.Count);
+              for var I := 0 to Params.Count - 1 do
+                Args[I] := TValue.From<string>(Params[I]);
+              Method.Invoke(TargetObj, Args);
+              Handled := True;
+            end;
+          end;
+        end;
+      finally
+        Ctx.Free;
+      end;
+    end;
+
+    // Fall back to OnElementClick event if not handled via RTTI
+    if (not Handled) and Assigned(FOnElementClick) then
+      FOnElementClick(Self, ObjName, MethodName, Params);
   finally
     Params.Free;
   end;
@@ -5167,17 +5242,21 @@ begin
             end;
       end;
 
-      // Fire OnElementClick for elements with onclick attribute.
-      // Walk up from the hit element to find the nearest onclick handler (bubbling).
-      var OnClickTag := HitTag;
-      while Assigned(OnClickTag) do
+    end;
+  end;
+
+  // Check pre-recorded clickable regions for onclick attribute handling.
+  // Regions are in screen coordinates, recorded during Paint.
+  // Search in reverse order so deeper (later-painted) elements are found first.
+  if Assigned(FOnElementClick) and (Button = TMouseButton.mbLeft) then
+  begin
+    for var I := FClickableRegions.Count - 1 downto 0 do
+    begin
+      var Region := FClickableRegions[I];
+      if Region.Rect.Contains(PointF(X, Y)) then
       begin
-        if OnClickTag.GetAttribute('onclick', '') <> '' then
-        begin
-          FireOnClick(OnClickTag);
-          Break;
-        end;
-        OnClickTag := OnClickTag.Parent;
+        FireOnClick(Region.Tag);
+        Break;
       end;
     end;
   end;

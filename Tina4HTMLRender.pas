@@ -176,6 +176,7 @@ type
     Overflow: string;
     WordBreak: string;
     OverflowWrap: string;
+    TextOverflow: string;
     class function Default: TComputedStyle; static;
     class function ForTag(Tag: THTMLTag; const ParentStyle: TComputedStyle; StyleSheet: TCSSStyleSheet = nil): TComputedStyle; static;
     class procedure ApplyDeclarations(Decls: TCSSDeclarations; var Style: TComputedStyle; const ParentStyle: TComputedStyle); static;
@@ -1619,6 +1620,7 @@ begin
   Result.Overflow := 'visible';
   Result.WordBreak := 'normal';
   Result.OverflowWrap := 'normal';
+  Result.TextOverflow := 'clip';
 end;
 
 class function TComputedStyle.ParseColor(const S: string): TAlphaColor;
@@ -1845,6 +1847,7 @@ begin
   Result.Overflow := 'visible';
   Result.WordBreak := 'normal';
   Result.OverflowWrap := 'normal';
+  Result.TextOverflow := 'clip';
 
   if Tag = nil then Exit;
   TN := Tag.TagName.ToLower;
@@ -2254,6 +2257,9 @@ begin
     Style.OverflowWrap := Temp.ToLower;
   if Decls.TryGetValue('word-wrap', Temp) and not ShouldSkip(Temp) then
     Style.OverflowWrap := Temp.ToLower;  // word-wrap is legacy alias
+
+  if Decls.TryGetValue('text-overflow', Temp) and not ShouldSkip(Temp) then
+    Style.TextOverflow := Temp.ToLower;
 end;
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -4769,6 +4775,50 @@ begin
       Canvas.IntersectClipRect(RectF(CX, CY, CX + Box.ContentWidth, CY + Box.ContentHeight));
       for var Child in Box.Children do
         PaintBox(Canvas, Child, CX, CY);
+
+      // text-overflow: ellipsis — paint "..." at right edge when content overflows
+      if (Box.Style.TextOverflow = 'ellipsis') and (Box.Style.WhiteSpace = 'nowrap') then
+      begin
+        // Check if any child overflows
+        var ChildOverflows := False;
+        for var Child in Box.Children do
+          if Child.X + Child.ContentWidth > Box.ContentWidth then
+          begin
+            ChildOverflows := True;
+            Break;
+          end;
+        if ChildOverflows then
+        begin
+          var EllipsisLayout := TTextLayoutManager.DefaultTextLayout.Create;
+          try
+            EllipsisLayout.BeginUpdate;
+            EllipsisLayout.Text := '...';
+            EllipsisLayout.Font.Family := Box.Style.FontFamily;
+            EllipsisLayout.Font.Size := Box.Style.FontSize;
+            if Box.Style.Bold then
+              EllipsisLayout.Font.Style := [TFontStyle.fsBold];
+            EllipsisLayout.Color := Box.Style.Color;
+            EllipsisLayout.WordWrap := False;
+            var EW := Box.Style.FontSize * 1.5;  // approximate "..." width
+            // Paint a background rect to cover clipped text, then the ellipsis
+            EllipsisLayout.TopLeft := PointF(CX + Box.ContentWidth - EW, CY);
+            EllipsisLayout.MaxSize := PointF(EW, Box.Style.FontSize * Box.Style.LineHeight);
+            EllipsisLayout.HorizontalAlign := TTextAlign.Trailing;
+            EllipsisLayout.EndUpdate;
+            // Paint background to cover text underneath
+            Canvas.Fill.Kind := TBrushKind.Solid;
+            if Box.Style.BackgroundColor <> TAlphaColors.Null then
+              Canvas.Fill.Color := Box.Style.BackgroundColor
+            else
+              Canvas.Fill.Color := TAlphaColors.White;
+            Canvas.FillRect(RectF(CX + Box.ContentWidth - EW, CY,
+              CX + Box.ContentWidth, CY + Box.Style.FontSize * Box.Style.LineHeight), 0, 0, [], 1.0);
+            EllipsisLayout.RenderLayout(Canvas);
+          finally
+            EllipsisLayout.Free;
+          end;
+        end;
+      end;
     finally
       Canvas.RestoreState(SaveState);
     end;

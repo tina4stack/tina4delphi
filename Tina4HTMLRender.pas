@@ -4690,20 +4690,20 @@ begin
   if Box.Style.Display = 'none' then Exit;
   if Box.Style.Visibility = 'hidden' then Exit;
 
-  // Apply opacity by modifying alpha channels
+  // Apply opacity by modifying alpha channels on background and border.
+  // Text color keeps full alpha so it remains legible against the faded
+  // background (true CSS opacity requires offscreen compositing which
+  // FMX canvas does not support directly).
   if Box.Style.Opacity < 1.0 then
   begin
     var OpacityByte := Round(Box.Style.Opacity * 255);
     var BgRec := TAlphaColorRec(Box.Style.BackgroundColor);
-    var FgRec := TAlphaColorRec(Box.Style.Color);
     var BrRec := TAlphaColorRec(Box.Style.BorderColor);
     if Box.Style.BackgroundColor <> TAlphaColors.Null then
     begin
       BgRec.A := (BgRec.A * OpacityByte) div 255;
       Box.Style.BackgroundColor := BgRec.Color;
     end;
-    FgRec.A := (FgRec.A * OpacityByte) div 255;
-    Box.Style.Color := FgRec.Color;
     BrRec.A := (BrRec.A * OpacityByte) div 255;
     Box.Style.BorderColor := BrRec.Color;
   end;

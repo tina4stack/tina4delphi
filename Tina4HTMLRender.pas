@@ -2550,7 +2550,7 @@ var
     if Child.Kind = lbkImage then
     begin
       LayoutImage(Child, AvailWidth);
-      var ImgW := Child.ContentWidth + Child.Style.Margin.Left + Child.Style.Margin.Right;
+      var ImgW := Child.MarginBoxWidth;
       if (CursorX > 0) and (CursorX + ImgW > AvailWidth) then
       begin
         CursorY := CursorY + LineH;
@@ -2567,7 +2567,7 @@ var
     if Child.Kind = lbkFormControl then
     begin
       LayoutFormControl(Child, AvailWidth);
-      var CtlW := Child.ContentWidth + Child.Style.Margin.Left + Child.Style.Margin.Right;
+      var CtlW := Child.MarginBoxWidth;
       if (CursorX > 0) and (CursorX + CtlW > AvailWidth) then
       begin
         CursorY := CursorY + LineH;

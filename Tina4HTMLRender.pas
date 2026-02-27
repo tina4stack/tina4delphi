@@ -1321,7 +1321,7 @@ begin
     SameText(Name, 'figcaption') or SameText(Name, 'dl') or
     SameText(Name, 'dt') or SameText(Name, 'dd') or
     SameText(Name, 'details') or SameText(Name, 'summary') or
-    SameText(Name, 'address');
+    SameText(Name, 'address') or SameText(Name, 'fieldset');
 end;
 
 class function THTMLParser.IsRawTag(const Name: string): Boolean;
@@ -1963,7 +1963,22 @@ begin
     Result.FontFamily := 'Courier New';
   end
   else if TN = 'samp' then
-    Result.FontFamily := 'Courier New';
+    Result.FontFamily := 'Courier New'
+  else if TN = 'fieldset' then
+  begin
+    Result.BorderColor := $FF808080;
+    Result.BorderWidth := 2;
+    Result.BorderRadius := 4;
+    Result.Padding.SetAll(10);
+    Result.Margin.Top := 8;
+    Result.Margin.Bottom := 8;
+  end
+  else if TN = 'legend' then
+  begin
+    Result.Bold := True;
+    Result.Padding.Left := 4;
+    Result.Padding.Right := 4;
+  end;
 
   // HTML attribute overrides
   if Tag.HasAttribute('width') then

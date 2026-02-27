@@ -868,17 +868,17 @@ begin
       end
     ));
 
+    // Pass 1: Collect ALL scoped --custom-property declarations from matching rules.
+    // This must happen before resolving var() so that e.g. .btn-danger's --bs-btn-bg
+    // is available when .btn's background-color: var(--bs-btn-bg) is resolved.
     for var Rule in MatchedRules do
-    begin
-      // Also collect any --custom-property declarations scoped to this element
       for var Pair in Rule.Declarations do
-      begin
         if Pair.Key.StartsWith('--') then
           FCustomProps.AddOrSetValue(Pair.Key, Pair.Value);
-      end;
-      // Resolve var() references and add to output declarations
+
+    // Pass 2: Resolve var() references and add to output declarations
+    for var Rule in MatchedRules do
       for var Pair in Rule.Declarations do
-      begin
         if not Pair.Key.StartsWith('--') then
         begin
           var Val := Pair.Value;
@@ -886,8 +886,6 @@ begin
             Val := ResolveVar(Val);
           Declarations.AddOrSetValue(Pair.Key, Val);
         end;
-      end;
-    end;
   finally
     MatchedRules.Free;
   end;
@@ -3392,6 +3390,19 @@ begin
     FFormControls[I].Control.DisposeOf;
   end;
   FFormControls.Clear;
+
+  // Safety sweep: remove any lingering native controls parented to Self
+  // that may not be tracked (e.g. from a previous render cycle)
+  for var I := ControlsCount - 1 downto 0 do
+  begin
+    var C := Controls[I];
+    if (C is TEdit) or (C is TButton) or (C is TMemo) or (C is TComboBox)
+      or (C is TCheckBox) or (C is TRadioButton) or (C is TRectangle) then
+    begin
+      C.Parent := nil;
+      C.DisposeOf;
+    end;
+  end;
 end;
 
 function TTina4HTMLRender.GetFormControlNameValue(Control: TControl;

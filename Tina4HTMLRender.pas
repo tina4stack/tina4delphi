@@ -9,7 +9,7 @@ uses
   System.NetEncoding, System.Net.HttpClient,
   System.IOUtils, System.Hash,
   FMX.Types, FMX.Controls, FMX.Graphics, FMX.TextLayout,
-  FMX.Edit, FMX.StdCtrls, FMX.Memo, FMX.ListBox, FMX.Layouts;
+  FMX.Edit, FMX.StdCtrls, FMX.Memo, FMX.ListBox, FMX.Layouts, FMX.Objects;
 
 type
   // ─────────────────────────────────────────────────────────────────────────
@@ -3509,6 +3509,62 @@ begin
           TS.TextSettings.Font.Style := TS.TextSettings.Font.Style + [TFontStyle.fsItalic];
         if Box.Style.Color <> TAlphaColors.Null then
           TS.TextSettings.FontColor := Box.Style.Color;
+      end;
+
+      // Style buttons with background color using a colored rectangle overlay
+      if Ctl is TButton then
+      begin
+        var BtnColor: TAlphaColor := TAlphaColors.Null;
+        var BtnTextColor: TAlphaColor := TAlphaColors.Null;
+        // Use computed background color if available
+        if Box.Style.BackgroundColor <> TAlphaColors.Null then
+        begin
+          BtnColor := Box.Style.BackgroundColor;
+          if Box.Style.Color <> TAlphaColors.Null then
+            BtnTextColor := Box.Style.Color;
+        end
+        else if Assigned(Box.Tag) then
+        begin
+          // Fall back to Bootstrap button class mapping
+          var BtnClass := Box.Tag.GetAttribute('class', '').ToLower;
+          if BtnClass.Contains('btn-primary') then begin BtnColor := $FF0D6EFD; BtnTextColor := TAlphaColors.White; end
+          else if BtnClass.Contains('btn-secondary') then begin BtnColor := $FF6C757D; BtnTextColor := TAlphaColors.White; end
+          else if BtnClass.Contains('btn-success') then begin BtnColor := $FF198754; BtnTextColor := TAlphaColors.White; end
+          else if BtnClass.Contains('btn-danger') then begin BtnColor := $FFDC3545; BtnTextColor := TAlphaColors.White; end
+          else if BtnClass.Contains('btn-warning') then begin BtnColor := $FFFFC107; BtnTextColor := TAlphaColors.Black; end
+          else if BtnClass.Contains('btn-info') then begin BtnColor := $FF0DCAF0; BtnTextColor := TAlphaColors.Black; end
+          else if BtnClass.Contains('btn-dark') then begin BtnColor := $FF212529; BtnTextColor := TAlphaColors.White; end
+          else if BtnClass.Contains('btn-light') then begin BtnColor := $FFF8F9FA; BtnTextColor := TAlphaColors.Black; end;
+        end;
+        // Replace TButton with a styled TRectangle + TLabel for colored buttons
+        if BtnColor <> TAlphaColors.Null then
+        begin
+          var BtnText := TButton(Ctl).Text;
+          Ctl.Free;
+          var Rect := TRectangle.Create(Self);
+          Rect.Fill.Kind := TBrushKind.Solid;
+          Rect.Fill.Color := BtnColor;
+          Rect.Stroke.Kind := TBrushKind.None;
+          Rect.XRadius := 4;
+          Rect.YRadius := 4;
+          Rect.HitTest := True;
+          Rect.OnClick := HandleFormControlClick;
+          var Lbl := TLabel.Create(Rect);
+          Lbl.Parent := Rect;
+          Lbl.Align := TAlignLayout.Client;
+          Lbl.Text := BtnText;
+          Lbl.HitTest := False;
+          Lbl.StyledSettings := Lbl.StyledSettings - [TStyledSetting.FontColor,
+            TStyledSetting.Size, TStyledSetting.Family];
+          if BtnTextColor <> TAlphaColors.Null then
+            Lbl.FontColor := BtnTextColor
+          else
+            Lbl.FontColor := TAlphaColors.White;
+          Lbl.Font.Size := Box.Style.FontSize;
+          Lbl.Font.Family := Box.Style.FontFamily;
+          Lbl.TextSettings.HorzAlign := TTextAlign.Center;
+          Ctl := Rect;
+        end;
       end;
 
       Rec.Control := Ctl;

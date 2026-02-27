@@ -295,6 +295,7 @@ type
     procedure DoLayout;
     procedure ClearFormControls;
     procedure CreateFormControls(Box: TLayoutBox; OffX, OffY: Single);
+    function CreateStyledButton(Box: TLayoutBox; const BtnText: string): TControl;
     procedure PositionFormControls;
     procedure HandleFormControlChange(Sender: TObject);
     procedure HandleFormControlClick(Sender: TObject);
@@ -3435,7 +3436,16 @@ begin
       if TComboBox(Control).Selected <> nil then
         AValue := TComboBox(Control).Selected.Text;
     end
-    else if Control is TButton then AValue := TButton(Control).Text;
+    else if Control is TRectangle then
+    begin
+      // Styled button: extract text from child TLabel
+      for var I := 0 to TRectangle(Control).ChildrenCount - 1 do
+        if TRectangle(Control).Children[I] is TLabel then
+        begin
+          AValue := TLabel(TRectangle(Control).Children[I]).Text;
+          Break;
+        end;
+    end;
   end;
   Result := AName <> '';
 end;
@@ -3470,6 +3480,66 @@ begin
   if Assigned(FOnExit) and (Sender is TControl) and
      GetFormControlNameValue(TControl(Sender), N, V) then
     FOnExit(Sender, N, V);
+end;
+
+function TTina4HTMLRender.CreateStyledButton(Box: TLayoutBox; const BtnText: string): TControl;
+var
+  BtnColor, BtnTextColor: TAlphaColor;
+begin
+  BtnColor := TAlphaColors.Null;
+  BtnTextColor := TAlphaColors.Null;
+
+  // Use computed background color from CSS (includes resolved var() values)
+  if Box.Style.BackgroundColor <> TAlphaColors.Null then
+  begin
+    BtnColor := Box.Style.BackgroundColor;
+    if Box.Style.Color <> TAlphaColors.Null then
+      BtnTextColor := Box.Style.Color;
+  end
+  else if Assigned(Box.Tag) then
+  begin
+    // Fall back to Bootstrap button class mapping
+    var BtnClass := Box.Tag.GetAttribute('class', '').ToLower;
+    if BtnClass.Contains('btn-primary') then begin BtnColor := $FF0D6EFD; BtnTextColor := TAlphaColors.White; end
+    else if BtnClass.Contains('btn-secondary') then begin BtnColor := $FF6C757D; BtnTextColor := TAlphaColors.White; end
+    else if BtnClass.Contains('btn-success') then begin BtnColor := $FF198754; BtnTextColor := TAlphaColors.White; end
+    else if BtnClass.Contains('btn-danger') then begin BtnColor := $FFDC3545; BtnTextColor := TAlphaColors.White; end
+    else if BtnClass.Contains('btn-warning') then begin BtnColor := $FFFFC107; BtnTextColor := TAlphaColors.Black; end
+    else if BtnClass.Contains('btn-info') then begin BtnColor := $FF0DCAF0; BtnTextColor := TAlphaColors.Black; end
+    else if BtnClass.Contains('btn-dark') then begin BtnColor := $FF212529; BtnTextColor := TAlphaColors.White; end
+    else if BtnClass.Contains('btn-light') then begin BtnColor := $FFF8F9FA; BtnTextColor := TAlphaColors.Black; end;
+  end;
+
+  // Default to a standard gray button
+  if BtnColor = TAlphaColors.Null then
+  begin
+    BtnColor := $FFE0E0E0;
+    BtnTextColor := TAlphaColors.Black;
+  end;
+
+  var Rect := TRectangle.Create(Self);
+  Rect.Fill.Kind := TBrushKind.Solid;
+  Rect.Fill.Color := BtnColor;
+  Rect.Stroke.Kind := TBrushKind.Solid;
+  Rect.Stroke.Color := $FFB0B0B0;
+  Rect.XRadius := 4;
+  Rect.YRadius := 4;
+  Rect.HitTest := True;
+  Rect.OnClick := HandleFormControlClick;
+
+  var Lbl := TLabel.Create(Rect);
+  Lbl.Parent := Rect;
+  Lbl.Align := TAlignLayout.Client;
+  Lbl.Text := BtnText;
+  Lbl.HitTest := False;
+  Lbl.StyledSettings := Lbl.StyledSettings - [TStyledSetting.FontColor,
+    TStyledSetting.Size, TStyledSetting.Family];
+  Lbl.FontColor := BtnTextColor;
+  Lbl.Font.Size := Box.Style.FontSize;
+  Lbl.Font.Family := Box.Style.FontFamily;
+  Lbl.TextSettings.HorzAlign := TTextAlign.Center;
+
+  Result := Rect;
 end;
 
 procedure TTina4HTMLRender.CreateFormControls(Box: TLayoutBox; OffX, OffY: Single);
@@ -3513,17 +3583,16 @@ begin
       end
       else if (InputType = 'submit') or (InputType = 'button') or (InputType = 'reset') then
       begin
-        var Btn := TButton.Create(Self);
+        var BtnText := '';
         if Val <> '' then
-          Btn.Text := Val
+          BtnText := Val
         else if InputType = 'submit' then
-          Btn.Text := 'Submit'
+          BtnText := 'Submit'
         else if InputType = 'reset' then
-          Btn.Text := 'Reset'
+          BtnText := 'Reset'
         else
-          Btn.Text := 'Button';
-        Btn.OnClick := HandleFormControlClick;
-        Ctl := Btn;
+          BtnText := 'Button';
+        Ctl := CreateStyledButton(Box, BtnText);
       end
       else
       begin
@@ -3561,14 +3630,11 @@ begin
     end
     else if TN = 'button' then
     begin
-      var Btn := TButton.Create(Self);
       var BtnText := '';
       for var C in Box.Tag.Children do
         if C.TagName = '#text' then BtnText := BtnText + C.Text;
       if BtnText = '' then BtnText := Box.Tag.GetAttribute('value', 'Button');
-      Btn.Text := BtnText.Trim;
-      Btn.OnClick := HandleFormControlClick;
-      Ctl := Btn;
+      Ctl := CreateStyledButton(Box, BtnText.Trim);
     end;
 
     if Assigned(Ctl) then
@@ -3586,7 +3652,7 @@ begin
         Ctl.Height := Max(20, Box.ContentHeight + Box.Style.Padding.Top + Box.Style.Padding.Bottom);
       end;
 
-      // Apply CSS styles via ITextSettings (works for TEdit, TButton, TMemo, etc.)
+      // Apply CSS styles via ITextSettings (works for TEdit, TMemo, etc.)
       var TS: ITextSettings;
       if Supports(Ctl, ITextSettings, TS) then
       begin
@@ -3600,62 +3666,6 @@ begin
           TS.TextSettings.Font.Style := TS.TextSettings.Font.Style + [TFontStyle.fsItalic];
         if Box.Style.Color <> TAlphaColors.Null then
           TS.TextSettings.FontColor := Box.Style.Color;
-      end;
-
-      // Style buttons with background color using a colored rectangle overlay
-      if Ctl is TButton then
-      begin
-        var BtnColor: TAlphaColor := TAlphaColors.Null;
-        var BtnTextColor: TAlphaColor := TAlphaColors.Null;
-        // Use computed background color if available
-        if Box.Style.BackgroundColor <> TAlphaColors.Null then
-        begin
-          BtnColor := Box.Style.BackgroundColor;
-          if Box.Style.Color <> TAlphaColors.Null then
-            BtnTextColor := Box.Style.Color;
-        end
-        else if Assigned(Box.Tag) then
-        begin
-          // Fall back to Bootstrap button class mapping
-          var BtnClass := Box.Tag.GetAttribute('class', '').ToLower;
-          if BtnClass.Contains('btn-primary') then begin BtnColor := $FF0D6EFD; BtnTextColor := TAlphaColors.White; end
-          else if BtnClass.Contains('btn-secondary') then begin BtnColor := $FF6C757D; BtnTextColor := TAlphaColors.White; end
-          else if BtnClass.Contains('btn-success') then begin BtnColor := $FF198754; BtnTextColor := TAlphaColors.White; end
-          else if BtnClass.Contains('btn-danger') then begin BtnColor := $FFDC3545; BtnTextColor := TAlphaColors.White; end
-          else if BtnClass.Contains('btn-warning') then begin BtnColor := $FFFFC107; BtnTextColor := TAlphaColors.Black; end
-          else if BtnClass.Contains('btn-info') then begin BtnColor := $FF0DCAF0; BtnTextColor := TAlphaColors.Black; end
-          else if BtnClass.Contains('btn-dark') then begin BtnColor := $FF212529; BtnTextColor := TAlphaColors.White; end
-          else if BtnClass.Contains('btn-light') then begin BtnColor := $FFF8F9FA; BtnTextColor := TAlphaColors.Black; end;
-        end;
-        // Replace TButton with a styled TRectangle + TLabel for colored buttons
-        if BtnColor <> TAlphaColors.Null then
-        begin
-          var BtnText := TButton(Ctl).Text;
-          Ctl.Free;
-          var Rect := TRectangle.Create(Self);
-          Rect.Fill.Kind := TBrushKind.Solid;
-          Rect.Fill.Color := BtnColor;
-          Rect.Stroke.Kind := TBrushKind.None;
-          Rect.XRadius := 4;
-          Rect.YRadius := 4;
-          Rect.HitTest := True;
-          Rect.OnClick := HandleFormControlClick;
-          var Lbl := TLabel.Create(Rect);
-          Lbl.Parent := Rect;
-          Lbl.Align := TAlignLayout.Client;
-          Lbl.Text := BtnText;
-          Lbl.HitTest := False;
-          Lbl.StyledSettings := Lbl.StyledSettings - [TStyledSetting.FontColor,
-            TStyledSetting.Size, TStyledSetting.Family];
-          if BtnTextColor <> TAlphaColors.Null then
-            Lbl.FontColor := BtnTextColor
-          else
-            Lbl.FontColor := TAlphaColors.White;
-          Lbl.Font.Size := Box.Style.FontSize;
-          Lbl.Font.Family := Box.Style.FontFamily;
-          Lbl.TextSettings.HorzAlign := TTextAlign.Center;
-          Ctl := Rect;
-        end;
       end;
 
       Rec.Control := Ctl;

@@ -1,0 +1,576 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+  body {
+    font-family: Segoe UI, sans-serif;
+    font-size: 14px;
+    color: #333;
+    padding: 10px;
+  }
+  h1 { color: #1a1a2e; }
+  h2 { color: #16213e; border-bottom: 2px solid #0f3460; padding-bottom: 4px; margin-top: 20px; }
+  h3 { color: #0f3460; }
+  .section {
+    background-color: #f8f9fa;
+    border: 1px solid #dee2e6;
+    border-radius: 6px;
+    padding: 12px;
+    margin-bottom: 16px;
+  }
+  .pass { color: #198754; font-weight: bold; }
+  .info { color: #0d6efd; }
+  .warn { color: #dc3545; }
+  .code-sample {
+    background-color: #f0f0f0;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    padding: 8px;
+    font-family: Courier New, monospace;
+    font-size: 13px;
+  }
+  .flex-row {
+    display: inline-block;
+    margin-right: 10px;
+    margin-bottom: 8px;
+  }
+  .opacity-demo {
+    display: inline-block;
+    padding: 8px 12px;
+    background-color: #0d6efd;
+    color: white;
+    border-radius: 4px;
+    margin-right: 6px;
+  }
+  .min-max-box {
+    background-color: #e8f4fd;
+    border: 1px solid #0d6efd;
+    padding: 6px;
+    margin-bottom: 6px;
+  }
+  .letter-space-1 { letter-spacing: 2px; }
+  .letter-space-2 { letter-spacing: 5px; }
+  .letter-space-3 { letter-spacing: 10px; }
+  .indent-demo {
+    text-indent: 40px;
+    background-color: #fff3cd;
+    padding: 8px;
+    border: 1px solid #ffc107;
+  }
+  .hidden-element { visibility: hidden; }
+  .visible-element { visibility: visible; }
+  .overflow-box {
+    width: 200px;
+    height: 40px;
+    overflow: hidden;
+    background-color: #f0f0f0;
+    border: 1px solid #999;
+    padding: 4px;
+    margin-bottom: 6px;
+  }
+  .ellipsis-box {
+    width: 180px;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    background-color: #e8e8e8;
+    border: 1px solid #999;
+    padding: 4px;
+    margin-bottom: 6px;
+  }
+  .break-all-box {
+    width: 150px;
+    word-break: break-all;
+    background-color: #fce4ec;
+    border: 1px solid #e91e63;
+    padding: 6px;
+    margin-bottom: 6px;
+  }
+  .break-word-box {
+    width: 150px;
+    overflow-wrap: break-word;
+    background-color: #e8f5e9;
+    border: 1px solid #4caf50;
+    padding: 6px;
+    margin-bottom: 6px;
+  }
+  table.demo-table {
+    border: 1px solid #333;
+    margin-bottom: 10px;
+  }
+  table.demo-table th {
+    background-color: #343a40;
+    color: white;
+    padding: 6px 10px;
+  }
+  table.demo-table td {
+    padding: 6px 10px;
+    border: 1px solid #dee2e6;
+  }
+</style>
+</head>
+<body>
+
+<h1>TTina4HTMLRender - Comprehensive Test Page</h1>
+<p>This page tests all supported HTML tags, CSS properties, form controls, and interactive features.</p>
+<hr>
+
+<!-- ============================================================ -->
+<h2>1. Headings</h2>
+<!-- ============================================================ -->
+<div class="section">
+  <h1>Heading 1</h1>
+  <h2>Heading 2</h2>
+  <h3>Heading 3</h3>
+  <h4>Heading 4</h4>
+  <h5>Heading 5</h5>
+  <h6>Heading 6</h6>
+</div>
+
+<!-- ============================================================ -->
+<h2>2. Text Formatting</h2>
+<!-- ============================================================ -->
+<div class="section">
+  <p>Normal paragraph text.</p>
+  <p><b>Bold text</b> and <strong>strong text</strong>.</p>
+  <p><i>Italic text</i> and <em>emphasized text</em>.</p>
+  <p><u>Underlined text</u>.</p>
+  <p><del>Deleted text</del> and <s>strikethrough text</s>.</p>
+  <p><a href="https://example.com">Hyperlink text</a>.</p>
+  <p><mark>Highlighted text</mark>.</p>
+  <p><small>Small text (85%)</small>.</p>
+  <p>H<sub>2</sub>O and E=mc<sup>2</sup>.</p>
+  <p>This is a line<br>with a break in it.</p>
+</div>
+
+<!-- ============================================================ -->
+<h2>3. Semantic Inline Tags</h2>
+<!-- ============================================================ -->
+<div class="section">
+  <p>Press <kbd>Ctrl</kbd> + <kbd>S</kbd> to save.</p>
+  <p>The <abbr>HTML</abbr> specification defines many elements.</p>
+  <p>As noted in <cite>The Art of Computer Programming</cite> by Knuth.</p>
+  <p>He said <q>Hello World</q> to the compiler.</p>
+  <p>The variable <var>x</var> equals <var>y</var> + 1.</p>
+  <p>The output was: <samp>Error: file not found</samp>.</p>
+  <p>A <dfn>callback</dfn> is a function passed as an argument.</p>
+  <p>The event is on <time>2026-02-28</time>.</p>
+</div>
+
+<!-- ============================================================ -->
+<h2>4. Block Elements</h2>
+<!-- ============================================================ -->
+<div class="section">
+  <blockquote>
+    This is a blockquote. It should have left indentation and a left border.
+  </blockquote>
+
+  <pre>
+function hello() {
+    return "world";
+}
+  </pre>
+
+  <p>Inline code: <code>var x = 42;</code></p>
+</div>
+
+<!-- ============================================================ -->
+<h2>5. Definition List</h2>
+<!-- ============================================================ -->
+<div class="section">
+  <dl>
+    <dt>HTML</dt>
+    <dd>HyperText Markup Language, the standard markup for web pages.</dd>
+    <dt>CSS</dt>
+    <dd>Cascading Style Sheets, used for styling HTML elements.</dd>
+    <dt>Pascal</dt>
+    <dd>A programming language designed by Niklaus Wirth.</dd>
+  </dl>
+</div>
+
+<!-- ============================================================ -->
+<h2>6. Lists and list-style-type</h2>
+<!-- ============================================================ -->
+<div class="section">
+  <h3>Unordered List (disc - default)</h3>
+  <ul>
+    <li>Item one</li>
+    <li>Item two</li>
+    <li>Item three</li>
+  </ul>
+
+  <h3>Unordered - circle</h3>
+  <ul style="list-style-type: circle;">
+    <li>Circle marker A</li>
+    <li>Circle marker B</li>
+  </ul>
+
+  <h3>Unordered - square</h3>
+  <ul style="list-style-type: square;">
+    <li>Square marker A</li>
+    <li>Square marker B</li>
+  </ul>
+
+  <h3>Ordered List (decimal - default)</h3>
+  <ol>
+    <li>First item</li>
+    <li>Second item</li>
+    <li>Third item</li>
+  </ol>
+
+  <h3>Ordered - lower-alpha</h3>
+  <ol style="list-style-type: lower-alpha;">
+    <li>Alpha item</li>
+    <li>Beta item</li>
+    <li>Gamma item</li>
+  </ol>
+
+  <h3>Ordered - upper-roman</h3>
+  <ol style="list-style-type: upper-roman;">
+    <li>Roman one</li>
+    <li>Roman two</li>
+    <li>Roman three</li>
+    <li>Roman four</li>
+  </ol>
+
+  <h3>List - none</h3>
+  <ul style="list-style-type: none;">
+    <li>No marker A</li>
+    <li>No marker B</li>
+  </ul>
+</div>
+
+<!-- ============================================================ -->
+<h2>7. Tables</h2>
+<!-- ============================================================ -->
+<div class="section">
+  <table class="demo-table">
+    <thead>
+      <tr>
+        <th>Name</th>
+        <th>Language</th>
+        <th>Year</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Delphi</td>
+        <td>Object Pascal</td>
+        <td>1995</td>
+      </tr>
+      <tr>
+        <td>Lazarus</td>
+        <td>Free Pascal</td>
+        <td>1999</td>
+      </tr>
+      <tr>
+        <td>Visual Studio</td>
+        <td>C#</td>
+        <td>2002</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- ============================================================ -->
+<h2>8. Fieldset and Legend</h2>
+<!-- ============================================================ -->
+<div class="section">
+  <fieldset>
+    <legend>Personal Information</legend>
+    <p>Name: <input type="text" name="person_name" placeholder="Your name"></p>
+    <p>Email: <input type="email" name="person_email" placeholder="you@example.com"></p>
+  </fieldset>
+
+  <fieldset>
+    <legend>Preferences</legend>
+    <p><input type="checkbox" name="newsletter" id="newsletter"> <label for="newsletter">Subscribe to newsletter</label></p>
+    <p><input type="checkbox" name="darkmode" id="darkmode"> <label for="darkmode">Enable dark mode</label></p>
+  </fieldset>
+</div>
+
+<!-- ============================================================ -->
+<h2>9. CSS text-transform</h2>
+<!-- ============================================================ -->
+<div class="section">
+  <p style="text-transform: uppercase;">This text should be all uppercase.</p>
+  <p style="text-transform: lowercase;">THIS TEXT SHOULD BE ALL LOWERCASE.</p>
+  <p style="text-transform: capitalize;">this text should have each word capitalized.</p>
+  <p style="text-transform: none;">This Text Should Stay As Written.</p>
+</div>
+
+<!-- ============================================================ -->
+<h2>10. CSS opacity</h2>
+<!-- ============================================================ -->
+<div class="section">
+  <div class="opacity-demo" style="opacity: 1.0;">100%</div>
+  <div class="opacity-demo" style="opacity: 0.75;">75%</div>
+  <div class="opacity-demo" style="opacity: 0.50;">50%</div>
+  <div class="opacity-demo" style="opacity: 0.25;">25%</div>
+  <div class="opacity-demo" style="opacity: 0.10;">10%</div>
+</div>
+
+<!-- ============================================================ -->
+<h2>11. CSS min-width, max-width, min-height, max-height</h2>
+<!-- ============================================================ -->
+<div class="section">
+  <div class="min-max-box" style="min-width: 300px;">
+    min-width: 300px (should not shrink below 300px)
+  </div>
+  <div class="min-max-box" style="max-width: 200px;">
+    max-width: 200px - this long text should cause wrapping because the box cannot grow wider than 200 pixels.
+  </div>
+  <div class="min-max-box" style="min-height: 60px;">
+    min-height: 60px (short content but tall box)
+  </div>
+  <div class="min-max-box" style="max-height: 30px; overflow: hidden;">
+    max-height: 30px with overflow hidden. This text is intentionally longer to demonstrate that content beyond the max height will be clipped.
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<h2>12. CSS letter-spacing</h2>
+<!-- ============================================================ -->
+<div class="section">
+  <p>Normal spacing: Hello World</p>
+  <p class="letter-space-1">2px spacing: Hello World</p>
+  <p class="letter-space-2">5px spacing: Hello World</p>
+  <p class="letter-space-3">10px spacing: Hello World</p>
+</div>
+
+<!-- ============================================================ -->
+<h2>13. CSS text-indent</h2>
+<!-- ============================================================ -->
+<div class="section">
+  <div class="indent-demo">
+    This paragraph has a 40px text-indent on the first line. The second line and subsequent lines should start at the normal left margin without any indentation applied.
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<h2>14. CSS visibility</h2>
+<!-- ============================================================ -->
+<div class="section">
+  <p>Line 1: Visible</p>
+  <p class="hidden-element">Line 2: Hidden (should be invisible but still take up space)</p>
+  <p>Line 3: Visible (should NOT be right after Line 1 - there should be a gap for Line 2)</p>
+</div>
+
+<!-- ============================================================ -->
+<h2>15. CSS overflow: hidden</h2>
+<!-- ============================================================ -->
+<div class="section">
+  <p><b>Fixed-height box with overflow hidden:</b></p>
+  <div class="overflow-box">
+    This is a box with a fixed width of 200px and height of 40px. Content that exceeds the box dimensions should be clipped and not visible beyond the border.
+  </div>
+
+  <p><b>Text-overflow ellipsis:</b></p>
+  <div class="ellipsis-box">
+    This very long text should be truncated with an ellipsis at the end because it overflows.
+  </div>
+  <div class="ellipsis-box">
+    Short text OK
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<h2>16. CSS word-break and overflow-wrap</h2>
+<!-- ============================================================ -->
+<div class="section">
+  <p><b>word-break: break-all</b></p>
+  <div class="break-all-box">
+    Supercalifragilisticexpialidocious and other long words should break anywhere.
+  </div>
+
+  <p><b>overflow-wrap: break-word</b></p>
+  <div class="break-word-box">
+    Averylongwordwithoutanyspaces should break when it overflows the container boundary.
+  </div>
+
+  <p><b>Normal wrapping (reference):</b></p>
+  <div style="width: 150px; background-color: #f0f0f0; border: 1px solid #999; padding: 6px;">
+    Normal wrapping behavior with regular words and spacing.
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<h2>17. Form Controls</h2>
+<!-- ============================================================ -->
+<div class="section">
+  <form name="testform">
+    <p><b>Text Input:</b></p>
+    <input type="text" name="username" id="username" placeholder="Enter username">
+
+    <p><b>Password Input:</b></p>
+    <input type="password" name="password" placeholder="Enter password">
+
+    <p><b>Email Input:</b></p>
+    <input type="email" name="email" placeholder="user@example.com">
+
+    <p><b>File Input:</b></p>
+    <input type="file" name="attachment" accept="*.*">
+
+    <p><b>Textarea:</b></p>
+    <textarea name="comments" placeholder="Enter your comments here..."></textarea>
+
+    <p><b>Select Dropdown:</b></p>
+    <select name="country">
+      <option value="za">South Africa</option>
+      <option value="us">United States</option>
+      <option value="uk">United Kingdom</option>
+      <option value="de">Germany</option>
+    </select>
+
+    <p><b>Checkboxes:</b></p>
+    <p><input type="checkbox" name="agree" id="agree"> <label for="agree">I agree to the terms</label></p>
+    <p><input type="checkbox" name="remember" id="remember"> <label for="remember">Remember me</label></p>
+
+    <p><b>Radio Buttons:</b></p>
+    <p><input type="radio" name="plan" id="plan_free" value="free"> <label for="plan_free">Free Plan</label></p>
+    <p><input type="radio" name="plan" id="plan_pro" value="pro"> <label for="plan_pro">Pro Plan</label></p>
+    <p><input type="radio" name="plan" id="plan_ent" value="enterprise"> <label for="plan_ent">Enterprise Plan</label></p>
+
+    <p><b>Buttons:</b></p>
+    <button type="submit" class="btn btn-primary">Submit Form</button>
+    <button type="reset" class="btn btn-secondary">Reset</button>
+    <input type="button" value="Plain Button">
+  </form>
+</div>
+
+<!-- ============================================================ -->
+<h2>18. Bootstrap Button Variants</h2>
+<!-- ============================================================ -->
+<div class="section">
+  <span class="btn btn-primary">Primary</span>
+  <span class="btn btn-secondary">Secondary</span>
+  <span class="btn btn-success">Success</span>
+  <span class="btn btn-danger">Danger</span>
+  <span class="btn btn-warning">Warning</span>
+  <span class="btn btn-info">Info</span>
+  <span class="btn btn-dark">Dark</span>
+  <span class="btn btn-light">Light</span>
+</div>
+
+<!-- ============================================================ -->
+<h2>19. onclick Events</h2>
+<!-- ============================================================ -->
+<div class="section">
+  <p>Click the elements below to test onclick handling. Register your form object first with <code>HTMLRender1.RegisterObject('Form1', Self);</code></p>
+
+  <p><span style="color: #0d6efd; cursor: pointer; text-decoration: underline;" onclick="Form1:HandleSpanClick('Hello from span')">Click this span</span></p>
+
+  <div style="background-color: #e8f4fd; padding: 8px; border: 1px solid #0d6efd; border-radius: 4px; cursor: pointer;" onclick="Form1:HandleDivClick('Div was clicked')">
+    Click this div
+  </div>
+
+  <p>
+    <button onclick="Form1:HandleButtonClick(document.getElementById('username').value)">Get Username Value</button>
+  </p>
+
+  <p>
+    <span style="background-color: #ffc107; padding: 4px 8px; border-radius: 4px; cursor: pointer;" onclick="Form1:ShowMessage('this.id is: ', this.id)" id="testSpan">Click for this.id test</span>
+  </p>
+</div>
+
+<!-- ============================================================ -->
+<h2>20. Inline Styles</h2>
+<!-- ============================================================ -->
+<div class="section">
+  <p style="color: #dc3545; font-size: 18px; font-weight: bold;">Red, 18px, bold via inline style</p>
+  <p style="background-color: #d4edda; padding: 8px; border-radius: 4px; color: #155724;">Green alert-style box</p>
+  <p style="font-family: Courier New; font-size: 12px; background-color: #f5f5f5; padding: 4px;">Monospace font at 12px</p>
+  <div style="border: 2px solid #6f42c1; border-radius: 8px; padding: 10px; color: #6f42c1;">
+    Purple bordered box with 8px radius
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<h2>21. Nested Structures</h2>
+<!-- ============================================================ -->
+<div class="section">
+  <div style="background-color: #fff3cd; padding: 10px; border: 1px solid #ffc107; border-radius: 4px;">
+    <h3 style="margin-top: 0;">Outer Container</h3>
+    <p>This is the outer div with a yellow background.</p>
+    <div style="background-color: #cfe2ff; padding: 8px; border: 1px solid #0d6efd; border-radius: 4px;">
+      <h4 style="margin-top: 0;">Inner Container</h4>
+      <p>This is a nested div with a blue background.</p>
+      <ul>
+        <li>Nested list item 1</li>
+        <li>Nested list item 2</li>
+      </ul>
+    </div>
+    <p>Back in the outer container.</p>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<h2>22. Mixed Content and Edge Cases</h2>
+<!-- ============================================================ -->
+<div class="section">
+  <p>Inline <b>bold with <i>nested italic</i> inside</b> it.</p>
+  <p>Text with <span style="color: red;">red span</span> and <span style="color: blue;">blue span</span> inline.</p>
+  <p style="text-align: center;">Center aligned paragraph</p>
+  <p style="text-align: right;">Right aligned paragraph</p>
+  <p>Special characters: &amp; &lt; &gt; &quot; &#39; &copy; &euro; &ndash; &mdash;</p>
+</div>
+
+<!-- ============================================================ -->
+<h2>23. Display Modes</h2>
+<!-- ============================================================ -->
+<div class="section">
+  <p><b>display: inline-block</b></p>
+  <div style="display: inline-block; background-color: #fce4ec; padding: 8px; border: 1px solid #e91e63; border-radius: 4px;">Box A</div>
+  <div style="display: inline-block; background-color: #e8f5e9; padding: 8px; border: 1px solid #4caf50; border-radius: 4px;">Box B</div>
+  <div style="display: inline-block; background-color: #e3f2fd; padding: 8px; border: 1px solid #2196f3; border-radius: 4px;">Box C</div>
+
+  <p><b>display: none (should be invisible)</b></p>
+  <p>Before hidden</p>
+  <p style="display: none;">THIS SHOULD NOT BE VISIBLE</p>
+  <p>After hidden (should be directly below "Before hidden")</p>
+</div>
+
+<!-- ============================================================ -->
+<h2>24. Horizontal Rule Styles</h2>
+<!-- ============================================================ -->
+<div class="section">
+  <p>Default HR:</p>
+  <hr>
+  <p>Content after HR.</p>
+</div>
+
+<!-- ============================================================ -->
+<h2>Summary</h2>
+<!-- ============================================================ -->
+<div class="section">
+  <p>This page tests <b>24 feature categories</b> of the TTina4HTMLRender engine:</p>
+  <ol>
+    <li>Headings (h1-h6)</li>
+    <li>Text formatting (b, i, u, del, s, a, mark, small, sub, sup, br)</li>
+    <li>Semantic inline (kbd, abbr, cite, q, var, samp, dfn, time)</li>
+    <li>Block elements (blockquote, pre, code)</li>
+    <li>Definition lists (dl, dt, dd)</li>
+    <li>Lists with list-style-type (disc, circle, square, decimal, lower-alpha, upper-roman, none)</li>
+    <li>Tables (thead, tbody, th, td with styling)</li>
+    <li>Fieldset and legend</li>
+    <li>CSS text-transform</li>
+    <li>CSS opacity</li>
+    <li>CSS min/max width/height</li>
+    <li>CSS letter-spacing</li>
+    <li>CSS text-indent</li>
+    <li>CSS visibility</li>
+    <li>CSS overflow: hidden and text-overflow: ellipsis</li>
+    <li>CSS word-break and overflow-wrap</li>
+    <li>Form controls (text, password, email, file, textarea, select, checkbox, radio, buttons)</li>
+    <li>Bootstrap button variants</li>
+    <li>onclick events with RTTI parameters</li>
+    <li>Inline styles</li>
+    <li>Nested structures</li>
+    <li>Mixed content and special characters</li>
+    <li>Display modes (inline-block, none)</li>
+    <li>Horizontal rules</li>
+  </ol>
+</div>
+
+</body>
+</html>

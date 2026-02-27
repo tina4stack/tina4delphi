@@ -3303,7 +3303,10 @@ end;
 procedure TTina4HTMLRender.ClearFormControls;
 begin
   for var I := FFormControls.Count - 1 downto 0 do
-    FFormControls[I].Control.Free;
+  begin
+    FFormControls[I].Control.Parent := nil;
+    FFormControls[I].Control.DisposeOf;
+  end;
   FFormControls.Clear;
 end;
 

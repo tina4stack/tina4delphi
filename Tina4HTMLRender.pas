@@ -174,6 +174,8 @@ type
     Visibility: string;
     ListStyleType: string;
     Overflow: string;
+    WordBreak: string;
+    OverflowWrap: string;
     class function Default: TComputedStyle; static;
     class function ForTag(Tag: THTMLTag; const ParentStyle: TComputedStyle; StyleSheet: TCSSStyleSheet = nil): TComputedStyle; static;
     class procedure ApplyDeclarations(Decls: TCSSDeclarations; var Style: TComputedStyle; const ParentStyle: TComputedStyle); static;
@@ -1615,6 +1617,8 @@ begin
   Result.Visibility := 'visible';
   Result.ListStyleType := '';
   Result.Overflow := 'visible';
+  Result.WordBreak := 'normal';
+  Result.OverflowWrap := 'normal';
 end;
 
 class function TComputedStyle.ParseColor(const S: string): TAlphaColor;
@@ -1839,6 +1843,8 @@ begin
   Result.TextIndent := 0;
   Result.Visibility := 'visible';
   Result.Overflow := 'visible';
+  Result.WordBreak := 'normal';
+  Result.OverflowWrap := 'normal';
 
   if Tag = nil then Exit;
   TN := Tag.TagName.ToLower;
@@ -2241,6 +2247,13 @@ begin
     Style.Overflow := Temp.ToLower;
   if Decls.TryGetValue('overflow-y', Temp) and not ShouldSkip(Temp) then
     Style.Overflow := Temp.ToLower;
+
+  if Decls.TryGetValue('word-break', Temp) and not ShouldSkip(Temp) then
+    Style.WordBreak := Temp.ToLower;
+  if Decls.TryGetValue('overflow-wrap', Temp) and not ShouldSkip(Temp) then
+    Style.OverflowWrap := Temp.ToLower;
+  if Decls.TryGetValue('word-wrap', Temp) and not ShouldSkip(Temp) then
+    Style.OverflowWrap := Temp.ToLower;  // word-wrap is legacy alias
 end;
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -2965,17 +2978,76 @@ var
       end;
 
       SpaceW := MeasureTextWidth(' ', Child.Style);
-      Words := Text.Split([' ']);
+      var BreakAll := (Child.Style.WordBreak = 'break-all');
+      var BreakWord := (Child.Style.OverflowWrap = 'break-word') or
+                        (Child.Style.OverflowWrap = 'anywhere');
+
+      if BreakAll then
+      begin
+        // word-break: break-all — split text into individual characters
+        SetLength(Words, Text.Length);
+        for var CI := 0 to Text.Length - 1 do
+          Words[CI] := Text[CI + 1];
+      end
+      else
+        Words := Text.Split([' ']);
+
       Child.X := CursorX;
       Child.Y := CursorY;
 
       var IsFirst := True;
-      for var Word in Words do
+      for var WI := 0 to Length(Words) - 1 do
       begin
-        if Word = '' then Continue;
+        var W := Words[WI];
+        if W = '' then Continue;
 
-        WordW := MeasureTextWidth(Word, Child.Style);
+        WordW := MeasureTextWidth(W, Child.Style);
         WordH := GetLineHeight(Child.Style);
+
+        // overflow-wrap: break-word — break long words that overflow
+        if BreakWord and (not BreakAll) and (WordW > AvailWidth) and (W.Length > 1) then
+        begin
+          // Split the word character by character
+          var Remaining := W;
+          while Remaining <> '' do
+          begin
+            var Chunk := '';
+            var ChunkW: Single := 0;
+            for var CI := 1 to Remaining.Length do
+            begin
+              var TestChunk := Remaining.Substring(0, CI);
+              var TestW := MeasureTextWidth(TestChunk, Child.Style);
+              if (ChunkW > 0) and (CursorX + TestW > AvailWidth) then
+                Break;
+              Chunk := TestChunk;
+              ChunkW := TestW;
+            end;
+            if Chunk = '' then
+            begin
+              Chunk := Remaining[1];
+              ChunkW := MeasureTextWidth(Chunk, Child.Style);
+            end;
+
+            Frag.Text := Chunk;
+            Frag.X := CursorX - Child.X;
+            Frag.Y := CursorY - Child.Y;
+            Frag.W := ChunkW;
+            Frag.H := WordH;
+            Child.Fragments.Add(Frag);
+            CursorX := CursorX + ChunkW;
+            LineH := Max(LineH, WordH);
+            Remaining := Remaining.Substring(Chunk.Length);
+            if (Remaining <> '') and (CursorX >= AvailWidth) then
+            begin
+              CursorY := CursorY + LineH;
+              CursorX := 0;
+              LineH := WordH;
+            end;
+          end;
+          CursorX := CursorX + SpaceW;
+          IsFirst := False;
+          Continue;
+        end;
 
         // Wrap if needed
         if (CursorX > 0) and (CursorX + WordW > AvailWidth) then
@@ -2985,14 +3057,17 @@ var
           LineH := WordH;
         end;
 
-        Frag.Text := Word;
+        Frag.Text := W;
         Frag.X := CursorX - Child.X;  // relative to text node start
         Frag.Y := CursorY - Child.Y;  // relative to text node start
         Frag.W := WordW;
         Frag.H := WordH;
         Child.Fragments.Add(Frag);
 
-        CursorX := CursorX + WordW + SpaceW;
+        if BreakAll then
+          CursorX := CursorX + WordW  // no space between chars
+        else
+          CursorX := CursorX + WordW + SpaceW;
         LineH := Max(LineH, WordH);
         IsFirst := False;
       end;

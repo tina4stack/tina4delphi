@@ -3918,7 +3918,8 @@ begin
   end;
 
   // Fire OnElementClick if the form control has an onclick attribute
-  if Assigned(FOnElementClick) and (Sender is TControl) then
+  if (Assigned(FOnElementClick) or (FRegisteredObjects.Count > 0)) and
+     (Sender is TControl) then
   begin
     for var Rec in FFormControls do
       if Rec.Control = TControl(Sender) then
@@ -5248,7 +5249,8 @@ begin
   // Check pre-recorded clickable regions for onclick attribute handling.
   // Regions are in screen coordinates, recorded during Paint.
   // Search in reverse order so deeper (later-painted) elements are found first.
-  if Assigned(FOnElementClick) and (Button = TMouseButton.mbLeft) then
+  if (Button = TMouseButton.mbLeft) and
+     (Assigned(FOnElementClick) or (FRegisteredObjects.Count > 0)) then
   begin
     for var I := FClickableRegions.Count - 1 downto 0 do
     begin

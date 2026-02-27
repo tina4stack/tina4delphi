@@ -627,13 +627,172 @@ Tina4SocketServer1.Active := True;
 
 ## TTina4HTMLRender -- FMX HTML Renderer
 
-An FMX control that parses and renders basic HTML directly on a canvas.
+An FMX control that parses and renders HTML with CSS support directly on a canvas, including native form controls, Bootstrap 5 class support, and interactive event handling.
 
 ```delphi
 Tina4HTMLRender1.HTML.Text := '<h1>Hello</h1><p>This is <b>bold</b> and <i>italic</i>.</p>';
 ```
 
-Supports: `h1`-`h6`, `p`, `div`, `b`/`strong`, `i`/`em`, `a`, `ul`/`ol`/`li`, `hr`, `br`, `pre`, `blockquote`, `img` (alt text), inline styles (`color`, `font-size`, `font-family`, `font-weight`, `font-style`).
+### Supported HTML
+
+- **Block elements**: `h1`-`h6`, `p`, `div`, `pre`, `blockquote`, `hr`
+- **Inline elements**: `span`, `b`/`strong`, `i`/`em`, `a`, `br`, `small`, `label`
+- **Lists**: `ul`, `ol`, `li` with bullet/number markers
+- **Tables**: `table`, `tr`, `td`, `th`, `thead`, `tbody`, `tfoot` with collapsed borders
+- **Images**: `img` with HTTP download, async loading, and disk-based caching
+- **Forms**: `input` (text, password, email, radio, checkbox, submit, button, reset, file), `textarea`, `select`/`option`, `button`, `label` (with `for` attribute click handling)
+
+### CSS Support
+
+- **External stylesheets**: `<link rel="stylesheet" href="...">` with HTTP loading and caching
+- **`<style>` blocks**: Embedded CSS parsed and applied
+- **Inline styles**: `style="..."` attribute
+- **Selectors**: tag, `.class`, `#id`, combined selectors, specificity-based cascade
+- **Custom properties**: `var()` resolution with `:root` and element-level scoping
+- **Box model**: `margin`, `padding`, `border`, `border-radius`, `width`, `height`, `box-sizing`
+- **Display modes**: `block`, `inline`, `inline-block`, `none`, `table`, `table-row`, `table-cell`, `list-item`
+- **Text**: `color`, `font-size`, `font-family`, `font-weight`, `font-style`, `text-align`, `line-height`, `text-decoration`, `white-space`
+- **Background**: `background-color`, `opacity`
+- **Bootstrap 5 fallbacks**: `.btn` variants (`btn-primary`, `btn-danger`, etc.), `.form-control`, `.form-check`, `.text-muted`
+
+### Form Controls
+
+Native FMX controls are created for form elements, styled with CSS properties from the HTML.
+
+```delphi
+Tina4HTMLRender1.HTML.Text :=
+  '<form name="login">' +
+  '  <input type="text" name="username" placeholder="Username">' +
+  '  <input type="password" name="password" placeholder="Password">' +
+  '  <input type="file" name="avatar" accept="image/*">' +
+  '  <button type="submit" class="btn btn-primary">Login</button>' +
+  '</form>';
+```
+
+File inputs render a "Choose File" button with an open file dialog.
+
+### Events
+
+| Event | Signature | Description |
+|---|---|---|
+| `OnFormControlChange` | `procedure(Sender: TObject; const Name, Value: string)` | Fires when any form control value changes |
+| `OnFormControlClick` | `procedure(Sender: TObject; const Name, Value: string)` | Fires when a form control is clicked |
+| `OnFormControlEnter` | `procedure(Sender: TObject; const Name, Value: string)` | Fires when a form control gains focus |
+| `OnFormControlExit` | `procedure(Sender: TObject; const Name, Value: string)` | Fires when a form control loses focus |
+| `OnFormSubmit` | `procedure(Sender: TObject; const FormName: string; FormData: TStrings)` | Fires when a submit button is clicked, with all form data as `name=value` pairs |
+| `OnElementClick` | `procedure(Sender: TObject; const ObjectName, MethodName: string; Params: TStrings)` | Fires when any element with an `onclick` attribute is clicked (fallback when RTTI invocation is not available) |
+
+### OnFormSubmit
+
+When a submit button is clicked, the `OnFormSubmit` event fires with the form name and all form data collected as `name=value` pairs. Submit/button/reset inputs are excluded from the data.
+
+```delphi
+procedure TForm1.HTMLRender1FormSubmit(Sender: TObject;
+  const FormName: string; FormData: TStrings);
+begin
+  ShowMessage('Form: ' + FormName);
+  for var I := 0 to FormData.Count - 1 do
+    ShowMessage(FormData[I]);  // e.g. "username=admin"
+end;
+```
+
+### onclick Events and RTTI Method Invocation
+
+Any HTML element can have an `onclick` attribute that calls a Pascal method directly via RTTI. The format is:
+
+```
+onclick="ObjectName:MethodName(param1, param2, ...)"
+```
+
+Register your Delphi objects in `FormCreate`:
+
+```delphi
+procedure TForm3.FormCreate(Sender: TObject);
+begin
+  HTMLRender1.RegisterObject('Form3', Self);
+end;
+```
+
+Then in your HTML:
+
+```html
+<span onclick="Form3:ShowSomething('World')">Click me</span>
+<button onclick="Form3:HandleClick(document.getElementById('nameInput').value)">Submit</button>
+```
+
+The method is called directly -- no event handler needed:
+
+```delphi
+procedure TForm3.ShowSomething(Name: String);
+begin
+  ShowMessage('Hello ' + Name);
+end;
+```
+
+**Supported parameter expressions:**
+
+| Expression | Resolves to |
+|---|---|
+| `'literal'` or `"literal"` | String literal |
+| `123` | Numeric literal |
+| `this.value` | Value of the clicked element |
+| `this.id` | ID attribute of the clicked element |
+| `this.name` | Name attribute of the clicked element |
+| `this.<attr>` | Any attribute of the clicked element |
+| `document.getElementById('id').value` | Value of the element with the given ID |
+| `document.getElementById('id').<attr>` | Any attribute of the element with the given ID |
+
+If the registered object or method is not found, the `OnElementClick` event fires as a fallback.
+
+### DOM Manipulation from Pascal
+
+Modify rendered HTML elements from Delphi code at runtime:
+
+```delphi
+// Get/set values
+HTMLRender1.SetElementValue('emailInput', 'user@example.com');
+var Value := HTMLRender1.GetElementValue('emailInput');
+
+// Enable/disable controls
+HTMLRender1.SetElementEnabled('submitBtn', False);
+
+// Show/hide elements
+HTMLRender1.SetElementVisible('errorMessage', True);
+
+// Change text content
+HTMLRender1.SetElementText('statusLabel', 'Loading...');
+
+// Change inline styles
+HTMLRender1.SetElementStyle('myDiv', 'background-color', 'red');
+
+// Set any attribute
+HTMLRender1.SetElementAttribute('myLink', 'href', 'https://example.com');
+
+// Access the DOM tag directly
+var Tag := HTMLRender1.GetElementById('myElement');
+```
+
+| Method | Description |
+|---|---|
+| `GetElementById(Id)` | Returns the `THTMLTag` for the element |
+| `GetElementValue(Id)` | Gets the live value from a native control or DOM attribute |
+| `SetElementValue(Id, Value)` | Sets the value on native controls (TEdit, TCheckBox, etc.) and DOM |
+| `SetElementAttribute(Id, Attr, Value)` | Sets any attribute; triggers relayout for `class`/`style` changes |
+| `SetElementEnabled(Id, Enabled)` | Enables/disables native controls with opacity change |
+| `SetElementVisible(Id, Visible)` | Shows/hides elements via `display:none`, triggers relayout |
+| `SetElementText(Id, Text)` | Updates inner text content and native control labels |
+| `SetElementStyle(Id, Prop, Value)` | Sets an inline style property, triggers relayout |
+| `RefreshElement(Id)` | Forces a full re-layout and repaint |
+
+### Image Loading and Caching
+
+Images are downloaded via HTTP asynchronously and cached to disk when caching is enabled.
+
+```delphi
+Tina4HTMLRender1.CacheEnabled := True;
+Tina4HTMLRender1.CacheDir := 'C:\MyApp\cache';
+Tina4HTMLRender1.HTML.Text := '<img src="https://example.com/photo.jpg" width="200" height="150">';
+```
 
 ## TTina4Twig -- Template Engine
 
@@ -665,3 +824,14 @@ Template syntax supports: `{{ variable }}`, `{% if %}`, `{% for %}`, `{% include
 - 2024-01-10 Fixed access violation when REST request did not work, returns as error JSON in Execute
 - 2024-01-10 Added GetJSONFromTable to Core and better error handling for REST requests
 - 2025-07-30 Added Twig support
+- 2026-02-27 TTina4HTMLRender: Added full CSS stylesheet support (external `<link>`, `<style>` blocks, CSS custom properties)
+- 2026-02-27 TTina4HTMLRender: Added native FMX form controls (input, textarea, select, button) with CSS styling
+- 2026-02-27 TTina4HTMLRender: Added `display:inline-block` support with shrink-to-fit width
+- 2026-02-27 TTina4HTMLRender: Added Bootstrap 5 button class fallbacks and `.form-control`/`.form-check` support
+- 2026-02-27 TTina4HTMLRender: Added `<input type="file">` support with open file dialog
+- 2026-02-27 TTina4HTMLRender: Added `OnFormSubmit` event with form name and `name=value` data collection
+- 2026-02-27 TTina4HTMLRender: Added `onclick` attribute support with direct RTTI method invocation via `RegisterObject`
+- 2026-02-27 TTina4HTMLRender: Added DOM manipulation API (`GetElementById`, `SetElementValue`, `SetElementEnabled`, `SetElementVisible`, etc.)
+- 2026-02-27 TTina4HTMLRender: Added `<label for="id">` click handling to toggle checkboxes/radios
+- 2026-02-27 TTina4HTMLRender: Added HTTP image loading with async download and disk-based caching
+- 2026-02-27 TTina4HTMLRender: Fixed inline-block text rendering, inter-element spacing, duplicate text on resize

@@ -1820,6 +1820,12 @@ begin
   Result.LineHeight := ParentStyle.LineHeight;
   Result.WhiteSpace := ParentStyle.WhiteSpace;
   Result.ListStyleType := ParentStyle.ListStyleType;
+  Result.TextTransform := ParentStyle.TextTransform;
+  Result.LetterSpacing := ParentStyle.LetterSpacing;
+  Result.TextIndent := ParentStyle.TextIndent;
+  Result.Visibility := ParentStyle.Visibility;
+  Result.WordBreak := ParentStyle.WordBreak;
+  Result.OverflowWrap := ParentStyle.OverflowWrap;
   Result.VerticalAlign := 'baseline';
 
   // Non-inherited defaults
@@ -1835,18 +1841,12 @@ begin
   Result.Display := 'inline';
   Result.BoxSizing := 'content-box';
   Result.CSSCursor := '';
-  Result.TextTransform := 'none';
   Result.Opacity := 1.0;
   Result.MinWidth := -1;
   Result.MaxWidth := -1;
   Result.MinHeight := -1;
   Result.MaxHeight := -1;
-  Result.LetterSpacing := 0;
-  Result.TextIndent := 0;
-  Result.Visibility := 'visible';
   Result.Overflow := 'visible';
-  Result.WordBreak := 'normal';
-  Result.OverflowWrap := 'normal';
   Result.TextOverflow := 'clip';
 
   if Tag = nil then Exit;
@@ -1934,14 +1934,14 @@ begin
   begin
     Result.Margin.Top := ParentStyle.FontSize * 0.5;
     Result.Margin.Bottom := ParentStyle.FontSize * 0.5;
-    Result.Padding.Left := 24;
+    Result.Padding.Left := 32;
     Result.ListStyleType := 'disc';
   end
   else if TN = 'ol' then
   begin
     Result.Margin.Top := ParentStyle.FontSize * 0.5;
     Result.Margin.Bottom := ParentStyle.FontSize * 0.5;
-    Result.Padding.Left := 24;
+    Result.Padding.Left := 32;
     Result.ListStyleType := 'decimal';
   end
   else if TN = 'li' then
@@ -2685,6 +2685,12 @@ begin
 
   if ContentW < 0 then ContentW := 0;
 
+  // Apply min/max width constraints BEFORE layout so text wraps correctly
+  if (Box.Style.MaxWidth >= 0) and (ContentW > Box.Style.MaxWidth) then
+    ContentW := Box.Style.MaxWidth;
+  if (Box.Style.MinWidth >= 0) and (ContentW < Box.Style.MinWidth) then
+    ContentW := Box.Style.MinWidth;
+
   Box.ContentWidth := ContentW;
   CursorY := 0;
 
@@ -2807,13 +2813,7 @@ begin
       Box.ContentHeight := Box.Style.ExplicitHeight;
   end;
 
-  // Clamp to min/max width
-  if (Box.Style.MinWidth >= 0) and (Box.ContentWidth < Box.Style.MinWidth) then
-    Box.ContentWidth := Box.Style.MinWidth;
-  if (Box.Style.MaxWidth >= 0) and (Box.ContentWidth > Box.Style.MaxWidth) then
-    Box.ContentWidth := Box.Style.MaxWidth;
-
-  // Clamp to min/max height
+  // Clamp to min/max height (width was already applied before layout)
   if (Box.Style.MinHeight >= 0) and (Box.ContentHeight < Box.Style.MinHeight) then
     Box.ContentHeight := Box.Style.MinHeight;
   if (Box.Style.MaxHeight >= 0) and (Box.ContentHeight > Box.Style.MaxHeight) then
@@ -4690,20 +4690,20 @@ begin
   if Box.Style.Display = 'none' then Exit;
   if Box.Style.Visibility = 'hidden' then Exit;
 
-  // Apply opacity by modifying alpha channels
+  // Apply opacity by modifying alpha channels on background and border.
+  // Text color keeps full alpha so it remains legible against the faded
+  // background (true CSS opacity requires offscreen compositing which
+  // FMX canvas does not support directly).
   if Box.Style.Opacity < 1.0 then
   begin
     var OpacityByte := Round(Box.Style.Opacity * 255);
     var BgRec := TAlphaColorRec(Box.Style.BackgroundColor);
-    var FgRec := TAlphaColorRec(Box.Style.Color);
     var BrRec := TAlphaColorRec(Box.Style.BorderColor);
     if Box.Style.BackgroundColor <> TAlphaColors.Null then
     begin
       BgRec.A := (BgRec.A * OpacityByte) div 255;
       Box.Style.BackgroundColor := BgRec.Color;
     end;
-    FgRec.A := (FgRec.A * OpacityByte) div 255;
-    Box.Style.Color := FgRec.Color;
     BrRec.A := (BrRec.A * OpacityByte) div 255;
     Box.Style.BorderColor := BrRec.Color;
   end;
@@ -5103,14 +5103,27 @@ begin
 
     Layout := TTextLayoutManager.DefaultTextLayout.Create;
     try
+      var MarkerW: Single := 20;
+      // Measure the actual marker text width so the box is large enough
+      Layout.BeginUpdate;
+      Layout.Text := MarkerText;
+      Layout.Font.Family := Box.Style.FontFamily;
+      Layout.Font.Size := Box.Style.FontSize;
+      Layout.WordWrap := False;
+      Layout.MaxSize := PointF(200, LineH);
+      Layout.EndUpdate;
+      if Layout.Width + 2 > MarkerW then
+        MarkerW := Layout.Width + 2;
+
       Layout.BeginUpdate;
       Layout.Text := MarkerText;
       Layout.Font.Family := Box.Style.FontFamily;
       Layout.Font.Size := Box.Style.FontSize;
       Layout.Color := Box.Style.Color;
       Layout.HorizontalAlign := TTextAlign.Trailing;
-      Layout.TopLeft := PointF(X + Box.ContentLeft - 4, MarkerY);
-      Layout.MaxSize := PointF(18, LineH);
+      // Position so right edge is at ContentLeft - 4px gap
+      Layout.TopLeft := PointF(X + Box.ContentLeft - MarkerW - 4, MarkerY);
+      Layout.MaxSize := PointF(MarkerW, LineH);
       Layout.EndUpdate;
       Layout.RenderLayout(Canvas);
     finally
@@ -5119,10 +5132,10 @@ begin
   end
   else
   begin
-    // Draw bullet markers
+    // Draw bullet markers — center in the padding area left of content
     BulletR := Box.Style.FontSize * 0.18;
     if BulletR < 2.5 then BulletR := 2.5;
-    BulletCX := X + Box.ContentLeft;
+    BulletCX := X + Box.ContentLeft - BulletR - 6;
     BulletCY := MarkerY + LineH * 0.5;
 
     if LST = 'square' then

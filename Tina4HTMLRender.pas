@@ -1934,14 +1934,14 @@ begin
   begin
     Result.Margin.Top := ParentStyle.FontSize * 0.5;
     Result.Margin.Bottom := ParentStyle.FontSize * 0.5;
-    Result.Padding.Left := 24;
+    Result.Padding.Left := 32;
     Result.ListStyleType := 'disc';
   end
   else if TN = 'ol' then
   begin
     Result.Margin.Top := ParentStyle.FontSize * 0.5;
     Result.Margin.Bottom := ParentStyle.FontSize * 0.5;
-    Result.Padding.Left := 24;
+    Result.Padding.Left := 32;
     Result.ListStyleType := 'decimal';
   end
   else if TN = 'li' then
@@ -5103,14 +5103,27 @@ begin
 
     Layout := TTextLayoutManager.DefaultTextLayout.Create;
     try
+      var MarkerW: Single := 20;
+      // Measure the actual marker text width so the box is large enough
+      Layout.BeginUpdate;
+      Layout.Text := MarkerText;
+      Layout.Font.Family := Box.Style.FontFamily;
+      Layout.Font.Size := Box.Style.FontSize;
+      Layout.WordWrap := False;
+      Layout.MaxSize := PointF(200, LineH);
+      Layout.EndUpdate;
+      if Layout.Width + 2 > MarkerW then
+        MarkerW := Layout.Width + 2;
+
       Layout.BeginUpdate;
       Layout.Text := MarkerText;
       Layout.Font.Family := Box.Style.FontFamily;
       Layout.Font.Size := Box.Style.FontSize;
       Layout.Color := Box.Style.Color;
       Layout.HorizontalAlign := TTextAlign.Trailing;
-      Layout.TopLeft := PointF(X + Box.ContentLeft - 4, MarkerY);
-      Layout.MaxSize := PointF(18, LineH);
+      // Position so right edge is at ContentLeft - 4px gap
+      Layout.TopLeft := PointF(X + Box.ContentLeft - MarkerW - 4, MarkerY);
+      Layout.MaxSize := PointF(MarkerW, LineH);
       Layout.EndUpdate;
       Layout.RenderLayout(Canvas);
     finally
@@ -5119,10 +5132,10 @@ begin
   end
   else
   begin
-    // Draw bullet markers
+    // Draw bullet markers — center in the padding area left of content
     BulletR := Box.Style.FontSize * 0.18;
     if BulletR < 2.5 then BulletR := 2.5;
-    BulletCX := X + Box.ContentLeft;
+    BulletCX := X + Box.ContentLeft - BulletR - 6;
     BulletCY := MarkerY + LineH * 0.5;
 
     if LST = 'square' then

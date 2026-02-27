@@ -165,6 +165,10 @@ type
     CSSCursor: string;
     TextTransform: string;
     Opacity: Single;
+    MinWidth: Single;
+    MaxWidth: Single;
+    MinHeight: Single;
+    MaxHeight: Single;
     class function Default: TComputedStyle; static;
     class function ForTag(Tag: THTMLTag; const ParentStyle: TComputedStyle; StyleSheet: TCSSStyleSheet = nil): TComputedStyle; static;
     class procedure ApplyDeclarations(Decls: TCSSDeclarations; var Style: TComputedStyle; const ParentStyle: TComputedStyle); static;
@@ -1597,6 +1601,10 @@ begin
   Result.CSSCursor := '';
   Result.TextTransform := 'none';
   Result.Opacity := 1.0;
+  Result.MinWidth := -1;
+  Result.MaxWidth := -1;
+  Result.MinHeight := -1;
+  Result.MaxHeight := -1;
 end;
 
 class function TComputedStyle.ParseColor(const S: string): TAlphaColor;
@@ -2180,6 +2188,15 @@ begin
 
   if Decls.TryGetValue('opacity', Temp) and not ShouldSkip(Temp) then
     Style.Opacity := Max(0, Min(1, StrToFloatDef(Temp, 1.0)));
+
+  if Decls.TryGetValue('min-width', Temp) and not ShouldSkip(Temp) then
+    Style.MinWidth := ParseLength(Temp, Style.FontSize);
+  if Decls.TryGetValue('max-width', Temp) and not ShouldSkip(Temp) then
+    Style.MaxWidth := ParseLength(Temp, Style.FontSize);
+  if Decls.TryGetValue('min-height', Temp) and not ShouldSkip(Temp) then
+    Style.MinHeight := ParseLength(Temp, Style.FontSize);
+  if Decls.TryGetValue('max-height', Temp) and not ShouldSkip(Temp) then
+    Style.MaxHeight := ParseLength(Temp, Style.FontSize);
 end;
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -2724,6 +2741,18 @@ begin
     else
       Box.ContentHeight := Box.Style.ExplicitHeight;
   end;
+
+  // Clamp to min/max width
+  if (Box.Style.MinWidth >= 0) and (Box.ContentWidth < Box.Style.MinWidth) then
+    Box.ContentWidth := Box.Style.MinWidth;
+  if (Box.Style.MaxWidth >= 0) and (Box.ContentWidth > Box.Style.MaxWidth) then
+    Box.ContentWidth := Box.Style.MaxWidth;
+
+  // Clamp to min/max height
+  if (Box.Style.MinHeight >= 0) and (Box.ContentHeight < Box.Style.MinHeight) then
+    Box.ContentHeight := Box.Style.MinHeight;
+  if (Box.Style.MaxHeight >= 0) and (Box.ContentHeight > Box.Style.MaxHeight) then
+    Box.ContentHeight := Box.Style.MaxHeight;
 end;
 
 procedure TLayoutEngine.LayoutInlineChildren(Box: TLayoutBox; AvailWidth: Single);

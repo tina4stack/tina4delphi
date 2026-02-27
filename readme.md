@@ -635,12 +635,13 @@ Tina4HTMLRender1.HTML.Text := '<h1>Hello</h1><p>This is <b>bold</b> and <i>itali
 
 ### Supported HTML
 
-- **Block elements**: `h1`-`h6`, `p`, `div`, `pre`, `blockquote`, `hr`
+- **Block elements**: `h1`-`h6`, `p`, `div`, `pre`, `blockquote`, `hr`, `fieldset`
 - **Inline elements**: `span`, `b`/`strong`, `i`/`em`, `a`, `br`, `small`, `label`
-- **Lists**: `ul`, `ol`, `li` with bullet/number markers
+- **Semantic inline**: `kbd`, `abbr`, `cite`, `q`, `var`, `samp`, `dfn`, `time`
+- **Lists**: `ul`, `ol`, `li` with bullet/number markers and configurable `list-style-type`
 - **Tables**: `table`, `tr`, `td`, `th`, `thead`, `tbody`, `tfoot` with collapsed borders
 - **Images**: `img` with HTTP download, async loading, and disk-based caching
-- **Forms**: `input` (text, password, email, radio, checkbox, submit, button, reset, file), `textarea`, `select`/`option`, `button`, `label` (with `for` attribute click handling)
+- **Forms**: `input` (text, password, email, radio, checkbox, submit, button, reset, file), `textarea`, `select`/`option`, `button`, `label` (with `for` attribute click handling), `fieldset`/`legend`
 
 ### CSS Support
 
@@ -649,10 +650,13 @@ Tina4HTMLRender1.HTML.Text := '<h1>Hello</h1><p>This is <b>bold</b> and <i>itali
 - **Inline styles**: `style="..."` attribute
 - **Selectors**: tag, `.class`, `#id`, combined selectors, specificity-based cascade
 - **Custom properties**: `var()` resolution with `:root` and element-level scoping
-- **Box model**: `margin`, `padding`, `border`, `border-radius`, `width`, `height`, `box-sizing`
+- **Box model**: `margin`, `padding`, `border`, `border-radius`, `width`, `height`, `box-sizing`, `min-width`, `max-width`, `min-height`, `max-height`
 - **Display modes**: `block`, `inline`, `inline-block`, `none`, `table`, `table-row`, `table-cell`, `list-item`
-- **Text**: `color`, `font-size`, `font-family`, `font-weight`, `font-style`, `text-align`, `line-height`, `text-decoration`, `white-space`
+- **Text**: `color`, `font-size`, `font-family`, `font-weight`, `font-style`, `text-align`, `line-height`, `text-decoration`, `white-space`, `text-transform`, `letter-spacing`, `text-indent`, `text-overflow`
 - **Background**: `background-color`, `opacity`
+- **Visibility**: `visibility` (`visible`, `hidden`), `overflow` (`visible`, `hidden`, `scroll`, `auto`)
+- **Lists**: `list-style-type` (`disc`, `circle`, `square`, `decimal`, `lower-alpha`, `upper-alpha`, `lower-roman`, `upper-roman`, `none`)
+- **Word wrapping**: `word-break` (`break-all`), `overflow-wrap`/`word-wrap` (`break-word`, `anywhere`)
 - **Bootstrap 5 fallbacks**: `.btn` variants (`btn-primary`, `btn-danger`, etc.), `.form-control`, `.form-check`, `.text-muted`
 
 ### Form Controls
@@ -835,3 +839,15 @@ Template syntax supports: `{{ variable }}`, `{% if %}`, `{% for %}`, `{% include
 - 2026-02-27 TTina4HTMLRender: Added `<label for="id">` click handling to toggle checkboxes/radios
 - 2026-02-27 TTina4HTMLRender: Added HTTP image loading with async download and disk-based caching
 - 2026-02-27 TTina4HTMLRender: Fixed inline-block text rendering, inter-element spacing, duplicate text on resize
+- 2026-02-28 TTina4HTMLRender: Added semantic inline tags (`kbd`, `abbr`, `cite`, `q`, `var`, `samp`, `dfn`, `time`)
+- 2026-02-28 TTina4HTMLRender: Added `fieldset` and `legend` form elements
+- 2026-02-28 TTina4HTMLRender: Added CSS `text-transform` (uppercase, lowercase, capitalize)
+- 2026-02-28 TTina4HTMLRender: Added CSS `opacity` property
+- 2026-02-28 TTina4HTMLRender: Added CSS `min-width`, `max-width`, `min-height`, `max-height`
+- 2026-02-28 TTina4HTMLRender: Added CSS `letter-spacing` with character-by-character rendering
+- 2026-02-28 TTina4HTMLRender: Added CSS `text-indent` for first-line indentation
+- 2026-02-28 TTina4HTMLRender: Added CSS `visibility` property (hidden elements still occupy layout space)
+- 2026-02-28 TTina4HTMLRender: Added CSS `list-style-type` with disc, circle, square, decimal, alpha, and roman numeral markers
+- 2026-02-28 TTina4HTMLRender: Added CSS `overflow: hidden` with canvas clipping
+- 2026-02-28 TTina4HTMLRender: Added CSS `word-break` and `overflow-wrap` for character-level and long-word breaking
+- 2026-02-28 TTina4HTMLRender: Added CSS `text-overflow: ellipsis` with background cover at clip edge

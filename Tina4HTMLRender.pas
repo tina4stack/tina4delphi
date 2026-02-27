@@ -391,7 +391,7 @@ constructor TFileCache.Create;
 begin
   inherited;
   FEnabled := False;
-  FCacheDir := TPath.Combine(TPath.GetTempPath, 'Tina4Cache');
+  FCacheDir := TPath.GetTempPath + 'Tina4Cache';
 end;
 
 procedure TFileCache.EnsureCacheDir;
@@ -411,7 +411,7 @@ var
 begin
   Result := False;
   if not FEnabled then Exit;
-  FilePath := TPath.Combine(FCacheDir, URLToFileName(URL));
+  FilePath := FCacheDir + PathDelim + URLToFileName(URL);
   if TFile.Exists(FilePath) then
   begin
     try
@@ -430,7 +430,7 @@ begin
   if not FEnabled then Exit;
   try
     EnsureCacheDir;
-    FilePath := TPath.Combine(FCacheDir, URLToFileName(URL));
+    FilePath := FCacheDir + PathDelim + URLToFileName(URL);
     TFile.WriteAllBytes(FilePath, Bytes);
   except
     // Silently fail on disk write errors
@@ -443,7 +443,7 @@ var
 begin
   Result := False;
   if not FEnabled then Exit;
-  FilePath := TPath.Combine(FCacheDir, URLToFileName(URL));
+  FilePath := FCacheDir + PathDelim + URLToFileName(URL);
   if TFile.Exists(FilePath) then
   begin
     try
@@ -462,7 +462,7 @@ begin
   if not FEnabled then Exit;
   try
     EnsureCacheDir;
-    FilePath := TPath.Combine(FCacheDir, URLToFileName(URL));
+    FilePath := FCacheDir + PathDelim + URLToFileName(URL);
     TFile.WriteAllText(FilePath, Content);
   except
     // Silently fail on disk write errors
@@ -3239,7 +3239,7 @@ begin
   if Value <> '' then
     FFileCache.CacheDir := Value
   else
-    FFileCache.CacheDir := TPath.Combine(TPath.GetTempPath, 'Tina4Cache');
+    FFileCache.CacheDir := TPath.GetTempPath + 'Tina4Cache';
 end;
 
 procedure TTina4HTMLRender.ClearCache;

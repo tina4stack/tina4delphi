@@ -172,6 +172,7 @@ type
     LetterSpacing: Single;
     TextIndent: Single;
     Visibility: string;
+    ListStyleType: string;
     class function Default: TComputedStyle; static;
     class function ForTag(Tag: THTMLTag; const ParentStyle: TComputedStyle; StyleSheet: TCSSStyleSheet = nil): TComputedStyle; static;
     class procedure ApplyDeclarations(Decls: TCSSDeclarations; var Style: TComputedStyle; const ParentStyle: TComputedStyle); static;
@@ -1611,6 +1612,7 @@ begin
   Result.LetterSpacing := 0;
   Result.TextIndent := 0;
   Result.Visibility := 'visible';
+  Result.ListStyleType := '';
 end;
 
 class function TComputedStyle.ParseColor(const S: string): TAlphaColor;
@@ -1809,6 +1811,7 @@ begin
   Result.TextAlign := ParentStyle.TextAlign;
   Result.LineHeight := ParentStyle.LineHeight;
   Result.WhiteSpace := ParentStyle.WhiteSpace;
+  Result.ListStyleType := ParentStyle.ListStyleType;
   Result.VerticalAlign := 'baseline';
 
   // Non-inherited defaults
@@ -1824,6 +1827,15 @@ begin
   Result.Display := 'inline';
   Result.BoxSizing := 'content-box';
   Result.CSSCursor := '';
+  Result.TextTransform := 'none';
+  Result.Opacity := 1.0;
+  Result.MinWidth := -1;
+  Result.MaxWidth := -1;
+  Result.MinHeight := -1;
+  Result.MaxHeight := -1;
+  Result.LetterSpacing := 0;
+  Result.TextIndent := 0;
+  Result.Visibility := 'visible';
 
   if Tag = nil then Exit;
   TN := Tag.TagName.ToLower;
@@ -1911,12 +1923,14 @@ begin
     Result.Margin.Top := ParentStyle.FontSize * 0.5;
     Result.Margin.Bottom := ParentStyle.FontSize * 0.5;
     Result.Padding.Left := 24;
+    Result.ListStyleType := 'disc';
   end
   else if TN = 'ol' then
   begin
     Result.Margin.Top := ParentStyle.FontSize * 0.5;
     Result.Margin.Bottom := ParentStyle.FontSize * 0.5;
     Result.Padding.Left := 24;
+    Result.ListStyleType := 'decimal';
   end
   else if TN = 'li' then
   begin
@@ -2212,6 +2226,11 @@ begin
 
   if Decls.TryGetValue('visibility', Temp) and not ShouldSkip(Temp) then
     Style.Visibility := Temp.ToLower;
+
+  if Decls.TryGetValue('list-style-type', Temp) and not ShouldSkip(Temp) then
+    Style.ListStyleType := Temp.ToLower;
+  if Decls.TryGetValue('list-style', Temp) and not ShouldSkip(Temp) then
+    Style.ListStyleType := Temp.ToLower;
 end;
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -4895,13 +4914,46 @@ var
   Layout: TTextLayout;
   MarkerText: string;
   MarkerY, LineH, BulletR, BulletCX, BulletCY: Single;
+  LST: string;
+
+  function ToRoman(N: Integer): string;
+  const
+    Values: array[0..12] of Integer = (1000,900,500,400,100,90,50,40,10,9,5,4,1);
+    Numerals: array[0..12] of string = ('m','cm','d','cd','c','xc','l','xl','x','ix','v','iv','i');
+  var
+    I: Integer;
+  begin
+    Result := '';
+    for I := 0 to High(Values) do
+      while N >= Values[I] do
+      begin
+        Result := Result + Numerals[I];
+        Dec(N, Values[I]);
+      end;
+  end;
+
 begin
   MarkerY := Y + Box.ContentTop;
   LineH := Box.Style.FontSize * Box.Style.LineHeight;
 
-  if Box.IsOrdered then
+  LST := Box.Style.ListStyleType;
+  if LST = 'none' then Exit;
+
+  // Determine marker text for ordered types
+  if (LST = 'decimal') or (LST = 'lower-alpha') or (LST = 'upper-alpha') or
+     (LST = 'lower-roman') or (LST = 'upper-roman') or Box.IsOrdered then
   begin
-    MarkerText := IntToStr(Box.ListIndex) + '.';
+    if (LST = 'lower-alpha') and (Box.ListIndex >= 1) and (Box.ListIndex <= 26) then
+      MarkerText := Chr(Ord('a') + Box.ListIndex - 1) + '.'
+    else if (LST = 'upper-alpha') and (Box.ListIndex >= 1) and (Box.ListIndex <= 26) then
+      MarkerText := Chr(Ord('A') + Box.ListIndex - 1) + '.'
+    else if LST = 'lower-roman' then
+      MarkerText := ToRoman(Box.ListIndex) + '.'
+    else if LST = 'upper-roman' then
+      MarkerText := ToRoman(Box.ListIndex).ToUpper + '.'
+    else
+      MarkerText := IntToStr(Box.ListIndex) + '.';
+
     Layout := TTextLayoutManager.DefaultTextLayout.Create;
     try
       Layout.BeginUpdate;
@@ -4920,15 +4972,34 @@ begin
   end
   else
   begin
-    // Draw a filled circle bullet — radius scales with font size
+    // Draw bullet markers
     BulletR := Box.Style.FontSize * 0.18;
     if BulletR < 2.5 then BulletR := 2.5;
     BulletCX := X + Box.ContentLeft;
     BulletCY := MarkerY + LineH * 0.5;
-    Canvas.Fill.Kind := TBrushKind.Solid;
-    Canvas.Fill.Color := Box.Style.Color;
-    Canvas.FillEllipse(RectF(BulletCX - BulletR, BulletCY - BulletR,
-      BulletCX + BulletR, BulletCY + BulletR), 1.0);
+
+    if LST = 'square' then
+    begin
+      Canvas.Fill.Kind := TBrushKind.Solid;
+      Canvas.Fill.Color := Box.Style.Color;
+      Canvas.FillRect(RectF(BulletCX - BulletR, BulletCY - BulletR,
+        BulletCX + BulletR, BulletCY + BulletR), 0, 0, [], 1.0);
+    end
+    else if LST = 'circle' then
+    begin
+      Canvas.Stroke.Kind := TBrushKind.Solid;
+      Canvas.Stroke.Color := Box.Style.Color;
+      Canvas.Stroke.Thickness := 1;
+      Canvas.DrawEllipse(RectF(BulletCX - BulletR, BulletCY - BulletR,
+        BulletCX + BulletR, BulletCY + BulletR), 1.0);
+    end
+    else // disc (default)
+    begin
+      Canvas.Fill.Kind := TBrushKind.Solid;
+      Canvas.Fill.Color := Box.Style.Color;
+      Canvas.FillEllipse(RectF(BulletCX - BulletR, BulletCY - BulletR,
+        BulletCX + BulletR, BulletCY + BulletR), 1.0);
+    end;
   end;
 end;
 

@@ -164,6 +164,7 @@ type
     BoxSizing: string;
     CSSCursor: string;
     TextTransform: string;
+    Opacity: Single;
     class function Default: TComputedStyle; static;
     class function ForTag(Tag: THTMLTag; const ParentStyle: TComputedStyle; StyleSheet: TCSSStyleSheet = nil): TComputedStyle; static;
     class procedure ApplyDeclarations(Decls: TCSSDeclarations; var Style: TComputedStyle; const ParentStyle: TComputedStyle); static;
@@ -1595,6 +1596,7 @@ begin
   Result.BoxSizing := 'content-box';
   Result.CSSCursor := '';
   Result.TextTransform := 'none';
+  Result.Opacity := 1.0;
 end;
 
 class function TComputedStyle.ParseColor(const S: string): TAlphaColor;
@@ -2175,6 +2177,9 @@ begin
 
   if Decls.TryGetValue('text-transform', Temp) and not ShouldSkip(Temp) then
     Style.TextTransform := Temp.ToLower;
+
+  if Decls.TryGetValue('opacity', Temp) and not ShouldSkip(Temp) then
+    Style.Opacity := Max(0, Min(1, StrToFloatDef(Temp, 1.0)));
 end;
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -4527,6 +4532,28 @@ var
   AbsX, AbsY, CX, CY: Single;
 begin
   if Box.Style.Display = 'none' then Exit;
+
+  // Apply opacity by modifying alpha channels
+  if Box.Style.Opacity < 1.0 then
+  begin
+    var OpacityByte := Round(Box.Style.Opacity * 255);
+    if Box.Style.BackgroundColor <> TAlphaColors.Null then
+    begin
+      var Rec := TAlphaColorRec(Box.Style.BackgroundColor);
+      Rec.A := (Rec.A * OpacityByte) div 255;
+      Box.Style.BackgroundColor := Rec.Color;
+    end;
+    begin
+      var Rec := TAlphaColorRec(Box.Style.Color);
+      Rec.A := (Rec.A * OpacityByte) div 255;
+      Box.Style.Color := Rec.Color;
+    end;
+    begin
+      var Rec := TAlphaColorRec(Box.Style.BorderColor);
+      Rec.A := (Rec.A * OpacityByte) div 255;
+      Box.Style.BorderColor := Rec.Color;
+    end;
+  end;
 
   // Skip form control boxes — they are rendered as native FMX controls
   if Assigned(Box.Tag) and

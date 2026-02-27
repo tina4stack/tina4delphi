@@ -2350,14 +2350,18 @@ begin
       SameText(Box.Tag.TagName, 'textarea') or SameText(Box.Tag.TagName, 'select')) then
   begin
     Box.Style.BorderWidth := 0;
+    var InputType := '';
+    if Assigned(Box.Tag) then
+      InputType := Box.Tag.GetAttribute('type', 'text').ToLower;
+    // Checkbox/radio are small fixed-size controls — clear padding so
+    // it doesn't offset them from the left edge
+    if (InputType = 'checkbox') or (InputType = 'radio') then
+      Box.Style.Padding.Clear;
     // Recalculate content width without border
     ContentW := AvailWidth - MarginL - MarginR -
       Box.Style.Padding.Left - Box.Style.Padding.Right;
     if ContentW < 0 then ContentW := 0;
     LayoutFormControl(Box, ContentW);
-    var InputType := '';
-    if Assigned(Box.Tag) then
-      InputType := Box.Tag.GetAttribute('type', 'text').ToLower;
     if (InputType <> 'checkbox') and (InputType <> 'radio') then
       Box.ContentWidth := ContentW;
     Exit;
@@ -3479,8 +3483,17 @@ begin
     if Assigned(Ctl) then
     begin
       Ctl.Parent := Self;
-      Ctl.Width := Max(20, Box.ContentWidth + Box.Style.Padding.Left + Box.Style.Padding.Right);
-      Ctl.Height := Max(20, Box.ContentHeight + Box.Style.Padding.Top + Box.Style.Padding.Bottom);
+      // Checkbox/radio use fixed content size — don't inflate with CSS padding
+      if (Ctl is TCheckBox) or (Ctl is TRadioButton) then
+      begin
+        Ctl.Width := Box.ContentWidth;
+        Ctl.Height := Box.ContentHeight;
+      end
+      else
+      begin
+        Ctl.Width := Max(20, Box.ContentWidth + Box.Style.Padding.Left + Box.Style.Padding.Right);
+        Ctl.Height := Max(20, Box.ContentHeight + Box.Style.Padding.Top + Box.Style.Padding.Bottom);
+      end;
 
       // Apply CSS styles via ITextSettings (works for TEdit, TButton, TMemo, etc.)
       var TS: ITextSettings;
@@ -3547,8 +3560,16 @@ begin
     FindBoxAbsPos(FLayoutEngine.Root, Rec.Box, 0, 0, AX, AY);
     Rec.Control.Position.X := AX;
     Rec.Control.Position.Y := AY - FScrollY;
-    Rec.Control.Width := Rec.Box.ContentWidth + Rec.Box.Style.Padding.Left + Rec.Box.Style.Padding.Right;
-    Rec.Control.Height := Rec.Box.ContentHeight + Rec.Box.Style.Padding.Top + Rec.Box.Style.Padding.Bottom;
+    if (Rec.Control is TCheckBox) or (Rec.Control is TRadioButton) then
+    begin
+      Rec.Control.Width := Rec.Box.ContentWidth;
+      Rec.Control.Height := Rec.Box.ContentHeight;
+    end
+    else
+    begin
+      Rec.Control.Width := Rec.Box.ContentWidth + Rec.Box.Style.Padding.Left + Rec.Box.Style.Padding.Right;
+      Rec.Control.Height := Rec.Box.ContentHeight + Rec.Box.Style.Padding.Top + Rec.Box.Style.Padding.Bottom;
+    end;
     Rec.Control.Visible := (Rec.Control.Position.Y + Rec.Control.Height > 0) and
       (Rec.Control.Position.Y < Height);
   end;

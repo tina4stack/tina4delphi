@@ -174,8 +174,8 @@ type
   // Layout Box
   // ─────────────────────────────────────────────────────────────────────────
 
-  TLayoutBoxKind = (lbkBlock, lbkInline, lbkText, lbkTable, lbkTableRow,
-    lbkTableCell, lbkListItem, lbkImage, lbkFormControl, lbkHR, lbkBR);
+  TLayoutBoxKind = (lbkBlock, lbkInline, lbkInlineBlock, lbkText, lbkTable,
+    lbkTableRow, lbkTableCell, lbkListItem, lbkImage, lbkFormControl, lbkHR, lbkBR);
 
   TTextFragment = record
     Text: string;
@@ -1950,6 +1950,38 @@ begin
   // Inline style overrides (highest priority)
   if Tag.Style.Count > 0 then
     ApplyDeclarations(Tag.Style, Result, ParentStyle);
+
+  // Bootstrap button class fallback — for non-native elements (span, div, a)
+  // that have btn classes but CSS variable resolution didn't provide colors
+  if (Result.BackgroundColor = TAlphaColors.Null) and
+     not SameText(TN, 'button') and not SameText(TN, 'input') then
+  begin
+    var BtnClass := Tag.GetAttribute('class', '').ToLower;
+    if BtnClass.Contains('btn') then
+    begin
+      if BtnClass.Contains('btn-primary') then begin Result.BackgroundColor := $FF0D6EFD; Result.Color := TAlphaColors.White; end
+      else if BtnClass.Contains('btn-secondary') then begin Result.BackgroundColor := $FF6C757D; Result.Color := TAlphaColors.White; end
+      else if BtnClass.Contains('btn-success') then begin Result.BackgroundColor := $FF198754; Result.Color := TAlphaColors.White; end
+      else if BtnClass.Contains('btn-danger') then begin Result.BackgroundColor := $FFDC3545; Result.Color := TAlphaColors.White; end
+      else if BtnClass.Contains('btn-warning') then begin Result.BackgroundColor := $FFFFC107; Result.Color := TAlphaColors.Black; end
+      else if BtnClass.Contains('btn-info') then begin Result.BackgroundColor := $FF0DCAF0; Result.Color := TAlphaColors.Black; end
+      else if BtnClass.Contains('btn-dark') then begin Result.BackgroundColor := $FF212529; Result.Color := TAlphaColors.White; end
+      else if BtnClass.Contains('btn-light') then begin Result.BackgroundColor := $FFF8F9FA; Result.Color := TAlphaColors.Black; end;
+      // Apply default btn padding and radius only if a color variant was matched
+      if Result.BackgroundColor <> TAlphaColors.Null then
+      begin
+        if (Result.Padding.Top = 0) and (Result.Padding.Bottom = 0) then
+        begin
+          Result.Padding.Top := 6;    // 0.375rem ≈ 6px
+          Result.Padding.Bottom := 6;
+          Result.Padding.Left := 12;  // 0.75rem ≈ 12px
+          Result.Padding.Right := 12;
+        end;
+        if Result.BorderRadius < 0 then
+          Result.BorderRadius := 6;   // 0.375rem ≈ 6px
+      end;
+    end;
+  end;
 end;
 
 class procedure TComputedStyle.ApplyDeclarations(Decls: TCSSDeclarations; var Style: TComputedStyle; const ParentStyle: TComputedStyle);
@@ -2386,6 +2418,8 @@ begin
     Kind := lbkListItem
   else if Style.Display = 'block' then
     Kind := lbkBlock
+  else if Style.Display = 'inline-block' then
+    Kind := lbkInlineBlock
   else
     Kind := lbkInline;
 
@@ -2533,7 +2567,7 @@ begin
     case Child.Kind of
       lbkBlock, lbkTable, lbkListItem, lbkHR:
         HasBlock := True;
-      lbkImage, lbkFormControl, lbkBR, lbkInline:
+      lbkImage, lbkFormControl, lbkBR, lbkInline, lbkInlineBlock:
         HasInline := True;
       lbkText:
         if Assigned(Child.Tag) and (Child.Tag.Text.Trim <> '') then
@@ -2551,7 +2585,8 @@ begin
     for var Child in Box.Children do
     begin
       if (Child.Kind = lbkImage) or (Child.Kind = lbkFormControl) or
-         (Child.Kind = lbkBR) or (Child.Kind = lbkInline) then
+         (Child.Kind = lbkBR) or (Child.Kind = lbkInline) or
+         (Child.Kind = lbkInlineBlock) then
       begin
         HasInline := True;
         Break;
@@ -2650,6 +2685,45 @@ var
       Child.X := CursorX;
       Child.Y := CursorY;
       CursorX := CursorX + CtlW;
+      LineH := Max(LineH, Child.MarginBoxHeight);
+      Exit;
+    end;
+
+    // Inline-block: internally formatted as block, placed in inline flow
+    if Child.Kind = lbkInlineBlock then
+    begin
+      // Use shrink-to-fit width: lay out with available width, then shrink
+      LayoutBlock(Child, AvailWidth - CursorX);
+      // If no explicit width, shrink content width to fit children
+      if Child.Style.ExplicitWidth < 0 then
+      begin
+        var MaxChildRight: Single := 0;
+        for var GC in Child.Children do
+          MaxChildRight := Max(MaxChildRight, GC.X + GC.MarginBoxWidth);
+        if MaxChildRight > 0 then
+          Child.ContentWidth := MaxChildRight;
+      end;
+      var BoxW := Child.MarginBoxWidth;
+      if (CursorX > 0) and (CursorX + BoxW > AvailWidth) then
+      begin
+        CursorY := CursorY + LineH;
+        CursorX := 0;
+        LineH := GetLineHeight(Child.Style);
+        // Re-layout with full available width after wrap
+        LayoutBlock(Child, AvailWidth);
+        if Child.Style.ExplicitWidth < 0 then
+        begin
+          var MaxChildRight2: Single := 0;
+          for var GC in Child.Children do
+            MaxChildRight2 := Max(MaxChildRight2, GC.X + GC.MarginBoxWidth);
+          if MaxChildRight2 > 0 then
+            Child.ContentWidth := MaxChildRight2;
+        end;
+        BoxW := Child.MarginBoxWidth;
+      end;
+      Child.X := CursorX;
+      Child.Y := CursorY;
+      CursorX := CursorX + BoxW;
       LineH := Max(LineH, Child.MarginBoxHeight);
       Exit;
     end;
@@ -3027,7 +3101,8 @@ begin
         for var CellChild in Cell.Children do
         begin
           if (CellChild.Kind = lbkImage) or (CellChild.Kind = lbkFormControl) or
-             (CellChild.Kind = lbkBR) or (CellChild.Kind = lbkInline) then
+             (CellChild.Kind = lbkBR) or (CellChild.Kind = lbkInline) or
+             (CellChild.Kind = lbkInlineBlock) then
           begin
             CellHasInline := True;
             Break;
@@ -3118,7 +3193,8 @@ begin
   var HasInline := False;
   for var Child in Box.Children do
   begin
-    if (Child.Kind = lbkText) or (Child.Kind = lbkInline) or (Child.Kind = lbkBR) then
+    if (Child.Kind = lbkText) or (Child.Kind = lbkInline) or
+       (Child.Kind = lbkInlineBlock) or (Child.Kind = lbkBR) then
     begin
       HasInline := True;
       Break;
@@ -3916,7 +3992,7 @@ begin
     Canvas.FillRect(R, Box.Style.BorderRadius, Box.Style.BorderRadius,
       AllCorners, 1.0)
   else
-    Canvas.FillRect(R, 0);
+    Canvas.FillRect(R, 1.0);
 end;
 
 procedure TTina4HTMLRender.PaintBorder(Canvas: TCanvas; Box: TLayoutBox; X, Y: Single);
@@ -3965,7 +4041,11 @@ begin
   Canvas.Stroke.Kind := TBrushKind.Solid;
   Canvas.Stroke.Color := Box.Style.BorderColor;
   Canvas.Stroke.Thickness := Box.Style.BorderWidth;
-  Canvas.DrawRect(R, 1.0);
+  if Box.Style.BorderRadius > 0 then
+    Canvas.DrawRect(R, Box.Style.BorderRadius, Box.Style.BorderRadius,
+      AllCorners, 1.0)
+  else
+    Canvas.DrawRect(R, 1.0);
 end;
 
 procedure TTina4HTMLRender.PaintText(Canvas: TCanvas; Box: TLayoutBox; X, Y: Single);

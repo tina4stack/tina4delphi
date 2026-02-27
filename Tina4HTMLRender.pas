@@ -548,10 +548,19 @@ begin
     SelectorPart := S.Substring(I, BraceStart - I).Trim;
     DeclBlock := S.Substring(BraceStart + 1, BraceEnd - BraceStart - 1).Trim;
 
-    // Skip @rules (media queries, keyframes, etc.)
+    // Skip @rules (media queries, keyframes, etc.) — must find matching '}'
+    // by counting brace nesting, since @media blocks contain nested rules
     if SelectorPart.StartsWith('@') then
     begin
-      I := BraceEnd + 1;
+      var Depth := 1;
+      var J := BraceStart + 1;
+      while (J < Length(S)) and (Depth > 0) do
+      begin
+        if S.Chars[J] = '{' then Inc(Depth)
+        else if S.Chars[J] = '}' then Dec(Depth);
+        Inc(J);
+      end;
+      I := J;
       Continue;
     end;
 
@@ -1805,8 +1814,11 @@ var
   Temp: string;
 
   function ShouldSkip(const V: string): Boolean; inline;
+  var TV: string;
   begin
-    Result := V.Contains('var(') or SameText(V.Trim, 'inherit');
+    TV := V.Trim;
+    Result := TV.Contains('var(') or SameText(TV, 'inherit') or
+      SameText(TV, 'initial') or SameText(TV, 'unset') or SameText(TV, 'revert');
   end;
 
 begin
@@ -3079,7 +3091,7 @@ begin
         BtnText := Box.Tag.GetAttribute('value', 'Button');
     end;
     Box.ContentWidth := Max(60, MeasureTextWidth(BtnText, Box.Style) + 20);
-    Box.ContentHeight := Box.Style.FontSize * Box.Style.LineHeight;
+    Box.ContentHeight := Max(24, Box.Style.FontSize * Box.Style.LineHeight);
   end
   else
   begin
@@ -3105,7 +3117,7 @@ begin
         else BtnText := 'Button';
       end;
       Box.ContentWidth := Max(60, MeasureTextWidth(BtnText, Box.Style) + 20);
-      Box.ContentHeight := Box.Style.FontSize * Box.Style.LineHeight;
+      Box.ContentHeight := Max(24, Box.Style.FontSize * Box.Style.LineHeight);
     end
     else
     begin
@@ -3269,6 +3281,7 @@ begin
     ClearFormControls;
     if Assigned(FLayoutEngine.Root) then
       CreateFormControls(FLayoutEngine.Root, 0, 0);
+
   finally
     FIsLayoutting := False;
   end;
@@ -3368,7 +3381,8 @@ var
   Rec: TNativeFormControl;
   TN, InputType, Placeholder, Val: string;
 begin
-  if Box.Style.Display = 'none' then Exit;
+  if Box.Style.Display = 'none' then
+    Exit;
 
   AbsX := OffX + Box.X;
   AbsY := OffY + Box.Y;
@@ -3462,8 +3476,8 @@ begin
     if Assigned(Ctl) then
     begin
       Ctl.Parent := Self;
-      Ctl.Width := Box.ContentWidth + Box.Style.Padding.Left + Box.Style.Padding.Right;
-      Ctl.Height := Box.ContentHeight + Box.Style.Padding.Top + Box.Style.Padding.Bottom;
+      Ctl.Width := Max(20, Box.ContentWidth + Box.Style.Padding.Left + Box.Style.Padding.Right);
+      Ctl.Height := Max(20, Box.ContentHeight + Box.Style.Padding.Top + Box.Style.Padding.Bottom);
 
       // Apply CSS styles via ITextSettings (works for TEdit, TButton, TMemo, etc.)
       var TS: ITextSettings;

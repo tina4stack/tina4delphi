@@ -586,6 +586,9 @@ begin
         Rule := TCSSRule.Create;
         Rule.Selector := TrimmedSel;
 
+        // Check if this is a :root or * selector (global custom properties)
+        var IsGlobalScope := SameText(TrimmedSel, ':root') or (TrimmedSel = '*');
+
         for var D in Decls do
         begin
           DeclStr := D.Trim;
@@ -595,9 +598,14 @@ begin
           begin
             var PropName := KV[0].Trim.ToLower;
             var PropVal := KV[1].Trim;
-            // Collect CSS custom properties (--var-name) globally
+            // Collect CSS custom properties (--var-name) from :root as globals
             if PropName.StartsWith('--') then
-              FCustomProps.AddOrSetValue(PropName, PropVal)
+            begin
+              if IsGlobalScope then
+                FCustomProps.AddOrSetValue(PropName, PropVal)
+              else
+                Rule.Declarations.AddOrSetValue(PropName, PropVal);
+            end
             else
               Rule.Declarations.AddOrSetValue(PropName, PropVal);
           end;

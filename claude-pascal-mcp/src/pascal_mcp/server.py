@@ -12,6 +12,12 @@ from pascal_mcp.compiler import (
     detect_compilers,
     run_source,
 )
+from pascal_mcp.form_parser import (
+    format_component_list,
+    format_summary,
+    format_tree,
+    parse_form_file,
+)
 from pascal_mcp.installer import download_and_install_fpc
 
 mcp = FastMCP(
@@ -20,7 +26,8 @@ mcp = FastMCP(
         "Pascal/Delphi development tools. Use get_compiler_info to check "
         "available compilers. Use compile_pascal to compile code and see "
         "errors. Use run_pascal to compile and execute code. If no compiler "
-        "is found, use setup_fpc to install Free Pascal."
+        "is found, use setup_fpc to install Free Pascal. Use parse_form to "
+        "read and understand DFM/FMX/LFM form files."
     ),
 )
 
@@ -158,6 +165,40 @@ async def check_syntax(
     cleanup_compile_result(result)
 
     return "\n".join(parts)
+
+
+@mcp.tool()
+async def parse_form(
+    file_path: str,
+    output_format: str = "tree",
+) -> str:
+    """Parse a Delphi/Lazarus form file and return its component structure.
+
+    Reads .dfm (VCL), .fmx (FireMonkey), or .lfm (Lazarus) form files
+    and returns a structured view of all components, their properties,
+    positions, sizes, and event handlers.
+
+    Args:
+        file_path: Absolute path to the .dfm, .fmx, or .lfm file.
+        output_format: How to format the output:
+            - 'tree': Indented component tree with key properties (default)
+            - 'summary': High-level overview with component counts and events
+            - 'flat': Flat list of all components with position/size info
+    """
+    try:
+        root = parse_form_file(file_path)
+    except ValueError as e:
+        return str(e)
+
+    if root is None:
+        return f"Could not parse form file: {file_path}"
+
+    if output_format == "summary":
+        return format_summary(root)
+    elif output_format == "flat":
+        return format_component_list(root)
+    else:
+        return format_tree(root)
 
 
 @mcp.tool()

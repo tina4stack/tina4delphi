@@ -155,6 +155,7 @@ type
     Padding: TEdgeValues;
     BorderColor: TAlphaColor;
     BorderWidth: Single;
+    BorderRadius: Single;
     ExplicitWidth: Single;
     ExplicitHeight: Single;
     Display: string;
@@ -1551,6 +1552,7 @@ begin
   Result.Padding.Clear;
   Result.BorderColor := TAlphaColors.Black;
   Result.BorderWidth := 0;
+  Result.BorderRadius := 0;
   Result.ExplicitWidth := -1;
   Result.ExplicitHeight := -1;
   Result.Display := 'block';
@@ -1763,6 +1765,7 @@ begin
   Result.Padding.Clear;
   Result.BorderColor := TAlphaColors.Black;
   Result.BorderWidth := 0;
+  Result.BorderRadius := 0;
   Result.ExplicitWidth := -1;
   Result.ExplicitHeight := -1;
   Result.Display := 'inline';
@@ -2039,6 +2042,8 @@ begin
     Style.BorderColor := ParseColor(Temp);
   if Decls.TryGetValue('border-width', Temp) and not ShouldSkip(Temp) then
     Style.BorderWidth := ParseLength(Temp, Style.FontSize);
+  if Decls.TryGetValue('border-radius', Temp) and not ShouldSkip(Temp) then
+    Style.BorderRadius := ParseLength(Temp, Style.FontSize);
   if Decls.TryGetValue('width', Temp) and not ShouldSkip(Temp) then
     Style.ExplicitWidth := ParseLength(Temp, Style.FontSize);
   if Decls.TryGetValue('height', Temp) and not ShouldSkip(Temp) then
@@ -3572,13 +3577,16 @@ begin
     BtnTextColor := TAlphaColors.Black;
   end;
 
+  var Radius: Single := Box.Style.BorderRadius;
+  if Radius <= 0 then Radius := 4;
+
   var Rect := TRectangle.Create(Self);
   Rect.Fill.Kind := TBrushKind.Solid;
   Rect.Fill.Color := BtnColor;
   Rect.Stroke.Kind := TBrushKind.Solid;
   Rect.Stroke.Color := $FFB0B0B0;
-  Rect.XRadius := 4;
-  Rect.YRadius := 4;
+  Rect.XRadius := Radius;
+  Rect.YRadius := Radius;
   Rect.HitTest := True;
   Rect.OnClick := HandleFormControlClick;
 
@@ -3890,7 +3898,11 @@ begin
 
   Canvas.Fill.Kind := TBrushKind.Solid;
   Canvas.Fill.Color := Box.Style.BackgroundColor;
-  Canvas.FillRect(R, 1.0);
+  if Box.Style.BorderRadius > 0 then
+    Canvas.FillRect(R, Box.Style.BorderRadius, Box.Style.BorderRadius,
+      AllCorners, 1.0)
+  else
+    Canvas.FillRect(R, 1.0);
 end;
 
 procedure TTina4HTMLRender.PaintBorder(Canvas: TCanvas; Box: TLayoutBox; X, Y: Single);

@@ -123,6 +123,7 @@ type
     procedure Clear;
     procedure ApplyTo(Tag: THTMLTag; Declarations: TCSSDeclarations);
     function ResolveVar(const Value: string): string;
+    function ResolveVarWith(const Value: string; Props: TDictionary<string, string>): string;
     property Rules: TObjectList<TCSSRule> read FRules;
     property FileCache: TFileCache read FFileCache write FFileCache;
     property CustomProps: TDictionary<string, string> read FCustomProps;
@@ -670,6 +671,44 @@ begin
   end;
 end;
 
+function TCSSStyleSheet.ResolveVarWith(const Value: string;
+  Props: TDictionary<string, string>): string;
+var
+  VarStart, VarEnd, CommaPos: Integer;
+  VarExpr, VarName, Fallback, Resolved: string;
+begin
+  Result := Value;
+  VarStart := Result.IndexOf('var(');
+  while VarStart >= 0 do
+  begin
+    VarEnd := Result.IndexOf(')', VarStart + 4);
+    if VarEnd < 0 then Break;
+    VarExpr := Result.Substring(VarStart + 4, VarEnd - VarStart - 4).Trim;
+    CommaPos := VarExpr.IndexOf(',');
+    if CommaPos >= 0 then
+    begin
+      VarName := VarExpr.Substring(0, CommaPos).Trim;
+      Fallback := VarExpr.Substring(CommaPos + 1).Trim;
+    end
+    else
+    begin
+      VarName := VarExpr;
+      Fallback := '';
+    end;
+    if Props.TryGetValue(VarName, Resolved) then
+    begin
+      if Resolved.Contains('var(') then
+        Resolved := ResolveVarWith(Resolved, Props);
+      Result := Result.Substring(0, VarStart) + Resolved + Result.Substring(VarEnd + 1);
+    end
+    else if Fallback <> '' then
+      Result := Result.Substring(0, VarStart) + Fallback + Result.Substring(VarEnd + 1)
+    else
+      Break;
+    VarStart := Result.IndexOf('var(');
+  end;
+end;
+
 procedure TCSSStyleSheet.LoadFromURL(const URL: string);
 var
   Client: THTTPClient;
@@ -851,10 +890,18 @@ end;
 procedure TCSSStyleSheet.ApplyTo(Tag: THTMLTag; Declarations: TCSSDeclarations);
 var
   MatchedRules: TList<TCSSRule>;
+  LocalProps: TDictionary<string, string>;
 begin
   // Collect matching rules and sort by specificity (lower first, so higher overrides)
   MatchedRules := TList<TCSSRule>.Create;
+  // Create a local copy of global custom props for this element's scope.
+  // This prevents scoped vars from one element leaking into the next.
+  LocalProps := TDictionary<string, string>.Create;
   try
+    // Start with global custom props (from :root and *)
+    for var Pair in FCustomProps do
+      LocalProps.AddOrSetValue(Pair.Key, Pair.Value);
+
     for var Rule in FRules do
     begin
       if SelectorMatches(Rule.Selector, Tag) then
@@ -875,19 +922,20 @@ begin
     for var Rule in MatchedRules do
       for var Pair in Rule.Declarations do
         if Pair.Key.StartsWith('--') then
-          FCustomProps.AddOrSetValue(Pair.Key, Pair.Value);
+          LocalProps.AddOrSetValue(Pair.Key, Pair.Value);
 
-    // Pass 2: Resolve var() references and add to output declarations
+    // Pass 2: Resolve var() references using local scope and add to output declarations
     for var Rule in MatchedRules do
       for var Pair in Rule.Declarations do
         if not Pair.Key.StartsWith('--') then
         begin
           var Val := Pair.Value;
           if Val.Contains('var(') then
-            Val := ResolveVar(Val);
+            Val := ResolveVarWith(Val, LocalProps);
           Declarations.AddOrSetValue(Pair.Key, Val);
         end;
   finally
+    LocalProps.Free;
     MatchedRules.Free;
   end;
 end;

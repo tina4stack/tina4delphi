@@ -3840,10 +3840,10 @@ begin
     begin
       if Assigned(Rec.Box.Tag) then
       begin
-        AName := Rec.Box.Tag.GetAttribute('name', '');
+        AName := Rec.Box.Tag.GetAttribute('name', '').Trim;
         // For radio/checkbox, return the element's value attribute
         if (Control is TCheckBox) or (Control is TRadioButton) then
-          AValue := Rec.Box.Tag.GetAttribute('value', '');
+          AValue := Rec.Box.Tag.GetAttribute('value', '').Trim;
       end;
       Break;
     end;
@@ -3860,13 +3860,9 @@ begin
         AValue := TComboBox(Control).Selected.Text;
     end
     else if Control is TLayout then
-    begin
-      // File input: selected filename is stored in TagString
-      AValue := TLayout(Control).TagString;
-    end
+      AValue := TLayout(Control).TagString
     else if Control is TRectangle then
     begin
-      // Styled button: extract text from child TLabel
       for var I := 0 to TRectangle(Control).ChildrenCount - 1 do
         if TRectangle(Control).Children[I] is TLabel then
         begin
@@ -3875,6 +3871,8 @@ begin
         end;
     end;
   end;
+  AName := AName.Trim;
+  AValue := AValue.Trim;
   Result := AName <> '';
 end;
 
@@ -3939,7 +3937,7 @@ begin
 
       var FormName := '';
       if Assigned(FormTag) then
-        FormName := FormTag.GetAttribute('name', FormTag.GetAttribute('id', ''));
+        FormName := FormTag.GetAttribute('name', FormTag.GetAttribute('id', '')).Trim;
 
       // Collect all form control values that belong to this form
       var FormData := TStringList.Create;
@@ -3947,8 +3945,18 @@ begin
         for var FRec in FFormControls do
         begin
           if not Assigned(FRec.Box.Tag) then Continue;
-          var CtlName := FRec.Box.Tag.GetAttribute('name', '');
+          var CtlName := FRec.Box.Tag.GetAttribute('name', '').Trim;
           if CtlName = '' then Continue;
+
+          // Skip submit/button/reset inputs — they are triggers, not data
+          var CtlTagName := FRec.Box.Tag.TagName.ToLower;
+          if CtlTagName = 'button' then Continue;
+          if CtlTagName = 'input' then
+          begin
+            var CtlType := FRec.Box.Tag.GetAttribute('type', 'text').ToLower.Trim;
+            if (CtlType = 'submit') or (CtlType = 'button') or (CtlType = 'reset') then
+              Continue;
+          end;
 
           // Check this control belongs to the same form
           var CtlForm: THTMLTag := FRec.Box.Tag.Parent;
@@ -3959,33 +3967,28 @@ begin
           // Get the value
           var CtlValue := '';
           if FRec.Control is TEdit then
-            CtlValue := TEdit(FRec.Control).Text
+            CtlValue := TEdit(FRec.Control).Text.Trim
           else if FRec.Control is TMemo then
-            CtlValue := TMemo(FRec.Control).Lines.Text
+            CtlValue := TMemo(FRec.Control).Lines.Text.Trim
           else if FRec.Control is TCheckBox then
           begin
             if not TCheckBox(FRec.Control).IsChecked then Continue;
-            CtlValue := FRec.Box.Tag.GetAttribute('value', 'on');
+            CtlValue := FRec.Box.Tag.GetAttribute('value', 'on').Trim;
           end
           else if FRec.Control is TRadioButton then
           begin
             if not TRadioButton(FRec.Control).IsChecked then Continue;
-            CtlValue := FRec.Box.Tag.GetAttribute('value', 'on');
+            CtlValue := FRec.Box.Tag.GetAttribute('value', 'on').Trim;
           end
           else if FRec.Control is TComboBox then
           begin
             if TComboBox(FRec.Control).Selected <> nil then
-              CtlValue := TComboBox(FRec.Control).Selected.Text;
+              CtlValue := TComboBox(FRec.Control).Selected.Text.Trim;
           end
           else if FRec.Control is TLayout then
           begin
             // File input: selected filename stored in TagString
-            CtlValue := TLayout(FRec.Control).TagString;
-          end
-          else if FRec.Control is TRectangle then
-          begin
-            // Styled button — include its value attribute
-            CtlValue := FRec.Box.Tag.GetAttribute('value', '');
+            CtlValue := TLayout(FRec.Control).TagString.Trim;
           end;
 
           FormData.Add(CtlName + '=' + CtlValue);

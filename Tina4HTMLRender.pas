@@ -2685,6 +2685,12 @@ begin
 
   if ContentW < 0 then ContentW := 0;
 
+  // Apply min/max width constraints BEFORE layout so text wraps correctly
+  if (Box.Style.MaxWidth >= 0) and (ContentW > Box.Style.MaxWidth) then
+    ContentW := Box.Style.MaxWidth;
+  if (Box.Style.MinWidth >= 0) and (ContentW < Box.Style.MinWidth) then
+    ContentW := Box.Style.MinWidth;
+
   Box.ContentWidth := ContentW;
   CursorY := 0;
 
@@ -2807,13 +2813,7 @@ begin
       Box.ContentHeight := Box.Style.ExplicitHeight;
   end;
 
-  // Clamp to min/max width
-  if (Box.Style.MinWidth >= 0) and (Box.ContentWidth < Box.Style.MinWidth) then
-    Box.ContentWidth := Box.Style.MinWidth;
-  if (Box.Style.MaxWidth >= 0) and (Box.ContentWidth > Box.Style.MaxWidth) then
-    Box.ContentWidth := Box.Style.MaxWidth;
-
-  // Clamp to min/max height
+  // Clamp to min/max height (width was already applied before layout)
   if (Box.Style.MinHeight >= 0) and (Box.ContentHeight < Box.Style.MinHeight) then
     Box.ContentHeight := Box.Style.MinHeight;
   if (Box.Style.MaxHeight >= 0) and (Box.ContentHeight > Box.Style.MaxHeight) then

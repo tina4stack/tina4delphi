@@ -1928,7 +1928,22 @@ begin
         else if TryStrToDateTime(Value.AsString, dt) then
           Result := DateTimeToUnix(dt)
         else
-          Result := 0;
+        begin
+          // PHP-style coercion: parse leading numeric portion of the string
+          var S := Trim(Value.AsString);
+          var Idx := 1;
+          if (Idx <= Length(S)) and CharInSet(S[Idx], ['+', '-']) then Inc(Idx);
+          var NumStart := Idx;
+          var HasDot := False;
+          while Idx <= Length(S) do
+            if CharInSet(S[Idx], ['0'..'9']) then Inc(Idx)
+            else if (S[Idx] = '.') and not HasDot then begin HasDot := True; Inc(Idx); end
+            else Break;
+          if (Idx > NumStart) and TryStrToFloat(Copy(S, 1, Idx - 1), Result, TFormatSettings.Invariant) then
+            {success}
+          else
+            Result := 0;
+        end;
       end;
     else Result := 0;
   end;

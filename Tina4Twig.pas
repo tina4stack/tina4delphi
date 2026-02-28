@@ -6,7 +6,8 @@ interface
 
 uses
   System.SysUtils, System.Classes, System.Generics.Collections, System.RegularExpressions,
-  System.Rtti, JSON, System.NetEncoding, System.Math, Variants, System.TypInfo, System.DateUtils;
+  System.Rtti, JSON, System.NetEncoding, System.Math, Variants, System.TypInfo, System.DateUtils,
+  System.StrUtils;
 
 type
   TStringDict = TDictionary<String, TValue>;
@@ -55,6 +56,7 @@ type
     function Tokenize(const Expr: String): TArray<String>;
     function ConvertJSONToTValue(const JSON: TJSONValue): TValue;
     procedure DumpValue(const Value: TValue; List: TStringList; const Indent: String);
+    function ConvertPHPToDelphiDateFormat(const PHPFmt: String): String;
     procedure RegisterDefaultFilters;
     procedure RegisterDefaultFunctions;
   public
@@ -2740,6 +2742,44 @@ end;
 /// <remarks>
 /// Clears existing filters and adds implementations for abs, capitalize, date, escape, etc. Some are stubs.
 /// </remarks>
+
+function TTina4Twig.ConvertPHPToDelphiDateFormat(const PHPFmt: String): String;
+begin
+  // If format already contains Delphi-style repeated specifiers, use as-is
+  if ContainsText(PHPFmt, 'yyyy') or ContainsText(PHPFmt, 'mm') or
+     ContainsText(PHPFmt, 'dd') or ContainsText(PHPFmt, 'nn') or
+     ContainsText(PHPFmt, 'ss') or ContainsText(PHPFmt, 'hh') then
+    Exit(PHPFmt);
+
+  // Convert PHP single-character date specifiers to Delphi FormatDateTime equivalents
+  Result := '';
+  for var I := 1 to Length(PHPFmt) do
+  begin
+    case PHPFmt[I] of
+      'Y': Result := Result + 'yyyy';
+      'y': Result := Result + 'yy';
+      'm': Result := Result + 'mm';
+      'n': Result := Result + 'm';
+      'd': Result := Result + 'dd';
+      'j': Result := Result + 'd';
+      'H': Result := Result + 'hh';
+      'G': Result := Result + 'h';
+      'h': Result := Result + 'hh';
+      'g': Result := Result + 'h';
+      'i': Result := Result + 'nn';
+      's': Result := Result + 'ss';
+      'A': Result := Result + 'AM/PM';
+      'a': Result := Result + 'am/pm';
+      'D': Result := Result + 'ddd';
+      'l': Result := Result + 'dddd';
+      'M': Result := Result + 'mmm';
+      'F': Result := Result + 'mmmm';
+    else
+      Result := Result + PHPFmt[I];
+    end;
+  end;
+end;
+
 procedure TTina4Twig.RegisterDefaultFilters;
 begin
   FFilters.Clear;
@@ -2990,7 +3030,7 @@ begin
         Result := IntToStr(UnixTime);
       end
       else
-        Result := FormatDateTime(fmt, dt);
+        Result := FormatDateTime(ConvertPHPToDelphiDateFormat(fmt), dt);
     end);
 
 
@@ -4964,7 +5004,7 @@ begin
     else
       DateTimeValue := Now; // Fallback for unsupported types
 
-    Result := FormatDateTime(FormatStr, DateTimeValue);
+    Result := FormatDateTime(ConvertPHPToDelphiDateFormat(FormatStr), DateTimeValue);
   end);
 end;
 

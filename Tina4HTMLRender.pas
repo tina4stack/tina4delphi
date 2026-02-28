@@ -333,11 +333,18 @@ type
     FOnExit: THTMLFormControlEvent;
     FOnSubmit: THTMLFormSubmitEvent;
     FOnElementClick: THTMLElementClickEvent;
+    FTwig: TStringList;
+    FTwigEngine: TObject;        // TTina4Twig (declared in implementation uses)
+    FTwigTemplatePath: string;
     procedure SetHTML(const Value: TStringList);
     function GetHTML: TStringList;
     procedure SetCacheEnabled(Value: Boolean);
     procedure SetCacheDir(const Value: string);
     procedure FHTMLChange(Sender: TObject);
+    procedure SetTwig(const Value: TStringList);
+    function GetTwig: TStringList;
+    procedure FTwigChange(Sender: TObject);
+    procedure SetTwigTemplatePath(const Value: string);
     procedure OnImageLoaded(Sender: TObject);
     procedure DoLayout;
     procedure ClearFormControls;
@@ -391,8 +398,12 @@ type
     procedure SetElementText(const Id: string; const Text: string);
     procedure SetElementStyle(const Id, StyleProp, StyleValue: string);
     procedure RefreshElement(const Id: string);
+    // Twig template engine: pass variables for template rendering
+    procedure SetTwigVariable(const AName: string; const AValue: string);
   published
     property HTML: TStringList read GetHTML write SetHTML;
+    property Twig: TStringList read GetTwig write SetTwig;
+    property TwigTemplatePath: string read FTwigTemplatePath write SetTwigTemplatePath;
     property Debug: TStringList read FDebug write FDebug;
     property CacheEnabled: Boolean read FCacheEnabled write SetCacheEnabled default False;
     property CacheDir: string read FCacheDir write SetCacheDir;
@@ -414,6 +425,9 @@ type
 procedure Register;
 
 implementation
+
+uses
+  Tina4Twig;
 
 procedure Register;
 begin
@@ -3886,6 +3900,9 @@ begin
   FStyleSheet := TCSSStyleSheet.Create;
   FStyleSheet.FileCache := FFileCache;
   FHTML.OnChange := FHTMLChange;
+  FTwig := TStringList.Create;
+  FTwig.OnChange := FTwigChange;
+  FTwigEngine := TTina4Twig.Create('');
   FScrollY := 0;
   FContentHeight := 0;
   FNeedRelayout := True;
@@ -3914,6 +3931,8 @@ begin
   FFileCache.Free;
   FHTML.Free;
   FDebug.Free;
+  FTwigEngine.Free;
+  FTwig.Free;
   inherited;
 end;
 
@@ -3926,6 +3945,51 @@ procedure TTina4HTMLRender.SetHTML(const Value: TStringList);
 begin
   FHTML.Assign(Value);
   Repaint;
+end;
+
+function TTina4HTMLRender.GetTwig: TStringList;
+begin
+  Result := FTwig;
+end;
+
+procedure TTina4HTMLRender.SetTwig(const Value: TStringList);
+begin
+  FTwig.Assign(Value);
+  // OnChange handler fires automatically via Assign
+end;
+
+procedure TTina4HTMLRender.SetTwigTemplatePath(const Value: string);
+begin
+  if FTwigTemplatePath <> Value then
+  begin
+    FTwigTemplatePath := Value;
+    FTwigEngine.Free;
+    FTwigEngine := TTina4Twig.Create(Value);
+  end;
+end;
+
+procedure TTina4HTMLRender.FTwigChange(Sender: TObject);
+var
+  RenderedHTML: string;
+begin
+  if FTwig.Text.Trim = '' then Exit;
+  // Render Twig template to HTML
+  RenderedHTML := TTina4Twig(FTwigEngine).Render(FTwig.Text);
+  // Set HTML without triggering FTwigChange again (avoid recursion)
+  FHTML.OnChange := nil;
+  try
+    FHTML.Text := RenderedHTML;
+  finally
+    FHTML.OnChange := FHTMLChange;
+  end;
+  // Trigger relayout and repaint
+  FNeedRelayout := True;
+  Repaint;
+end;
+
+procedure TTina4HTMLRender.SetTwigVariable(const AName: string; const AValue: string);
+begin
+  TTina4Twig(FTwigEngine).SetVariable(AName, AValue);
 end;
 
 procedure TTina4HTMLRender.SetCacheEnabled(Value: Boolean);

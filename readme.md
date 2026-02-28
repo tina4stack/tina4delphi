@@ -650,7 +650,7 @@ Tina4HTMLRender1.HTML.Text := '<h1>Hello</h1><p>This is <b>bold</b> and <i>itali
 - **Inline styles**: `style="..."` attribute
 - **Selectors**: tag, `.class`, `#id`, combined selectors, specificity-based cascade
 - **Custom properties**: `var()` resolution with `:root` and element-level scoping
-- **Box model**: `margin`, `padding`, `border`, `border-radius`, `width`, `height`, `box-sizing`, `min-width`, `max-width`, `min-height`, `max-height`
+- **Box model**: `margin`, `padding`, `border`, `border-top`/`right`/`bottom`/`left`, `border-radius`, `width`, `height`, `box-sizing`, `min-width`, `max-width`, `min-height`, `max-height`, `box-shadow`
 - **Display modes**: `block`, `inline`, `inline-block`, `none`, `table`, `table-row`, `table-cell`, `list-item`
 - **Text**: `color`, `font-size`, `font-family`, `font-weight`, `font-style`, `text-align`, `line-height`, `text-decoration`, `white-space`, `text-transform`, `letter-spacing`, `text-indent`, `text-overflow`
 - **Background**: `background-color`, `opacity`
@@ -798,6 +798,37 @@ Tina4HTMLRender1.CacheDir := 'C:\MyApp\cache';
 Tina4HTMLRender1.HTML.Text := '<img src="https://example.com/photo.jpg" width="200" height="150">';
 ```
 
+### Twig Template Integration
+
+The `Twig` property accepts Twig template content that is automatically rendered to HTML via the built-in TTina4Twig engine. When content is assigned to `Twig`, the template is rendered and the result is set on the `HTML` property.
+
+```delphi
+// Set template variables first
+Tina4HTMLRender1.SetTwigVariable('title', 'Hello World');
+Tina4HTMLRender1.SetTwigVariable('name', 'Andre');
+
+// Set Twig template — automatically renders to HTML
+Tina4HTMLRender1.Twig.Text :=
+  '<h1>{{ title }}</h1>' +
+  '<p>Welcome, {{ name }}!</p>' +
+  '{% if name %}' +
+  '  <p>User is logged in.</p>' +
+  '{% endif %}';
+```
+
+If your templates use `{% include %}` or `{% extends %}`, set the template path first:
+
+```delphi
+Tina4HTMLRender1.TwigTemplatePath := 'C:\MyApp\templates';
+Tina4HTMLRender1.Twig.LoadFromFile('C:\MyApp\templates\page.html');
+```
+
+| Property / Method | Description |
+|---|---|
+| `Twig: TStringList` | Twig template content — renders to HTML automatically on change |
+| `TwigTemplatePath: string` | Base path for `{% include %}` and `{% extends %}` resolution |
+| `SetTwigVariable(Name, Value)` | Pass a variable to the Twig rendering context |
+
 ## TTina4Twig -- Template Engine
 
 A Twig-compatible template engine for server-side rendering.
@@ -851,3 +882,7 @@ Template syntax supports: `{{ variable }}`, `{% if %}`, `{% for %}`, `{% include
 - 2026-02-28 TTina4HTMLRender: Added CSS `overflow: hidden` with canvas clipping
 - 2026-02-28 TTina4HTMLRender: Added CSS `word-break` and `overflow-wrap` for character-level and long-word breaking
 - 2026-02-28 TTina4HTMLRender: Added CSS `text-overflow: ellipsis` with background cover at clip edge
+- 2026-02-28 TTina4HTMLRender: Added per-side border support (`border-top`, `border-right`, `border-bottom`, `border-left`)
+- 2026-02-28 TTina4HTMLRender: Added CSS `box-shadow` with offset, blur, spread, and colored shadows
+- 2026-02-28 TTina4HTMLRender: Added `Twig` property for automatic Twig-to-HTML template rendering
+- 2026-02-28 TTina4HTMLRender: Added `TwigTemplatePath` property and `SetTwigVariable` method for template context

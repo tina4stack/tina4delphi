@@ -139,6 +139,19 @@ type
     Top, Right, Bottom, Left: Single;
     procedure Clear;
     procedure SetAll(V: Single);
+    function Horz: Single;   // Left + Right
+    function Vert: Single;   // Top + Bottom
+    function Any: Boolean;   // True if any side > 0
+  end;
+
+  TBoxShadow = record
+    OffsetX: Single;
+    OffsetY: Single;
+    BlurRadius: Single;
+    SpreadRadius: Single;
+    Color: TAlphaColor;
+    Inset: Boolean;
+    Active: Boolean;  // True when a box-shadow has been set
   end;
 
   TComputedStyle = record
@@ -154,8 +167,8 @@ type
     VerticalAlign: string;
     Margin: TEdgeValues;
     Padding: TEdgeValues;
-    BorderColor: TAlphaColor;
-    BorderWidth: Single;
+    BorderColors: array[0..3] of TAlphaColor;  // Top, Right, Bottom, Left
+    BorderWidths: TEdgeValues;
     BorderRadius: Single;
     ExplicitWidth: Single;
     ExplicitHeight: Single;
@@ -177,6 +190,10 @@ type
     WordBreak: string;
     OverflowWrap: string;
     TextOverflow: string;
+    BoxShadow: TBoxShadow;
+    procedure SetBorderWidth(W: Single);
+    procedure SetBorderColor(C: TAlphaColor);
+    function BorderColor: TAlphaColor;  // returns Top color (legacy compat)
     class function Default: TComputedStyle; static;
     class function ForTag(Tag: THTMLTag; const ParentStyle: TComputedStyle; StyleSheet: TCSSStyleSheet = nil): TComputedStyle; static;
     class procedure ApplyDeclarations(Decls: TCSSDeclarations; var Style: TComputedStyle; const ParentStyle: TComputedStyle); static;
@@ -336,6 +353,7 @@ type
     function ResolveOnClickParam(const Expr: string; ClickedTag: THTMLTag): string;
     procedure FireOnClick(ClickedTag: THTMLTag);
     procedure PaintBox(Canvas: TCanvas; Box: TLayoutBox; OffX, OffY: Single);
+    procedure PaintBoxShadow(Canvas: TCanvas; Box: TLayoutBox; X, Y: Single);
     procedure PaintBackground(Canvas: TCanvas; Box: TLayoutBox; X, Y: Single);
     procedure PaintBorder(Canvas: TCanvas; Box: TLayoutBox; X, Y: Single);
     procedure PaintText(Canvas: TCanvas; Box: TLayoutBox; X, Y: Single);
@@ -1580,6 +1598,39 @@ begin
   Top := V; Right := V; Bottom := V; Left := V;
 end;
 
+function TEdgeValues.Horz: Single;
+begin
+  Result := Left + Right;
+end;
+
+function TEdgeValues.Vert: Single;
+begin
+  Result := Top + Bottom;
+end;
+
+function TEdgeValues.Any: Boolean;
+begin
+  Result := (Top > 0) or (Right > 0) or (Bottom > 0) or (Left > 0);
+end;
+
+procedure TComputedStyle.SetBorderWidth(W: Single);
+begin
+  BorderWidths.SetAll(W);
+end;
+
+procedure TComputedStyle.SetBorderColor(C: TAlphaColor);
+begin
+  BorderColors[0] := C;
+  BorderColors[1] := C;
+  BorderColors[2] := C;
+  BorderColors[3] := C;
+end;
+
+function TComputedStyle.BorderColor: TAlphaColor;
+begin
+  Result := BorderColors[0];  // return top color as default
+end;
+
 // ═══════════════════════════════════════════════════════════════════════════
 // TComputedStyle
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1598,8 +1649,8 @@ begin
   Result.VerticalAlign := 'baseline';
   Result.Margin.Clear;
   Result.Padding.Clear;
-  Result.BorderColor := TAlphaColors.Black;
-  Result.BorderWidth := 0;
+  Result.SetBorderColor(TAlphaColors.Black);
+  Result.BorderWidths.Clear;
   Result.BorderRadius := -1;
   Result.ExplicitWidth := -1;
   Result.ExplicitHeight := -1;
@@ -1621,6 +1672,7 @@ begin
   Result.WordBreak := 'normal';
   Result.OverflowWrap := 'normal';
   Result.TextOverflow := 'clip';
+  Result.BoxShadow.Active := False;
 end;
 
 class function TComputedStyle.ParseColor(const S: string): TAlphaColor;
@@ -1833,8 +1885,8 @@ begin
   Result.TextDecoration := 'none';
   Result.Margin.Clear;
   Result.Padding.Clear;
-  Result.BorderColor := TAlphaColors.Black;
-  Result.BorderWidth := 0;
+  Result.SetBorderColor(TAlphaColors.Black);
+  Result.BorderWidths.Clear;
   Result.BorderRadius := -1;
   Result.ExplicitWidth := -1;
   Result.ExplicitHeight := -1;
@@ -1890,8 +1942,8 @@ begin
     Result.Margin.Bottom := ParentStyle.FontSize;
     Result.Margin.Left := 40;
     Result.Padding.Left := 10;
-    Result.BorderWidth := 3;
-    Result.BorderColor := TAlphaColors.Lightgray;
+    Result.SetBorderWidth(3);
+    Result.SetBorderColor(TAlphaColors.Lightgray);
   end
   else if TN = 'pre' then
   begin
@@ -1992,8 +2044,8 @@ begin
     Result.FontFamily := 'Courier New';
     Result.FontSize := ParentStyle.FontSize * 0.9;
     Result.BackgroundColor := $FFF0F0F0;
-    Result.BorderColor := $FFCCCCCC;
-    Result.BorderWidth := 1;
+    Result.SetBorderColor($FFCCCCCC);
+    Result.SetBorderWidth(1);
     Result.BorderRadius := 3;
     Result.Padding.SetAll(2);
   end
@@ -2010,8 +2062,8 @@ begin
     Result.FontFamily := 'Courier New'
   else if TN = 'fieldset' then
   begin
-    Result.BorderColor := $FF808080;
-    Result.BorderWidth := 2;
+    Result.SetBorderColor($FF808080);
+    Result.SetBorderWidth(2);
     Result.BorderRadius := 4;
     Result.Padding.SetAll(10);
     Result.Margin.Top := 8;
@@ -2039,9 +2091,10 @@ begin
   end;
   if Tag.HasAttribute('border') then
   begin
-    Result.BorderWidth := StrToFloatDef(Tag.GetAttribute('border'), 0);
-    if Result.BorderWidth > 0 then
-      Result.BorderColor := TAlphaColors.Black;
+    var BdrW := StrToFloatDef(Tag.GetAttribute('border'), 0);
+    Result.SetBorderWidth(BdrW);
+    if BdrW > 0 then
+      Result.SetBorderColor(TAlphaColors.Black);
   end;
 
   // Stylesheet rules (lower priority than inline)
@@ -2181,23 +2234,94 @@ begin
     begin
       var BT := BP.Trim.ToLower;
       if BT = 'none' then
-      begin
-        Style.BorderWidth := 0;
-      end
+        Style.BorderWidths.Clear
       else if (BT.EndsWith('px')) or (StrToFloatDef(BT, -1) >= 0) then
-        Style.BorderWidth := StrToFloatDef(BT.Replace('px', ''), 1)
+        Style.SetBorderWidth(StrToFloatDef(BT.Replace('px', ''), 1))
       else if (BT = 'solid') or (BT = 'dashed') or (BT = 'dotted') or
               (BT = 'double') or (BT = 'groove') or (BT = 'ridge') or
               (BT = 'inset') or (BT = 'outset') then
         // border style — we only support solid rendering
       else
-        Style.BorderColor := ParseColor(BT);
+        Style.SetBorderColor(ParseColor(BT));
+    end;
+  end;
+  // Per-side border shorthands: border-top, border-right, border-bottom, border-left
+  if Decls.TryGetValue('border-top', Temp) and not ShouldSkip(Temp) then
+  begin
+    var BParts := Temp.Split([' ']);
+    for var BP in BParts do
+    begin
+      var BT := BP.Trim.ToLower;
+      if BT = 'none' then
+        Style.BorderWidths.Top := 0
+      else if (BT.EndsWith('px')) or (StrToFloatDef(BT, -1) >= 0) then
+        Style.BorderWidths.Top := StrToFloatDef(BT.Replace('px', ''), 1)
+      else if (BT = 'solid') or (BT = 'dashed') or (BT = 'dotted') or
+              (BT = 'double') or (BT = 'groove') or (BT = 'ridge') or
+              (BT = 'inset') or (BT = 'outset') then
+        // border style
+      else
+        Style.BorderColors[0] := ParseColor(BT);
+    end;
+  end;
+  if Decls.TryGetValue('border-right', Temp) and not ShouldSkip(Temp) then
+  begin
+    var BParts := Temp.Split([' ']);
+    for var BP in BParts do
+    begin
+      var BT := BP.Trim.ToLower;
+      if BT = 'none' then
+        Style.BorderWidths.Right := 0
+      else if (BT.EndsWith('px')) or (StrToFloatDef(BT, -1) >= 0) then
+        Style.BorderWidths.Right := StrToFloatDef(BT.Replace('px', ''), 1)
+      else if (BT = 'solid') or (BT = 'dashed') or (BT = 'dotted') or
+              (BT = 'double') or (BT = 'groove') or (BT = 'ridge') or
+              (BT = 'inset') or (BT = 'outset') then
+        // border style
+      else
+        Style.BorderColors[1] := ParseColor(BT);
+    end;
+  end;
+  if Decls.TryGetValue('border-bottom', Temp) and not ShouldSkip(Temp) then
+  begin
+    var BParts := Temp.Split([' ']);
+    for var BP in BParts do
+    begin
+      var BT := BP.Trim.ToLower;
+      if BT = 'none' then
+        Style.BorderWidths.Bottom := 0
+      else if (BT.EndsWith('px')) or (StrToFloatDef(BT, -1) >= 0) then
+        Style.BorderWidths.Bottom := StrToFloatDef(BT.Replace('px', ''), 1)
+      else if (BT = 'solid') or (BT = 'dashed') or (BT = 'dotted') or
+              (BT = 'double') or (BT = 'groove') or (BT = 'ridge') or
+              (BT = 'inset') or (BT = 'outset') then
+        // border style
+      else
+        Style.BorderColors[2] := ParseColor(BT);
+    end;
+  end;
+  if Decls.TryGetValue('border-left', Temp) and not ShouldSkip(Temp) then
+  begin
+    var BParts := Temp.Split([' ']);
+    for var BP in BParts do
+    begin
+      var BT := BP.Trim.ToLower;
+      if BT = 'none' then
+        Style.BorderWidths.Left := 0
+      else if (BT.EndsWith('px')) or (StrToFloatDef(BT, -1) >= 0) then
+        Style.BorderWidths.Left := StrToFloatDef(BT.Replace('px', ''), 1)
+      else if (BT = 'solid') or (BT = 'dashed') or (BT = 'dotted') or
+              (BT = 'double') or (BT = 'groove') or (BT = 'ridge') or
+              (BT = 'inset') or (BT = 'outset') then
+        // border style
+      else
+        Style.BorderColors[3] := ParseColor(BT);
     end;
   end;
   if Decls.TryGetValue('border-color', Temp) and not ShouldSkip(Temp) then
-    Style.BorderColor := ParseColor(Temp);
+    Style.SetBorderColor(ParseColor(Temp));
   if Decls.TryGetValue('border-width', Temp) and not ShouldSkip(Temp) then
-    Style.BorderWidth := ParseLength(Temp, Style.FontSize);
+    Style.SetBorderWidth(ParseLength(Temp, Style.FontSize));
   if Decls.TryGetValue('border-radius', Temp) and not ShouldSkip(Temp) then
     Style.BorderRadius := ParseLength(Temp, Style.FontSize);
   if Decls.TryGetValue('width', Temp) and not ShouldSkip(Temp) then
@@ -2260,6 +2384,47 @@ begin
 
   if Decls.TryGetValue('text-overflow', Temp) and not ShouldSkip(Temp) then
     Style.TextOverflow := Temp.ToLower;
+
+  // box-shadow: offsetX offsetY [blur [spread]] color [inset]
+  if Decls.TryGetValue('box-shadow', Temp) and not ShouldSkip(Temp) then
+  begin
+    var ShadowStr := Temp.Trim.ToLower;
+    if ShadowStr = 'none' then
+      Style.BoxShadow.Active := False
+    else
+    begin
+      Style.BoxShadow.Active := True;
+      Style.BoxShadow.Inset := ShadowStr.Contains('inset');
+      ShadowStr := ShadowStr.Replace('inset', '').Trim;
+      // Parse: values are space-separated lengths then a color
+      // Split and collect numeric values and the color
+      var SParts := ShadowStr.Split([' ']);
+      var Nums: TArray<Single>;
+      SetLength(Nums, 0);
+      Style.BoxShadow.Color := $40000000;  // default: semi-transparent black
+      for var SP in SParts do
+      begin
+        var ST := SP.Trim;
+        if ST = '' then Continue;
+        var PL := ParseLength(ST, Style.FontSize);
+        // ParseLength returns 0 for unknown strings, but also for "0px"
+        // Check if it looks numeric
+        if (ST.EndsWith('px')) or (ST.EndsWith('em')) or (ST.EndsWith('rem')) or
+           (ST = '0') or (StrToFloatDef(ST, Single.MaxValue) <> Single.MaxValue) then
+        begin
+          SetLength(Nums, Length(Nums) + 1);
+          Nums[High(Nums)] := PL;
+        end
+        else
+          Style.BoxShadow.Color := ParseColor(ST);
+      end;
+      // Assign numeric values: offsetX, offsetY, [blur, [spread]]
+      if Length(Nums) >= 1 then Style.BoxShadow.OffsetX := Nums[0];
+      if Length(Nums) >= 2 then Style.BoxShadow.OffsetY := Nums[1];
+      if Length(Nums) >= 3 then Style.BoxShadow.BlurRadius := Nums[2] else Style.BoxShadow.BlurRadius := 0;
+      if Length(Nums) >= 4 then Style.BoxShadow.SpreadRadius := Nums[3] else Style.BoxShadow.SpreadRadius := 0;
+    end;
+  end;
 end;
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -2295,24 +2460,24 @@ end;
 
 function TLayoutBox.MarginBoxWidth: Single;
 begin
-  Result := ResolveAutoMargin(Style.Margin.Left) + Style.BorderWidth + Style.Padding.Left +
-    ContentWidth + Style.Padding.Right + Style.BorderWidth + ResolveAutoMargin(Style.Margin.Right);
+  Result := ResolveAutoMargin(Style.Margin.Left) + Style.BorderWidths.Left + Style.Padding.Left +
+    ContentWidth + Style.Padding.Right + Style.BorderWidths.Right + ResolveAutoMargin(Style.Margin.Right);
 end;
 
 function TLayoutBox.MarginBoxHeight: Single;
 begin
-  Result := ResolveAutoMargin(Style.Margin.Top) + Style.BorderWidth + Style.Padding.Top +
-    ContentHeight + Style.Padding.Bottom + Style.BorderWidth + ResolveAutoMargin(Style.Margin.Bottom);
+  Result := ResolveAutoMargin(Style.Margin.Top) + Style.BorderWidths.Top + Style.Padding.Top +
+    ContentHeight + Style.Padding.Bottom + Style.BorderWidths.Bottom + ResolveAutoMargin(Style.Margin.Bottom);
 end;
 
 function TLayoutBox.ContentLeft: Single;
 begin
-  Result := ResolveAutoMargin(Style.Margin.Left) + Style.BorderWidth + Style.Padding.Left;
+  Result := ResolveAutoMargin(Style.Margin.Left) + Style.BorderWidths.Left + Style.Padding.Left;
 end;
 
 function TLayoutBox.ContentTop: Single;
 begin
-  Result := ResolveAutoMargin(Style.Margin.Top) + Style.BorderWidth + Style.Padding.Top;
+  Result := ResolveAutoMargin(Style.Margin.Top) + Style.BorderWidths.Top + Style.Padding.Top;
 end;
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -2660,7 +2825,7 @@ begin
 
   // Calculate content width
   ContentW := AvailWidth - MarginL - MarginR -
-    Box.Style.BorderWidth * 2 - Box.Style.Padding.Left - Box.Style.Padding.Right;
+    Box.Style.BorderWidths.Horz - Box.Style.Padding.Left - Box.Style.Padding.Right;
 
   // Resolve explicit width (may be percentage of available width)
   ExplW := Box.Style.ExplicitWidth;
@@ -2669,14 +2834,14 @@ begin
     // Percentage: resolve against available width
     ExplW := ResolvePercentage(ExplW, AvailWidth);
     // Percentage widths behave like border-box: value includes padding + border
-    ContentW := ExplW - Box.Style.BorderWidth * 2 -
+    ContentW := ExplW - Box.Style.BorderWidths.Horz -
       Box.Style.Padding.Left - Box.Style.Padding.Right;
   end
   else if ExplW > 0 then
   begin
     if SameText(Box.Style.BoxSizing, 'border-box') then
       // border-box: explicit width includes padding and border
-      ContentW := ExplW - Box.Style.BorderWidth * 2 -
+      ContentW := ExplW - Box.Style.BorderWidths.Horz -
         Box.Style.Padding.Left - Box.Style.Padding.Right
     else
       // content-box (default): explicit width IS the content width
@@ -2702,7 +2867,7 @@ begin
      (SameText(Box.Tag.TagName, 'input') or SameText(Box.Tag.TagName, 'button') or
       SameText(Box.Tag.TagName, 'textarea') or SameText(Box.Tag.TagName, 'select')) then
   begin
-    Box.Style.BorderWidth := 0;
+    Box.Style.SetBorderWidth(0);
     var InputType := '';
     if Assigned(Box.Tag) then
       InputType := Box.Tag.GetAttribute('type', 'text').ToLower;
@@ -2807,7 +2972,7 @@ begin
   if Box.Style.ExplicitHeight > 0 then
   begin
     if SameText(Box.Style.BoxSizing, 'border-box') then
-      Box.ContentHeight := Box.Style.ExplicitHeight - Box.Style.BorderWidth * 2 -
+      Box.ContentHeight := Box.Style.ExplicitHeight - Box.Style.BorderWidths.Vert -
         Box.Style.Padding.Top - Box.Style.Padding.Bottom
     else
       Box.ContentHeight := Box.Style.ExplicitHeight;
@@ -3127,7 +3292,7 @@ var
       var StartY := CursorY;
 
       // Advance cursor past left margin + border + padding before laying out children
-      CursorX := CursorX + Child.Style.Margin.Left + Child.Style.BorderWidth +
+      CursorX := CursorX + Child.Style.Margin.Left + Child.Style.BorderWidths.Left +
         Child.Style.Padding.Left;
 
       // Content origin in parent block coordinates
@@ -3139,7 +3304,7 @@ var
       var ContentEndX := CursorX;
 
       // Advance cursor past right padding + border + margin
-      CursorX := CursorX + Child.Style.Padding.Right + Child.Style.BorderWidth +
+      CursorX := CursorX + Child.Style.Padding.Right + Child.Style.BorderWidths.Right +
         Child.Style.Margin.Right;
 
       // Calculate content width — just the inner text portion
@@ -3147,7 +3312,7 @@ var
         Child.ContentWidth := ContentEndX - ContentOriginX
       else
         Child.ContentWidth := AvailWidth - Child.Style.Margin.Left - Child.Style.Margin.Right -
-          Child.Style.BorderWidth * 2 - Child.Style.Padding.Left - Child.Style.Padding.Right;
+          Child.Style.BorderWidths.Horz - Child.Style.Padding.Left - Child.Style.Padding.Right;
 
       // Use the inline container's own line height for its content height,
       // not the parent's LineH which may have grown from previous inline siblings.
@@ -3164,9 +3329,9 @@ var
       end;
 
       // Include full inline box height in line height
-      LineH := Max(LineH, Child.Style.Margin.Top + Child.Style.BorderWidth +
+      LineH := Max(LineH, Child.Style.Margin.Top + Child.Style.BorderWidths.Top +
         Child.Style.Padding.Top + Child.ContentHeight +
-        Child.Style.Padding.Bottom + Child.Style.BorderWidth + Child.Style.Margin.Bottom);
+        Child.Style.Padding.Bottom + Child.Style.BorderWidths.Bottom + Child.Style.Margin.Bottom);
     end;
   end;
 
@@ -3294,7 +3459,7 @@ var
   CursorY, RowH, CellW: Single;
   BorderW: Single;
 begin
-  BorderW := Box.Style.BorderWidth;
+  BorderW := Box.Style.BorderWidths.Top;
   Rows := TList<TLayoutBox>.Create;
   try
     // Collect all row boxes (flattening thead/tbody/tfoot)
@@ -3342,18 +3507,18 @@ begin
     // Calculate content width
     var TableContentW := AvailWidth - ResolveMargin(Box.Style.Margin.Left) -
       ResolveMargin(Box.Style.Margin.Right) -
-      Box.Style.BorderWidth * 2 - Box.Style.Padding.Left - Box.Style.Padding.Right;
+      Box.Style.BorderWidths.Horz - Box.Style.Padding.Left - Box.Style.Padding.Right;
     if IsPercentageValue(Box.Style.ExplicitWidth) then
     begin
       // Percentage width — resolved value includes padding + border
       TableContentW := ResolvePercentage(Box.Style.ExplicitWidth, AvailWidth) -
-        Box.Style.BorderWidth * 2 - Box.Style.Padding.Left - Box.Style.Padding.Right;
+        Box.Style.BorderWidths.Horz - Box.Style.Padding.Left - Box.Style.Padding.Right;
     end
     else if Box.Style.ExplicitWidth > 0 then
     begin
       if SameText(Box.Style.BoxSizing, 'border-box') then
         TableContentW := Box.Style.ExplicitWidth -
-          Box.Style.BorderWidth * 2 - Box.Style.Padding.Left - Box.Style.Padding.Right
+          Box.Style.BorderWidths.Horz - Box.Style.Padding.Left - Box.Style.Padding.Right
       else
         TableContentW := Box.Style.ExplicitWidth;
     end;
@@ -3476,7 +3641,7 @@ var
 begin
   ContentW := AvailWidth - ResolveMargin(Box.Style.Margin.Left) -
     ResolveMargin(Box.Style.Margin.Right) -
-    Box.Style.BorderWidth * 2 - Box.Style.Padding.Left - Box.Style.Padding.Right;
+    Box.Style.BorderWidths.Horz - Box.Style.Padding.Left - Box.Style.Padding.Right;
   if ContentW < 0 then ContentW := 0;
 
   // Leave space for bullet/number marker
@@ -4698,14 +4863,17 @@ begin
   begin
     var OpacityByte := Round(Box.Style.Opacity * 255);
     var BgRec := TAlphaColorRec(Box.Style.BackgroundColor);
-    var BrRec := TAlphaColorRec(Box.Style.BorderColor);
     if Box.Style.BackgroundColor <> TAlphaColors.Null then
     begin
       BgRec.A := (BgRec.A * OpacityByte) div 255;
       Box.Style.BackgroundColor := BgRec.Color;
     end;
-    BrRec.A := (BrRec.A * OpacityByte) div 255;
-    Box.Style.BorderColor := BrRec.Color;
+    for var BSide := 0 to 3 do
+    begin
+      var BrRec := TAlphaColorRec(Box.Style.BorderColors[BSide]);
+      BrRec.A := (BrRec.A * OpacityByte) div 255;
+      Box.Style.BorderColors[BSide] := BrRec.Color;
+    end;
   end;
 
   // Skip form control boxes — they are rendered as native FMX controls
@@ -4719,6 +4887,10 @@ begin
 
   // Viewport culling
   if (AbsY + Box.MarginBoxHeight < 0) or (AbsY > Height) then Exit;
+
+  // Box shadow (painted before background so it appears behind)
+  if Box.Style.BoxShadow.Active then
+    PaintBoxShadow(Canvas, Box, AbsX, AbsY);
 
   // Background
   PaintBackground(Canvas, Box, AbsX, AbsY);
@@ -4737,9 +4909,9 @@ begin
     Region.Rect := RectF(
       AbsX + ML,
       AbsY + MT,
-      AbsX + ML + Box.Style.BorderWidth * 2 +
+      AbsX + ML + Box.Style.BorderWidths.Horz +
         Box.Style.Padding.Left + Box.ContentWidth + Box.Style.Padding.Right,
-      AbsY + MT + Box.Style.BorderWidth * 2 +
+      AbsY + MT + Box.Style.BorderWidths.Vert +
         Box.Style.Padding.Top + Box.ContentHeight + Box.Style.Padding.Bottom);
     FClickableRegions.Add(Region);
   end;
@@ -4755,7 +4927,7 @@ begin
     lbkListItem:
       PaintListMarker(Canvas, Box, AbsX, AbsY);
     lbkTable:
-      if Box.Style.BorderWidth > 0 then
+      if Box.Style.BorderWidths.Any then
         PaintTableCellBorders(Canvas, Box, AbsX + Box.ContentLeft, AbsY + Box.ContentTop);
   end;
 
@@ -4826,6 +4998,80 @@ begin
   end;
 end;
 
+procedure TTina4HTMLRender.PaintBoxShadow(Canvas: TCanvas; Box: TLayoutBox; X, Y: Single);
+var
+  R: TRectF;
+  ML, MT: Single;
+  Shadow: TBoxShadow;
+  Layers: Integer;
+  LayerAlpha: Byte;
+  ShadowColor: TAlphaColorRec;
+begin
+  Shadow := Box.Style.BoxShadow;
+  if not Shadow.Active then Exit;
+  if Shadow.Inset then Exit;  // inset shadows not supported yet
+
+  ML := ResolveAutoMargin(Box.Style.Margin.Left);
+  MT := ResolveAutoMargin(Box.Style.Margin.Top);
+
+  // Base rect (same as border box)
+  R := RectF(
+    X + ML + Shadow.OffsetX,
+    Y + MT + Shadow.OffsetY,
+    X + ML + Box.Style.BorderWidths.Horz +
+      Box.Style.Padding.Left + Box.ContentWidth + Box.Style.Padding.Right + Shadow.OffsetX,
+    Y + MT + Box.Style.BorderWidths.Vert +
+      Box.Style.Padding.Top + Box.ContentHeight + Box.Style.Padding.Bottom + Shadow.OffsetY
+  );
+
+  // Apply spread (expand the shadow rect)
+  if Shadow.SpreadRadius <> 0 then
+    R.Inflate(Shadow.SpreadRadius, Shadow.SpreadRadius);
+
+  ShadowColor := TAlphaColorRec(Shadow.Color);
+  Canvas.Fill.Kind := TBrushKind.Solid;
+
+  if Shadow.BlurRadius <= 0 then
+  begin
+    // No blur — paint a single solid rect
+    Canvas.Fill.Color := Shadow.Color;
+    if Box.Style.BorderRadius > 0 then
+      Canvas.FillRect(R, Box.Style.BorderRadius, Box.Style.BorderRadius, AllCorners, 1.0)
+    else
+      Canvas.FillRect(R, 1.0);
+  end
+  else
+  begin
+    // Simulate blur with multiple expanding layers of decreasing opacity
+    Layers := Round(Shadow.BlurRadius);
+    if Layers < 1 then Layers := 1;
+    if Layers > 20 then Layers := 20;  // cap for performance
+    for var L := Layers downto 0 do
+    begin
+      var Expand := Shadow.BlurRadius * (L / Layers);
+      var LayerRect := R;
+      LayerRect.Inflate(Expand, Expand);
+      // Alpha decreases for outer layers (gaussian approximation)
+      var Frac := 1.0 - (L / (Layers + 1));
+      LayerAlpha := Round(ShadowColor.A * Frac / (Layers + 1));
+      if LayerAlpha = 0 then Continue;
+      var C: TAlphaColorRec;
+      C.R := ShadowColor.R;
+      C.G := ShadowColor.G;
+      C.B := ShadowColor.B;
+      C.A := LayerAlpha;
+      Canvas.Fill.Color := C.Color;
+      var Rad := Box.Style.BorderRadius;
+      if Rad > 0 then
+        Rad := Rad + Expand;
+      if Rad > 0 then
+        Canvas.FillRect(LayerRect, Rad, Rad, AllCorners, 1.0)
+      else
+        Canvas.FillRect(LayerRect, 1.0);
+    end;
+  end;
+end;
+
 procedure TTina4HTMLRender.PaintBackground(Canvas: TCanvas; Box: TLayoutBox; X, Y: Single);
 var
   R: TRectF;
@@ -4845,9 +5091,9 @@ begin
   R := RectF(
     X + ML,
     Y + MT,
-    X + ML + Box.Style.BorderWidth * 2 +
+    X + ML + Box.Style.BorderWidths.Horz +
       Box.Style.Padding.Left + Box.ContentWidth + Box.Style.Padding.Right,
-    Y + MT + Box.Style.BorderWidth * 2 +
+    Y + MT + Box.Style.BorderWidths.Vert +
       Box.Style.Padding.Top + Box.ContentHeight + Box.Style.Padding.Bottom
   );
 
@@ -4865,7 +5111,7 @@ var
   R: TRectF;
   ML, MT: Single;
 begin
-  if Box.Style.BorderWidth <= 0 then Exit;
+  if not Box.Style.BorderWidths.Any then Exit;
 
   ML := ResolveAutoMargin(Box.Style.Margin.Left);
   MT := ResolveAutoMargin(Box.Style.Margin.Top);
@@ -4875,11 +5121,11 @@ begin
   begin
     var LX := X + ML;
     var TY := Y + MT;
-    var BY := TY + Box.Style.BorderWidth * 2 + Box.Style.Padding.Top +
+    var BY := TY + Box.Style.BorderWidths.Vert + Box.Style.Padding.Top +
       Box.ContentHeight + Box.Style.Padding.Bottom;
     Canvas.Stroke.Kind := TBrushKind.Solid;
-    Canvas.Stroke.Color := Box.Style.BorderColor;
-    Canvas.Stroke.Thickness := Box.Style.BorderWidth;
+    Canvas.Stroke.Color := Box.Style.BorderColors[3];
+    Canvas.Stroke.Thickness := Box.Style.BorderWidths.Left;
     Canvas.DrawLine(PointF(LX, TY), PointF(LX, BY), 1.0);
     Exit;
   end;
@@ -4894,23 +5140,62 @@ begin
       SameText(Box.Tag.TagName, 'textarea') or SameText(Box.Tag.TagName, 'select')) then
     Exit;
 
-  // General border
-  R := RectF(
-    X + ML + Box.Style.BorderWidth / 2,
-    Y + MT + Box.Style.BorderWidth / 2,
-    X + ML + Box.Style.BorderWidth * 2 +
-      Box.Style.Padding.Left + Box.ContentWidth + Box.Style.Padding.Right - Box.Style.BorderWidth / 2,
-    Y + MT + Box.Style.BorderWidth * 2 +
-      Box.Style.Padding.Top + Box.ContentHeight + Box.Style.Padding.Bottom - Box.Style.BorderWidth / 2
-  );
-  Canvas.Stroke.Kind := TBrushKind.Solid;
-  Canvas.Stroke.Color := Box.Style.BorderColor;
-  Canvas.Stroke.Thickness := Box.Style.BorderWidth;
-  if Box.Style.BorderRadius > 0 then
-    Canvas.DrawRect(R, Box.Style.BorderRadius, Box.Style.BorderRadius,
-      AllCorners, 1.0)
+  // General border — draw per-side
+  var BW := Box.Style.BorderWidths;
+  var AllSame := (BW.Top = BW.Right) and (BW.Right = BW.Bottom) and (BW.Bottom = BW.Left);
+
+  if AllSame and (BW.Top > 0) and (Box.Style.BorderRadius > 0) then
+  begin
+    // Uniform border with radius — use DrawRect for rounded corners
+    R := RectF(
+      X + ML + BW.Left / 2,
+      Y + MT + BW.Top / 2,
+      X + ML + BW.Horz + Box.Style.Padding.Left + Box.ContentWidth + Box.Style.Padding.Right - BW.Right / 2,
+      Y + MT + BW.Vert + Box.Style.Padding.Top + Box.ContentHeight + Box.Style.Padding.Bottom - BW.Bottom / 2
+    );
+    Canvas.Stroke.Kind := TBrushKind.Solid;
+    Canvas.Stroke.Color := Box.Style.BorderColors[0];
+    Canvas.Stroke.Thickness := BW.Top;
+    Canvas.DrawRect(R, Box.Style.BorderRadius, Box.Style.BorderRadius, AllCorners, 1.0);
+  end
   else
-    Canvas.DrawRect(R, 1.0);
+  begin
+    // Per-side borders — draw individual lines
+    var LX := X + ML;
+    var TY := Y + MT;
+    var RX := LX + BW.Horz + Box.Style.Padding.Left + Box.ContentWidth + Box.Style.Padding.Right;
+    var BY := TY + BW.Vert + Box.Style.Padding.Top + Box.ContentHeight + Box.Style.Padding.Bottom;
+    Canvas.Stroke.Kind := TBrushKind.Solid;
+
+    // Top border
+    if BW.Top > 0 then
+    begin
+      Canvas.Stroke.Color := Box.Style.BorderColors[0];
+      Canvas.Stroke.Thickness := BW.Top;
+      Canvas.DrawLine(PointF(LX, TY + BW.Top / 2), PointF(RX, TY + BW.Top / 2), 1.0);
+    end;
+    // Right border
+    if BW.Right > 0 then
+    begin
+      Canvas.Stroke.Color := Box.Style.BorderColors[1];
+      Canvas.Stroke.Thickness := BW.Right;
+      Canvas.DrawLine(PointF(RX - BW.Right / 2, TY), PointF(RX - BW.Right / 2, BY), 1.0);
+    end;
+    // Bottom border
+    if BW.Bottom > 0 then
+    begin
+      Canvas.Stroke.Color := Box.Style.BorderColors[2];
+      Canvas.Stroke.Thickness := BW.Bottom;
+      Canvas.DrawLine(PointF(LX, BY - BW.Bottom / 2), PointF(RX, BY - BW.Bottom / 2), 1.0);
+    end;
+    // Left border
+    if BW.Left > 0 then
+    begin
+      Canvas.Stroke.Color := Box.Style.BorderColors[3];
+      Canvas.Stroke.Thickness := BW.Left;
+      Canvas.DrawLine(PointF(LX + BW.Left / 2, TY), PointF(LX + BW.Left / 2, BY), 1.0);
+    end;
+  end;
 end;
 
 procedure TTina4HTMLRender.PaintText(Canvas: TCanvas; Box: TLayoutBox; X, Y: Single);
@@ -5171,7 +5456,7 @@ var
   BW: Single;
 begin
   // Draw collapsed grid borders: single lines shared between adjacent cells.
-  BW := Box.Style.BorderWidth;
+  BW := Box.Style.BorderWidths.Top;
   Canvas.Stroke.Kind := TBrushKind.Solid;
   Canvas.Stroke.Color := Box.Style.BorderColor;
   Canvas.Stroke.Thickness := BW;
@@ -5574,9 +5859,9 @@ procedure TTina4HTMLRender.MouseUp(Button: TMouseButton; Shift: TShiftState;
     begin
       Left := AbsX + ResolveAutoMargin(Box.Style.Margin.Left);
       Top := AbsY + ResolveAutoMargin(Box.Style.Margin.Top);
-      Right := Left + Box.Style.BorderWidth * 2 +
+      Right := Left + Box.Style.BorderWidths.Horz +
         Box.Style.Padding.Left + Box.ContentWidth + Box.Style.Padding.Right;
-      Bottom := Top + Box.Style.BorderWidth * 2 +
+      Bottom := Top + Box.Style.BorderWidths.Vert +
         Box.Style.Padding.Top + Box.ContentHeight + Box.Style.Padding.Bottom;
       if (HitX >= Left) and (HitX <= Right) and
          (HitY >= Top) and (HitY <= Bottom) then

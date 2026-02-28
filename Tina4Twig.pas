@@ -872,10 +872,22 @@ begin
               for AArgToken in ArgTokens do
               begin
                 ArgToken := Trim(AArgToken);
-                if ((ArgToken.StartsWith('"') and ArgToken.EndsWith('"')) or
-                    (ArgToken.StartsWith('''') and ArgToken.EndsWith(''''))) and (Length(ArgToken) >= 2) then
-                  ArgToken := Copy(ArgToken, 2, Length(ArgToken) - 2);
-                ArgList.Add(ArgToken);
+                if Pos('~', ArgToken) > 0 then
+                begin
+                  // Expression with concatenation — evaluate it
+                  var ArgValue := GetExpressionValue(ArgToken, Context);
+                  if ArgValue.Kind in [tkString, tkUString] then
+                    ArgList.Add(ArgValue.AsString)
+                  else
+                    ArgList.Add(ArgValue.ToString);
+                end
+                else
+                begin
+                  if ((ArgToken.StartsWith('"') and ArgToken.EndsWith('"')) or
+                      (ArgToken.StartsWith('''') and ArgToken.EndsWith(''''))) and (Length(ArgToken) >= 2) then
+                    ArgToken := Copy(ArgToken, 2, Length(ArgToken) - 2);
+                  ArgList.Add(ArgToken);
+                end;
               end;
               Args := ArgList.ToArray;
             finally

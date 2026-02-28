@@ -872,10 +872,10 @@ begin
               for AArgToken in ArgTokens do
               begin
                 ArgToken := Trim(AArgToken);
-                if Pos('~', ArgToken) > 0 then
+                if (Pos('~', ArgToken) > 0) and not ArgToken.StartsWith('[') and not ArgToken.StartsWith('{') then
                 begin
                   // Expression with concatenation — evaluate it
-                  var ArgValue := GetExpressionValue(ArgToken, Context);
+                  var ArgValue := EvaluateExpression(ArgToken, Context);
                   if ArgValue.Kind in [tkString, tkUString] then
                     ArgList.Add(ArgValue.AsString)
                   else

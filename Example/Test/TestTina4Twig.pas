@@ -285,10 +285,13 @@ procedure TestTTina4Twig.TestSetVariableArrayWithMerge;
 var
   ReturnValue, TemplateOrContent: String;
 begin
-  FTina4Twig.SetDebug();
+  FTina4Twig.SetVariable('start_date', '2026-01-15');
   TemplateOrContent := '{% set days_total = (1000000 / 86400) | round(0, ''ceil'') %}{% set date_headers = [] %}{% for i in 0..days_total %}{% set date_headers = date_headers|merge([start_date|date_modify(''+'' ~ i ~ '' days'')|date(''Y-m-d'')]) %}{% endfor %}{{dump(date_headers)}}';
   ReturnValue := FTina4Twig.Render(TemplateOrContent);
-  Check(ReturnValue = '-', TemplateOrContent + ' - Should be , got ' + ReturnValue);
+  Check(Pos('array(13)', ReturnValue) > 0, 'Expected 13 elements, got ' + ReturnValue);
+  Check(Pos('"2026-01-15"', ReturnValue) > 0, 'Expected first date 2026-01-15, got ' + ReturnValue);
+  Check(Pos('"2026-01-27"', ReturnValue) > 0, 'Expected last date 2026-01-27, got ' + ReturnValue);
+  Check(Pos('string(1) "0"', ReturnValue) = 0, 'Should not contain "0" date values, got ' + ReturnValue);
 end;
 
 procedure TestTTina4Twig.TestSetVariableDateFormat;

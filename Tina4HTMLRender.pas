@@ -353,6 +353,7 @@ type
     function ResolveOnClickParam(const Expr: string; ClickedTag: THTMLTag): string;
     procedure FireOnClick(ClickedTag: THTMLTag);
     procedure PaintBox(Canvas: TCanvas; Box: TLayoutBox; OffX, OffY: Single);
+    procedure PaintBoxShadow(Canvas: TCanvas; Box: TLayoutBox; X, Y: Single);
     procedure PaintBackground(Canvas: TCanvas; Box: TLayoutBox; X, Y: Single);
     procedure PaintBorder(Canvas: TCanvas; Box: TLayoutBox; X, Y: Single);
     procedure PaintText(Canvas: TCanvas; Box: TLayoutBox; X, Y: Single);
@@ -1671,6 +1672,7 @@ begin
   Result.WordBreak := 'normal';
   Result.OverflowWrap := 'normal';
   Result.TextOverflow := 'clip';
+  Result.BoxShadow.Active := False;
 end;
 
 class function TComputedStyle.ParseColor(const S: string): TAlphaColor;
@@ -2382,6 +2384,47 @@ begin
 
   if Decls.TryGetValue('text-overflow', Temp) and not ShouldSkip(Temp) then
     Style.TextOverflow := Temp.ToLower;
+
+  // box-shadow: offsetX offsetY [blur [spread]] color [inset]
+  if Decls.TryGetValue('box-shadow', Temp) and not ShouldSkip(Temp) then
+  begin
+    var ShadowStr := Temp.Trim.ToLower;
+    if ShadowStr = 'none' then
+      Style.BoxShadow.Active := False
+    else
+    begin
+      Style.BoxShadow.Active := True;
+      Style.BoxShadow.Inset := ShadowStr.Contains('inset');
+      ShadowStr := ShadowStr.Replace('inset', '').Trim;
+      // Parse: values are space-separated lengths then a color
+      // Split and collect numeric values and the color
+      var SParts := ShadowStr.Split([' ']);
+      var Nums: TArray<Single>;
+      SetLength(Nums, 0);
+      Style.BoxShadow.Color := $40000000;  // default: semi-transparent black
+      for var SP in SParts do
+      begin
+        var ST := SP.Trim;
+        if ST = '' then Continue;
+        var PL := ParseLength(ST, Style.FontSize);
+        // ParseLength returns 0 for unknown strings, but also for "0px"
+        // Check if it looks numeric
+        if (ST.EndsWith('px')) or (ST.EndsWith('em')) or (ST.EndsWith('rem')) or
+           (ST = '0') or (StrToFloatDef(ST, Single.MaxValue) <> Single.MaxValue) then
+        begin
+          SetLength(Nums, Length(Nums) + 1);
+          Nums[High(Nums)] := PL;
+        end
+        else
+          Style.BoxShadow.Color := ParseColor(ST);
+      end;
+      // Assign numeric values: offsetX, offsetY, [blur, [spread]]
+      if Length(Nums) >= 1 then Style.BoxShadow.OffsetX := Nums[0];
+      if Length(Nums) >= 2 then Style.BoxShadow.OffsetY := Nums[1];
+      if Length(Nums) >= 3 then Style.BoxShadow.BlurRadius := Nums[2] else Style.BoxShadow.BlurRadius := 0;
+      if Length(Nums) >= 4 then Style.BoxShadow.SpreadRadius := Nums[3] else Style.BoxShadow.SpreadRadius := 0;
+    end;
+  end;
 end;
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -4845,6 +4888,10 @@ begin
   // Viewport culling
   if (AbsY + Box.MarginBoxHeight < 0) or (AbsY > Height) then Exit;
 
+  // Box shadow (painted before background so it appears behind)
+  if Box.Style.BoxShadow.Active then
+    PaintBoxShadow(Canvas, Box, AbsX, AbsY);
+
   // Background
   PaintBackground(Canvas, Box, AbsX, AbsY);
 
@@ -4948,6 +4995,80 @@ begin
   begin
     for var Child in Box.Children do
       PaintBox(Canvas, Child, CX, CY);
+  end;
+end;
+
+procedure TTina4HTMLRender.PaintBoxShadow(Canvas: TCanvas; Box: TLayoutBox; X, Y: Single);
+var
+  R: TRectF;
+  ML, MT: Single;
+  Shadow: TBoxShadow;
+  Layers: Integer;
+  LayerAlpha: Byte;
+  ShadowColor: TAlphaColorRec;
+begin
+  Shadow := Box.Style.BoxShadow;
+  if not Shadow.Active then Exit;
+  if Shadow.Inset then Exit;  // inset shadows not supported yet
+
+  ML := ResolveAutoMargin(Box.Style.Margin.Left);
+  MT := ResolveAutoMargin(Box.Style.Margin.Top);
+
+  // Base rect (same as border box)
+  R := RectF(
+    X + ML + Shadow.OffsetX,
+    Y + MT + Shadow.OffsetY,
+    X + ML + Box.Style.BorderWidths.Horz +
+      Box.Style.Padding.Left + Box.ContentWidth + Box.Style.Padding.Right + Shadow.OffsetX,
+    Y + MT + Box.Style.BorderWidths.Vert +
+      Box.Style.Padding.Top + Box.ContentHeight + Box.Style.Padding.Bottom + Shadow.OffsetY
+  );
+
+  // Apply spread (expand the shadow rect)
+  if Shadow.SpreadRadius <> 0 then
+    R.Inflate(Shadow.SpreadRadius, Shadow.SpreadRadius);
+
+  ShadowColor := TAlphaColorRec(Shadow.Color);
+  Canvas.Fill.Kind := TBrushKind.Solid;
+
+  if Shadow.BlurRadius <= 0 then
+  begin
+    // No blur — paint a single solid rect
+    Canvas.Fill.Color := Shadow.Color;
+    if Box.Style.BorderRadius > 0 then
+      Canvas.FillRect(R, Box.Style.BorderRadius, Box.Style.BorderRadius, AllCorners, 1.0)
+    else
+      Canvas.FillRect(R, 1.0);
+  end
+  else
+  begin
+    // Simulate blur with multiple expanding layers of decreasing opacity
+    Layers := Round(Shadow.BlurRadius);
+    if Layers < 1 then Layers := 1;
+    if Layers > 20 then Layers := 20;  // cap for performance
+    for var L := Layers downto 0 do
+    begin
+      var Expand := Shadow.BlurRadius * (L / Layers);
+      var LayerRect := R;
+      LayerRect.Inflate(Expand, Expand);
+      // Alpha decreases for outer layers (gaussian approximation)
+      var Frac := 1.0 - (L / (Layers + 1));
+      LayerAlpha := Round(ShadowColor.A * Frac / (Layers + 1));
+      if LayerAlpha = 0 then Continue;
+      var C: TAlphaColorRec;
+      C.R := ShadowColor.R;
+      C.G := ShadowColor.G;
+      C.B := ShadowColor.B;
+      C.A := LayerAlpha;
+      Canvas.Fill.Color := C.Color;
+      var Rad := Box.Style.BorderRadius;
+      if Rad > 0 then
+        Rad := Rad + Expand;
+      if Rad > 0 then
+        Canvas.FillRect(LayerRect, Rad, Rad, AllCorners, 1.0)
+      else
+        Canvas.FillRect(LayerRect, 1.0);
+    end;
   end;
 end;
 

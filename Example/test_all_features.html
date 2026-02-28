@@ -540,10 +540,94 @@ function hello() {
 </div>
 
 <!-- ============================================================ -->
+<h2>25. CSS box-shadow</h2>
+<!-- ============================================================ -->
+<div class="section">
+  <p><b>Simple shadow:</b></p>
+  <div style="background-color: white; padding: 16px; margin-bottom: 12px; border-radius: 6px; box-shadow: 2px 2px 8px rgba(0,0,0,0.3);">
+    A card with a subtle drop shadow (2px 2px 8px).
+  </div>
+
+  <p><b>Larger, softer shadow:</b></p>
+  <div style="background-color: white; padding: 16px; margin-bottom: 12px; border-radius: 8px; box-shadow: 0px 4px 16px rgba(0,0,0,0.15);">
+    Softer elevation shadow (0px 4px 16px).
+  </div>
+
+  <p><b>Colored shadow:</b></p>
+  <div style="background-color: #0d6efd; color: white; padding: 12px; margin-bottom: 12px; border-radius: 6px; box-shadow: 0px 4px 12px rgba(13,110,253,0.4);">
+    Blue button-like element with matching colored shadow.
+  </div>
+
+  <p><b>Hard shadow (no blur):</b></p>
+  <div style="background-color: #fff3cd; padding: 12px; margin-bottom: 12px; border: 1px solid #ffc107; box-shadow: 4px 4px 0px #ffc107;">
+    Hard offset shadow with 0 blur radius.
+  </div>
+
+  <p><b>Shadow with spread:</b></p>
+  <div style="background-color: white; padding: 12px; margin-bottom: 12px; border-radius: 4px; box-shadow: 0px 0px 8px 4px rgba(0,0,0,0.2);">
+    Shadow with 4px spread (larger shadow area).
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<h2>26. Per-side borders</h2>
+<!-- ============================================================ -->
+<div class="section">
+  <p><b>border-bottom only:</b></p>
+  <div style="padding: 8px; margin-bottom: 8px; border-bottom: 2px solid #0f3460;">
+    This element has only a bottom border.
+  </div>
+
+  <p><b>border-left only (like a highlight bar):</b></p>
+  <div style="padding: 8px 8px 8px 12px; margin-bottom: 8px; border-left: 4px solid #198754; background-color: #e8f5e9;">
+    Left border accent bar — commonly used for callouts.
+  </div>
+
+  <p><b>border-top and border-bottom:</b></p>
+  <div style="padding: 8px; margin-bottom: 8px; border-top: 1px solid #dee2e6; border-bottom: 1px solid #dee2e6;">
+    Top and bottom borders only — like a list separator.
+  </div>
+
+  <p><b>Mixed border widths and colors:</b></p>
+  <div style="padding: 8px; margin-bottom: 8px; border-top: 3px solid #dc3545; border-right: 1px solid #ffc107; border-bottom: 3px solid #198754; border-left: 1px solid #0d6efd;">
+    Each side has a different width and color.
+  </div>
+
+  <p><b>border-left with border-bottom:</b></p>
+  <div style="padding: 8px; margin-bottom: 8px; border-left: 3px solid #6f42c1; border-bottom: 1px solid #dee2e6; background-color: #f8f9fa;">
+    Combined left accent bar with a subtle bottom border.
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<h2>27. Combined effects</h2>
+<!-- ============================================================ -->
+<div class="section">
+  <p><b>Card with shadow, rounded corners, and border:</b></p>
+  <div style="background-color: white; padding: 16px; margin-bottom: 12px; border: 1px solid #dee2e6; border-radius: 8px; box-shadow: 0px 2px 8px rgba(0,0,0,0.1);">
+    <b>Card Title</b>
+    <p>This card combines border, border-radius, background, and box-shadow for a polished look.</p>
+  </div>
+
+  <p><b>Alert with left accent, shadow, and opacity:</b></p>
+  <div style="background-color: #cce5ff; padding: 12px 12px 12px 16px; margin-bottom: 12px; border-left: 4px solid #004085; border-radius: 4px; box-shadow: 0px 1px 4px rgba(0,0,0,0.1);">
+    <b>Info:</b> This alert has a left accent border, rounded corners, and a subtle shadow.
+  </div>
+
+  <p><b>Nested shadow cards:</b></p>
+  <div style="background-color: #f8f9fa; padding: 12px; border-radius: 6px; box-shadow: 0px 2px 12px rgba(0,0,0,0.15);">
+    <b>Outer card</b>
+    <div style="background-color: white; padding: 10px; margin-top: 8px; border-radius: 4px; box-shadow: 0px 1px 4px rgba(0,0,0,0.1);">
+      Inner nested card with its own shadow.
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================ -->
 <h2>Summary</h2>
 <!-- ============================================================ -->
 <div class="section">
-  <p>This page tests <b>24 feature categories</b> of the TTina4HTMLRender engine:</p>
+  <p>This page tests <b>27 feature categories</b> of the TTina4HTMLRender engine:</p>
   <ol>
     <li>Headings (h1-h6)</li>
     <li>Text formatting (b, i, u, del, s, a, mark, small, sub, sup, br)</li>
@@ -569,6 +653,9 @@ function hello() {
     <li>Mixed content and special characters</li>
     <li>Display modes (inline-block, none)</li>
     <li>Horizontal rules</li>
+    <li>CSS box-shadow (drop shadows, blur, spread, colored)</li>
+    <li>Per-side borders (border-top, border-right, border-bottom, border-left)</li>
+    <li>Combined effects (cards, alerts, nested shadows)</li>
   </ol>
 </div>
 

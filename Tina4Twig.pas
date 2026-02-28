@@ -14,6 +14,11 @@ type
   TFunctionFunc = reference to function(const Args: TArray<String>; const Context: TDictionary<String, TValue>): String;
   TMacroFunc = reference to function(const MacroName: String; const Args: TArray<String>; const MacroContext: TDictionary<String, TValue>): String;
 
+  /// <summary>
+  /// Twig-compatible template engine. Supports {{ variable }}, {% if %}, {% for %},
+  /// {% include %}, {% extends %}, {% block %}, {% macro %}, filters (|upper, |lower,
+  /// |length, |default, etc.), and functions (range(), dump(), etc.).
+  /// </summary>
   TTina4Twig = class(TObject)
   private
     FDebug: Boolean;
@@ -53,11 +58,32 @@ type
     procedure RegisterDefaultFilters;
     procedure RegisterDefaultFunctions;
   public
+    /// <summary>
+    /// Creates a new Twig engine instance.
+    /// </summary>
+    /// <param name="TemplatePath">Base directory for {% include %} and {% extends %} file resolution. Empty string disables file loading.</param>
     constructor Create(const TemplatePath: String = '');
+    /// <summary>Frees the engine and all internal dictionaries.</summary>
     destructor Destroy; override;
+    /// <summary>
+    /// Renders a Twig template string or file. If TemplatePath is set and the
+    /// value matches a filename, loads from disk; otherwise treats as inline content.
+    /// </summary>
+    /// <param name="TemplateOrContent">A template filename or inline Twig template string.</param>
+    /// <param name="Variables">Optional additional variables merged into the rendering context.</param>
+    /// <returns>The rendered HTML/text output.</returns>
     function Render(const TemplateOrContent: String; Variables: TStringDict = nil): String;
+    /// <summary>
+    /// Sets a variable in the rendering context. Available as {{ AName }} in templates.
+    /// </summary>
+    /// <param name="AName">Variable name.</param>
+    /// <param name="AValue">Variable value (supports string, integer, boolean, arrays, etc.).</param>
     procedure SetVariable(AName: String; AValue: TValue);
+    /// <summary>Returns the current value of a context variable, or TValue.Empty if not found.</summary>
+    /// <param name="AName">Variable name to look up.</param>
     function GetVariable(AName: String): TValue;
+    /// <summary>Enables or disables debug output during template rendering.</summary>
+    /// <param name="Value">True to enable debug output, False to disable.</param>
     procedure SetDebug(Value: Boolean=True);
   end;
 

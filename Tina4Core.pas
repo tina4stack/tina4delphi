@@ -58,40 +58,65 @@ type
   TTina4AddRecordEvent = procedure (Sender: TObject; var MemTable: TFDMemTable) of object;
 
 
+  /// <summary>Returns a new GUID string without surrounding braces.</summary>
   function GetGUID : String;
+  /// <summary>Checks whether a Variant value represents a date. Supports ISO 8601, YYYY-MM-DD, and MM/DD/YYYY formats.</summary>
   function IsDate(const AValue: Variant): Boolean;
+  /// <summary>Converts a snake_case field name to camelCase (e.g. 'first_name' to 'firstName').</summary>
   function CamelCase(FieldName: String): String;
+  /// <summary>Converts a camelCase field name to snake_case (e.g. 'firstName' to 'first_name').</summary>
   function SnakeCase(FieldName: String): String;
+  /// <summary>Decodes a Base64-encoded string to plain UTF-8 text.</summary>
   function DecodeBase64(const Base64String: String): String;
   {$IFNDEF LINUX}
+  /// <summary>Encodes an FMX TBitmap to a Base64 string, optionally resizing first.</summary>
   function BitmapToBase64EncodedString(Bitmap: FMX.Graphics.TBitmap; Resize: Boolean = True; Width: Integer = 256; Height: Integer = 256): String;
   {$ENDIF}
+  /// <summary>Reads a file from disk and returns its content as a Base64-encoded string.</summary>
   function FileToBase64(const FilePath: string): string;
   {$IFDEF SKIA}
+  /// <summary>Encodes an FMX TBitmap to a WebP Base64 string using Skia.</summary>
   function BitmapToSkiaWepPEncodedString(Bitmap: FMX.Graphics.TBitmap; Quality: Integer=80) : String;
   {$ENDIF}
+  /// <summary>Executes a SQL query via TFDConnection and returns the results as a TJSONObject. Field names are converted to camelCase. Caller must free the result.</summary>
   function GetJSONFromDB(Connection: TFDConnection; SQL: String;
      Params: TFDParams = nil; DataSetName: String = 'records'): TJSONObject;
+  /// <summary>Converts all rows in a TFDMemTable to a TJSONObject with camelCase field names. Caller must free the result.</summary>
   function GetJSONFromTable(var Table: TFDMemTable; DataSetName: String = 'records'; IgnoreFields: String = ''; IgnoreBlanks: Boolean = False): TJSONObject; overload;
+  /// <summary>Converts all rows in a TFDTable to a TJSONObject with camelCase field names. Caller must free the result.</summary>
   function GetJSONFromTable(Table: TFDTable; DataSetName: String = 'records'; IgnoreFields: String = ''; IgnoreBlanks: Boolean = False): TJSONObject; overload;
+  /// <summary>Sends an HTTP request and returns the raw response as TBytes. Supports GET, POST, PATCH, PUT, DELETE with auth, headers, and timeouts.</summary>
   function SendHttpRequest(var StatusCode: Integer; BaseURL: String; EndPoint: String = ''; QueryParams: String = ''; Body: String=''; ContentType: String = 'application/json';
     ContentEncoding : String = 'utf-8'; Username:String = ''; Password: String = ''; CustomHeaders: TURLHeaders = nil; UserAgent: String = 'Tina4Delphi'; RequestType: TTina4RequestType = Get;
     ReadTimeOut: Integer = 10000; ConnectTimeOut: Integer = 5000; RequestContentType: String = ''): TBytes;
+  /// <summary>Sends a multipart/form-data POST request for file uploads with optional form fields.</summary>
   function SendMultipartFormData(var StatusCode: Integer;  const BaseURL, EndPoint: string;  const FormFields: array of string; const Files: array of string;  QueryParams: string = '';  Username: string = '';  Password: string = '';
       CustomHeaders: TURLHeaders = nil; UserAgent: string = 'Tina4Delphi';  ReadTimeout: Integer = 30000; ConnectTimeout: Integer = 10000 ): TBytes;
+  /// <summary>Parses a JSON string into a TJSONObject. Returns nil on failure. Caller must free the result.</summary>
   function StrToJSONObject(JSON:String): TJSONObject;
+  /// <summary>Parses a JSON string into a TJSONValue. Returns nil on failure. Caller must free the result.</summary>
   function StrToJSONValue(JSON:String): TJSONValue;
+  /// <summary>Parses a TBytes buffer into a TJSONObject. Returns nil on failure. Caller must free the result.</summary>
   function BytesToJSONObject(JSON:TBytes): TJSONObject;
+  /// <summary>Parses a JSON string into a TJSONArray. Returns nil on failure. Caller must free the result.</summary>
   function StrToJSONArray(JSON:String): TJSONArray;
+  /// <summary>Strips surrounding quotes from a JSON field name string.</summary>
   function GetJSONFieldName(FieldName: String) : String;
+  /// <summary>Converts a TDateTime to an ISO 8601 string suitable for JSON.</summary>
   function GetJSONDate(const ADate: TDateTime) : String;
+  /// <summary>Converts an ISO 8601 date string from JSON back to a TDateTime.</summary>
   function JSONDateToDateTime(const ADateString: String) : TDateTime;
+  /// <summary>Creates field definitions on a TFDMemTable based on a TJSONObject structure. Nested objects become ftMemo fields.</summary>
   procedure GetFieldDefsFromJSONObject(JSONObject: TJSONObject; var MemTable: TFDMemTable; TransformToSnakeCase: Boolean);
+  /// <summary>Parses JSON and populates a TFDMemTable. Supports Clear (replace all) and Sync (upsert by IndexFieldNames) modes.</summary>
   procedure PopulateMemTableFromJSON(var MemTable: TFDMemTable; DataKey: String; JSON: String; IndexedFieldNames: String = ''; SyncMode: TTina4RestSyncMode = Clear; Component: TComponent = nil; TransformFieldNamesToSnakeCase: Boolean = False);
+  /// <summary>Inserts or updates rows in a database table from JSON using a primary key for upsert logic. Returns a TJSONObject of affected rows.</summary>
   function PopulateTableFromJSON(Connection: TFDConnection; TableName:String; JSON:String; DataKey: String = 'response'; PrimaryKey:String = 'id') : TJSONObject;
   {$IFDEF MSWINDOWS}
+  /// <summary>Runs a shell command and captures its stdout output. Returns the process exit code.</summary>
   function ExecuteShellCommand(const ACmdLine: string; var AOutput: string): Integer;
   {$ELSE}
+  /// <summary>Runs a shell command and captures its stdout output. Returns the process exit code.</summary>
   function ExecuteShellCommand(ACommand : string; var AOutput: string) : Integer;
   {$ENDIF}
 

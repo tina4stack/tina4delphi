@@ -10,9 +10,13 @@ uses
   ;
 
 type
+  /// <summary>
+  /// REST client configuration component. Stores the base URL, authentication
+  /// credentials, and custom headers. Used by TTina4RESTRequest for HTTP calls.
+  /// Also provides direct Get/Post/Patch/Put/Delete methods.
+  /// </summary>
   TTina4REST = class(TComponent)
   private
-    { Private declarations }
     FBaseUrl : String;
     FUsername: String;
     FPassword: String;
@@ -22,38 +26,57 @@ type
     FUserAgent: String;
     procedure SetCustomHeaders(const List: TURLHeaders);
     function GetCustomHeaders: TURLHeaders;
-    function WrapJSONResponse(JSONContent: TBytes; StatusCode: Integer): TJSONObject;
+    function WrapJSONResponse(ResponseBytes: TBytes; StatusCode: Integer): TJSONObject;
   protected
-    { Protected declarations }
   public
-    { Public declarations }
+    /// <summary>Creates the REST client with default timeout values.</summary>
     constructor Create(AOwner: TComponent); override;
+    /// <summary>Frees the custom headers list.</summary>
     destructor Destroy; override;
 
+    /// <summary>Restores custom headers after component streaming.</summary>
     procedure Loaded; override;
+    /// <summary>Defines binary streaming for the CustomHeaders property.</summary>
     procedure DefineProperties(Filer: TFiler); override;
+    /// <summary>Reads custom headers from the component stream.</summary>
     procedure ReadHeaders(Reader: TReader);
+    /// <summary>Writes custom headers to the component stream.</summary>
     procedure WriteHeaders(Writer: TWriter);
 
+    /// <summary>Reads header data from a binary stream.</summary>
     procedure ReadHeaderData(AStream: TStream);
+    /// <summary>Writes header data to a binary stream.</summary>
     procedure WriteHeaderData(AStream: TStream);
 
+    /// <summary>Adds an Authorization: Bearer header with the given token.</summary>
+    /// <param name="Token">The bearer token string.</param>
     procedure SetBearer(Token: String);
 
+    /// <summary>Sends an HTTP GET request. Returns a TJSONObject (caller must free).</summary>
     function Get(var StatusCode: Integer; EndPoint: String; QueryParams: String=''; ContentType: String= 'application/json'; ContentEncoding: String = 'utf-8'): TJSONObject;
+    /// <summary>Sends an HTTP DELETE request. Returns a TJSONObject (caller must free).</summary>
     function Delete(var StatusCode: Integer; EndPoint: String; QueryParams: String=''; ContentType: String= 'application/json'; ContentEncoding: String = 'utf-8'): TJSONObject;
+    /// <summary>Sends an HTTP POST request with optional body. Returns a TJSONObject (caller must free).</summary>
     function Post(var StatusCode: Integer; EndPoint: String; QueryParams: String=''; Body: String = ''; ContentType: String= 'application/json'; ContentEncoding: String = 'utf-8'): TJSONObject;
+    /// <summary>Sends an HTTP PATCH request with optional body. Returns a TJSONObject (caller must free).</summary>
     function Patch(var StatusCode: Integer; EndPoint: String; QueryParams: String=''; Body: String = ''; ContentType: String= 'application/json'; ContentEncoding: String = 'utf-8'): TJSONObject;
+    /// <summary>Sends an HTTP PUT request with optional body. Returns a TJSONObject (caller must free).</summary>
     function Put(var StatusCode: Integer; EndPoint: String; QueryParams: String=''; Body: String = ''; ContentType: String= 'application/json'; ContentEncoding: String = 'utf-8'): TJSONObject;
 
   published
-    { Published declarations }
+    /// <summary>User-Agent string sent with HTTP requests.</summary>
     property UserAgent: String read FUserAgent write FUserAgent;
+    /// <summary>Base URL for all REST requests (e.g. 'https://api.example.com/v1').</summary>
     property BaseUrl: String read FBaseUrl write FBaseUrl;
+    /// <summary>Username for HTTP Basic Authentication.</summary>
     property Username: String read FUsername write FUsername;
+    /// <summary>Password for HTTP Basic Authentication.</summary>
     property Password: String read FPassword write FPassword;
+    /// <summary>Custom HTTP headers sent with every request.</summary>
     property CustomHeaders: TURLHeaders read GetCustomHeaders write SetCustomHeaders;
+    /// <summary>Read timeout in milliseconds for HTTP requests.</summary>
     property ReadTimeOut : Integer read FReadTimeOut write FReadTimeOut;
+    /// <summary>Connection timeout in milliseconds for HTTP requests.</summary>
     property ConnectTimeOut : Integer read FConnectTimeOut write FConnectTimeOut;
   end;
 
@@ -73,11 +96,8 @@ begin
   inherited;
   FCustomHeaders := TURLHeaders.Create;
   if FUserAgent = '' then
-  begin
     FUserAgent := 'Tina4REST';
-  end;
 end;
-
 
 procedure TTina4REST.DefineProperties(Filer: TFiler);
 begin
@@ -101,51 +121,50 @@ end;
 procedure TTina4REST.Loaded;
 begin
   inherited;
-
 end;
 
 function TTina4REST.Get(var StatusCode: Integer; EndPoint: String; QueryParams: String=''; ContentType: String= 'application/json'; ContentEncoding: String = 'utf-8'): TJSONObject;
 var
-  JSONContent : TBytes;
+  ResponseBytes: TBytes;
 begin
-  JSONContent := SendHttpRequest(StatusCode, Self.FBaseUrl, EndPoint, QueryParams, '', ContentType, ContentEncoding, Self.FUsername, Self.FPassword, Self.FCustomHeaders, Self.FUserAgent, TTina4RequestType.Get, Self.FReadTimeOut, Self.FConnectTimeOut);
-  Result := WrapJSONResponse(JSONContent, StatusCode);
+  ResponseBytes := SendHttpRequest(StatusCode, FBaseUrl, EndPoint, QueryParams, '', ContentType, ContentEncoding, FUsername, FPassword, FCustomHeaders, FUserAgent, TTina4RequestType.Get, FReadTimeOut, FConnectTimeOut);
+  Result := WrapJSONResponse(ResponseBytes, StatusCode);
 end;
 
 function TTina4REST.Delete(var StatusCode: Integer; EndPoint, QueryParams, ContentType,
   ContentEncoding: String): TJSONObject;
 var
-  JSONContent : TBytes;
+  ResponseBytes: TBytes;
 begin
-  JSONContent := SendHttpRequest(StatusCode, Self.FBaseUrl, EndPoint, QueryParams, '', ContentType, ContentEncoding, Self.FUsername, Self.FPassword, Self.FCustomHeaders, Self.FUserAgent, TTina4RequestType.Delete, Self.FReadTimeOut, Self.FConnectTimeOut);
-  Result := WrapJSONResponse(JSONContent, StatusCode);
+  ResponseBytes := SendHttpRequest(StatusCode, FBaseUrl, EndPoint, QueryParams, '', ContentType, ContentEncoding, FUsername, FPassword, FCustomHeaders, FUserAgent, TTina4RequestType.Delete, FReadTimeOut, FConnectTimeOut);
+  Result := WrapJSONResponse(ResponseBytes, StatusCode);
 end;
 
 function TTina4REST.Post(var StatusCode: Integer; EndPoint, QueryParams, Body, ContentType,
   ContentEncoding: String): TJSONObject;
 var
-  JSONContent : TBytes;
+  ResponseBytes: TBytes;
 begin
-  JSONContent := SendHttpRequest(StatusCode, Self.FBaseUrl, EndPoint, QueryParams, Body, ContentType, ContentEncoding, Self.FUsername, Self.FPassword, Self.FCustomHeaders, Self.FUserAgent, TTina4RequestType.Post);
-  Result := WrapJSONResponse(JSONContent, StatusCode);
+  ResponseBytes := SendHttpRequest(StatusCode, FBaseUrl, EndPoint, QueryParams, Body, ContentType, ContentEncoding, FUsername, FPassword, FCustomHeaders, FUserAgent, TTina4RequestType.Post);
+  Result := WrapJSONResponse(ResponseBytes, StatusCode);
 end;
 
 function TTina4REST.Patch(var StatusCode: Integer; EndPoint, QueryParams, Body, ContentType,
   ContentEncoding: String): TJSONObject;
 var
-  JSONContent : TBytes;
+  ResponseBytes: TBytes;
 begin
-  JSONContent := SendHttpRequest(StatusCode, Self.FBaseUrl, EndPoint, QueryParams, Body, ContentType, ContentEncoding, Self.FUsername, Self.FPassword, Self.FCustomHeaders, Self.FUserAgent, TTina4RequestType.Patch);
-  Result := WrapJSONResponse(JSONContent, StatusCode);
+  ResponseBytes := SendHttpRequest(StatusCode, FBaseUrl, EndPoint, QueryParams, Body, ContentType, ContentEncoding, FUsername, FPassword, FCustomHeaders, FUserAgent, TTina4RequestType.Patch);
+  Result := WrapJSONResponse(ResponseBytes, StatusCode);
 end;
 
 function TTina4REST.Put(var StatusCode: Integer; EndPoint, QueryParams, Body, ContentType,
   ContentEncoding: String): TJSONObject;
 var
-  JSONContent : TBytes;
+  ResponseBytes: TBytes;
 begin
-  JSONContent := SendHttpRequest(StatusCode, Self.FBaseUrl, EndPoint, QueryParams, Body, ContentType, ContentEncoding, Self.FUsername, Self.FPassword, Self.FCustomHeaders, Self.FUserAgent, TTina4RequestType.Put);
-  Result := WrapJSONResponse(JSONContent, StatusCode);
+  ResponseBytes := SendHttpRequest(StatusCode, FBaseUrl, EndPoint, QueryParams, Body, ContentType, ContentEncoding, FUsername, FPassword, FCustomHeaders, FUserAgent, TTina4RequestType.Put);
+  Result := WrapJSONResponse(ResponseBytes, StatusCode);
 end;
 
 procedure TTina4REST.ReadHeaderData(AStream: TStream);
@@ -173,46 +192,35 @@ begin
   end;
 end;
 
-function TTina4REST.WrapJSONResponse(JSONContent: TBytes; StatusCode: Integer): TJSONObject;
+function TTina4REST.WrapJSONResponse(ResponseBytes: TBytes; StatusCode: Integer): TJSONObject;
 var
-  JSONString: String;
-
+  ResponseText: String;
 begin
-  //If there is no response return back a blank object
-  JSONString := Trim(StringOf(JSONContent));
+  ResponseText := Trim(StringOf(ResponseBytes));
 
+  // Empty response — return status code only
+  if ResponseText = '' then
+    ResponseText := '{"statusCode": "'+IntToStr(StatusCode)+'"}';
 
-  if (JSONString = '') then
+  // Array response — wrap as {"response": [...]}
+  if (StatusCode = 200) and (Trim(ResponseText)[1] = '[') then
+    Result := StrToJSONObject('{"response":' + ResponseText + '}')
+  else if StatusCode = 200 then
   begin
-    JSONString := '{"statusCode": "'+IntToStr(StatusCode)+'"}';
-  end;
-  //Add wrapper because the string is [] => {'response': []}
-  if (StatusCode = 200) and (Trim(JSONString)[1] = '[') then    //Trim off the blanks and spaces on the edges [ ] //
-  begin
-    Result := StrToJSONObject('{"response":' + JSONString + '}');
-  end
-    else
-  begin
-    if (StatusCode = 200) then
+    var ParsedJSON := StrToJSONObject(ResponseText);
+    if ParsedJSON = nil then
     begin
-      var AResult := StrToJSONObject(JSONString);
-      if AResult = nil then
-      begin
-        Result := TJSONObject.Create;
-        Result.AddPair('statusCode', StatusCode);
-        Result.AddPair('response', JSONString);
-      end
-        else
-      begin
-        Result := AResult;
-      end;
+      Result := TJSONObject.Create;
+      Result.AddPair('statusCode', StatusCode);
+      Result.AddPair('response', ResponseText);
     end
-      else
-    begin
-      var S := '{"statusCode": "'+IntToStr(StatusCode)+'", "response": "' +AnsiReplaceStr(JSONString, '"', '\"')+'"}';
-      Result := StrToJSONObject(S);
-    end;
-
+    else
+      Result := ParsedJSON;
+  end
+  else
+  begin
+    var ErrorJSON := '{"statusCode": "'+IntToStr(StatusCode)+'", "response": "' + AnsiReplaceStr(ResponseText, '"', '\"') + '"}';
+    Result := StrToJSONObject(ErrorJSON);
   end;
 end;
 
@@ -233,7 +241,7 @@ end;
 
 procedure TTina4REST.SetBearer(Token: String);
 begin
-  Self.CustomHeaders.Add('Authorization', 'Bearer '+Token);
+  FCustomHeaders.Add('Authorization', 'Bearer ' + Token);
 end;
 
 procedure TTina4REST.SetCustomHeaders(const List: TURLHeaders);

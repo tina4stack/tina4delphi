@@ -46,83 +46,68 @@ end;
 
 procedure TTina4SocketServer.ProcessSocketConnection(const Client: TSocket);
 var
-  Disconnected : Boolean;
-
+  IsDisconnected: Boolean;
 begin
-  Disconnected := False;
-
-  while not Disconnected and CanRun do
+  IsDisconnected := False;
+  while not IsDisconnected and CanRun do
   begin
     try
-      var Content: TBytes := Client.Receive();
-      if Assigned(FOnMessage) and (Length(Content) > 0) then
-      begin
-        FOnMessage(Client, Content);
-      end;
+      var ReceivedBytes: TBytes := Client.Receive();
+      if Assigned(FOnMessage) and (Length(ReceivedBytes) > 0) then
+        FOnMessage(Client, ReceivedBytes);
       Sleep(1000);
     except
-      Disconnected := True;
+      IsDisconnected := True;
     end;
   end;
-
   Client.Close(True);
 end;
 
 procedure TTina4SocketServer.SetActive(const Active: Boolean);
 begin
   if not FActive and Active then
-  begin
-    StartService(FHost, FPort, FSocketType, HandleConnection);
-  end
-    else
-  begin
+    StartService(FHost, FPort, FSocketType, HandleConnection)
+  else
     StopService();
-  end;
-
   FActive := Active;
 end;
 
 procedure TTina4SocketServer.StartService(Host: String; Port: Integer; SocketType: TSocketType; HandleConnection: TAsyncCallbackEvent);
 begin
-  if not Assigned(ServiceTask) then
-  begin
-    ServiceTask := TTask.Create(
+  if Assigned(ServiceTask) then
+    Exit;
+
+  ServiceTask := TTask.Create(
     procedure
     begin
       ServerSocket := TSocket.Create(SocketType);
       ServerSocket.Listen(Host, '', Port);
       CanRun := True;
-
       try
         while CanRun do
         begin
-          var Handler := ServerSocket.BeginAccept(HandleConnection);
+          ServerSocket.BeginAccept(HandleConnection);
           Sleep(1000);
         end;
       finally
         ServerSocket.Free;
       end;
     end);
-    ServiceTask.Start;
-  end;
+  ServiceTask.Start;
 end;
 
 procedure TTina4SocketServer.HandleConnection(const ASyncResult: IAsyncResult);
 begin
-  var Socket := (ASyncResult.AsyncContext  as TSocket);
-
-  var Client := Socket.EndAccept(ASyncResult);
-
-  ProcessSocketConnection(Client);
+  var ListenSocket := ASyncResult.AsyncContext as TSocket;
+  var ClientSocket := ListenSocket.EndAccept(ASyncResult);
+  ProcessSocketConnection(ClientSocket);
 end;
 
 procedure TTina4SocketServer.StopService;
 begin
   CanRun := False;
   if Assigned(ServiceTask) then
-  begin
     ServiceTask.Cancel;
-  end;
 end;
 
 end.

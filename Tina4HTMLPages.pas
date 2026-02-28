@@ -1,4 +1,4 @@
-unit Tina4HTMLPages;
+﻿unit Tina4HTMLPages;
 
 interface
 

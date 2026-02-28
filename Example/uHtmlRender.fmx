@@ -17,30 +17,156 @@ object Form3: TForm3
         'rap@5.3.3/dist/css/bootstrap.min.css">'
       '</head>'
       '<form>'
+      '<button style="background: blue; color: white">Test</button>'
+      '<button class="btn btn-info">Test</button>'
+      '<span class="btn btn-danger">Test Danger</span>'
+      '<div class="btn btn-info">Test Info</div>'
+      '<div class="form-check">'
       
-        '<button style="background: blue" class="btn btn-primary">Test</b' +
-        'utton>'
+        '    <input type="checkbox" class="form-check-input" id="exampleC' +
+        'heck1">'
+      
+        '    <label class="form-check-label" for="exampleCheck1">Check me' +
+        ' out</label>'
+      '  </div>'
+      '<input type="file" name="myFile">'
+      
+        '<button class="btn btn-primary" style="border-radius: 0">Test No' +
+        ' Radius</button>'
+      ''
       '</form>')
+    OnFormControlChange = Tina4HTMLRender1FormControlChange
+    OnFormControlClick = Tina4HTMLRender1FormControlClick
+    OnFormSubmit = Tina4HTMLRender1FormSubmit
     Position.X = 8.000000000000000000
-    Position.Y = 16.000000000000000000
+    Position.Y = 38.000000000000000000
     ClipChildren = True
-    object TButton
-      StyledSettings = []
+    object TRectangle
+      Cursor = crHandPoint
+      Fill.Color = claBlue
       Size.Width = 60.000000000000000000
       Size.Height = 24.000000000000000000
       Size.PlatformDefault = False
-      TabOrder = 0
-      Text = 'Test'
+      Stroke.Color = xFFB0B0B0
+      object TLabel
+        Align = Client
+        StyledSettings = [Style]
+        Size.Width = 60.000000000000000000
+        Size.Height = 24.000000000000000000
+        Size.PlatformDefault = False
+        TextSettings.Font.Size = 14.000000000000000000
+        TextSettings.FontColor = claWhite
+        TextSettings.HorzAlign = Center
+        Text = 'Test'
+        TabOrder = 0
+      end
+    end
+    object TRectangle
+      Cursor = crHandPoint
+      Fill.Color = xFF0DCAF0
+      Position.X = 63.834960937500000000
+      Size.Width = 84.000000000000000000
+      Size.Height = 36.000000000000000000
+      Size.PlatformDefault = False
+      Stroke.Color = xFFB0B0B0
+      XRadius = 4.000000000000000000
+      YRadius = 4.000000000000000000
+      object TLabel
+        Align = Client
+        StyledSettings = [Style]
+        Size.Width = 84.000000000000000000
+        Size.Height = 36.000000000000000000
+        Size.PlatformDefault = False
+        TextSettings.Font.Size = 16.000000000000000000
+        TextSettings.HorzAlign = Center
+        Text = 'Test'
+        TabOrder = 0
+      end
+    end
+    object TCheckBox
+      StyledSettings = []
+      Position.Y = 39.500000000000000000
+      Size.Width = 16.000000000000000000
+      Size.Height = 16.000000000000000000
+      Size.PlatformDefault = False
+      TabOrder = 30
       TextSettings.Font.Size = 14.000000000000000000
     end
-    object TButton
-      StyledSettings = []
-      Size.Width = 60.000000000000000000
+    object TLayout
+      Position.Y = 62.000000000000000000
+      Size.Width = 250.000000000000000000
       Size.Height = 24.000000000000000000
       Size.PlatformDefault = False
-      TabOrder = 1
-      Text = 'Test'
-      TextSettings.Font.Size = 14.000000000000000000
+      TabOrder = 31
+      object TRectangle
+        Align = Left
+        Cursor = crHandPoint
+        Size.Width = 90.000000000000000000
+        Size.Height = 24.000000000000000000
+        Size.PlatformDefault = False
+        Stroke.Color = xFFB0B0B0
+        XRadius = 4.000000000000000000
+        YRadius = 4.000000000000000000
+        object TLabel
+          Align = Client
+          StyledSettings = [Style]
+          Size.Width = 90.000000000000000000
+          Size.Height = 24.000000000000000000
+          Size.PlatformDefault = False
+          TextSettings.Font.Size = 14.000000000000000000
+          TextSettings.HorzAlign = Center
+          Text = 'Choose File'
+          TabOrder = 0
+        end
+      end
+      object TLabel
+        Align = Client
+        StyledSettings = [Style]
+        Margins.Left = 8.000000000000000000
+        Size.Width = 152.000000000000000000
+        Size.Height = 24.000000000000000000
+        Size.PlatformDefault = False
+        TextSettings.Font.Size = 14.000000000000000000
+        TextSettings.FontColor = xFF6C757D
+        Text = 'No file chosen'
+        TabOrder = 1
+      end
     end
+    object TRectangle
+      Cursor = crHandPoint
+      Fill.Color = xFF0D6EFD
+      Position.X = 253.834960937500000000
+      Position.Y = 62.000000000000000000
+      Size.Width = 148.359375000000000000
+      Size.Height = 36.000000000000000000
+      Size.PlatformDefault = False
+      Stroke.Color = xFFB0B0B0
+      object TLabel
+        Align = Client
+        StyledSettings = [Style]
+        Size.Width = 148.359375000000000000
+        Size.Height = 36.000000000000000000
+        Size.PlatformDefault = False
+        TextSettings.Font.Size = 16.000000000000000000
+        TextSettings.FontColor = claWhite
+        TextSettings.HorzAlign = Center
+        Text = 'Test No Radius'
+        TabOrder = 0
+      end
+    end
+  end
+  object Button1: TButton
+    Position.X = 8.000000000000000000
+    Position.Y = 8.000000000000000000
+    TabOrder = 2
+    Text = 'Button1'
+    OnClick = Button1Click
+  end
+  object Tina4HTMLPages1: TTina4HTMLPages
+    Pages = <
+      item
+      end>
+    Left = 376
+    Top = 408
   end
 end

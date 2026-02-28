@@ -31,7 +31,7 @@ An MCP (Model Context Protocol) server that lets Claude compile and run Pascal, 
 
 ```bash
 # Clone the repository
-git clone https://github.com/niclasborgworx/claude-pascal-mcp.git
+git clone https://github.com/tina4stack/tina4delphi.git
 cd claude-pascal-mcp
 
 # Install dependencies

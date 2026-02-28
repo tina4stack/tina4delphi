@@ -1,25 +1,25 @@
 object frmDataModule: TfrmDataModule
-  Height = 824
-  Width = 1025
-  PixelsPerInch = 120
+  Height = 1099
+  Width = 1273
+  PixelsPerInch = 144
   object IdSchedulerOfThreadPool1: TIdSchedulerOfThreadPool
     MaxThreads = 50
     PoolSize = 100
-    Left = 220
-    Top = 100
+    Left = 264
+    Top = 120
   end
   object FDConnection1: TFDConnection
     Params.Strings = (
       'Database=D:\projects\tina4delphi\Example\Car_Database.db'
       'DriverID=SQLite')
     LoginPrompt = False
-    Left = 510
-    Top = 380
+    Left = 612
+    Top = 456
   end
   object FDTable1: TFDTable
     Connection = FDConnection1
-    Left = 320
-    Top = 250
+    Left = 384
+    Top = 300
   end
   object FDMemTable1: TFDMemTable
     Active = True
@@ -46,8 +46,8 @@ object frmDataModule: TfrmDataModule
     UpdateOptions.CheckUpdatable = False
     UpdateOptions.AutoCommitUpdates = True
     StoreDefs = True
-    Left = 200
-    Top = 380
+    Left = 240
+    Top = 456
     Content = {
       4144425310000000C9000000FF00010001FF02FF03040016000000460044004D
       0065006D005400610062006C0065003100050016000000460044004D0065006D
@@ -81,8 +81,8 @@ object frmDataModule: TfrmDataModule
   object IdHTTPServer1: TIdHTTPServer
     Bindings = <>
     Scheduler = IdSchedulerOfThreadPool1
-    Left = 160
-    Top = 190
+    Left = 192
+    Top = 228
   end
   object FDMemTable2: TFDMemTable
     Active = True
@@ -108,36 +108,37 @@ object frmDataModule: TfrmDataModule
     UpdateOptions.CheckRequired = False
     UpdateOptions.AutoCommitUpdates = True
     StoreDefs = True
-    Left = 662
-    Top = 150
+    Left = 794
+    Top = 180
   end
   object RESTClient1: TRESTClient
     Params = <>
     SynchronizedEvents = False
-    Left = 820
-    Top = 220
+    Left = 984
+    Top = 264
   end
   object RESTRequest1: TRESTRequest
     Client = RESTClient1
     Params = <>
     Response = RESTResponse1
     SynchronizedEvents = False
-    Left = 970
-    Top = 210
+    Left = 1164
+    Top = 252
   end
   object RESTResponse1: TRESTResponse
-    Left = 960
-    Top = 320
+    Left = 1152
+    Top = 384
   end
   object RESTResponseDataSetAdapter1: TRESTResponseDataSetAdapter
     FieldDefs = <>
-    Left = 820
-    Top = 380
+    Left = 984
+    Top = 456
   end
   object Tina4WebServer1: TTina4WebServer
+    HTTPServer = IdHTTPServer1
     Active = False
-    Left = 660
-    Top = 300
+    Left = 792
+    Top = 360
   end
   object Tina4RESTRequest1: TTina4RESTRequest
     TransformResultToSnakeCase = False
@@ -146,8 +147,9 @@ object frmDataModule: TfrmDataModule
     RequestType = Get
     StatusCode = 0
     SourceIgnoreBlanks = False
-    Left = 510
-    Top = 680
+    Tina4REST = Tina4REST1
+    Left = 430
+    Top = 682
   end
   object Tina4JSONAdapter1: TTina4JSONAdapter
     DataKey = 'employees'
@@ -161,8 +163,8 @@ object frmDataModule: TfrmDataModule
         'ame": "Bob", "lastName": "Wilson", "email": "bob@example.com", "' +
         'department": "Engineering"}]}')
     SyncMode = Clear
-    Left = 560
-    Top = 544
+    Left = 672
+    Top = 653
   end
   object FDMemTable3: TFDMemTable
     Active = True
@@ -203,7 +205,15 @@ object frmDataModule: TfrmDataModule
     UpdateOptions.CheckRequired = False
     UpdateOptions.AutoCommitUpdates = True
     StoreDefs = True
-    Left = 696
-    Top = 560
+    Left = 835
+    Top = 672
+  end
+  object Tina4REST1: TTina4REST
+    UserAgent = 'Tina4REST'
+    ReadTimeOut = 0
+    ConnectTimeOut = 0
+    Left = 240
+    Top = 653
+    Headers = ()
   end
 end

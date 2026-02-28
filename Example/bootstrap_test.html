@@ -23,7 +23,7 @@
   <div style="padding:16px">
     <h3>Mountain Landscape</h3>
     <p style="color:#6c757d">A beautiful wide-angle landscape photo loaded from Lorem Picsum. This image tests full-width rendering and HTTP download caching.</p>
-    <span class="btn btn-danger">In Stock</span>
+    <div class="btn btn-danger" onclick="Form3:ShowSomething('Hello')">In Stock</div>
 
     <span style="background-color:#0d6efd; color:white; padding:4px 10px; margin-left:8px">Buy Now</span>
   </div>
@@ -105,25 +105,25 @@
 <form name="test">
    <input class="form-control" type="text" placeholder="Name" name="name">
    <input  class="form-control"  type="password" placeholder="Password" name="password">
-   <input  class="form-control"  type="radio" name="testRadio" value="1">1
-   <input  class="form-control" type="radio" name="testRadio" value="2">2
-   <input  class="form-control" type="checkbox" name="testCheckBox" value="1">1
-   <input  class="form-control" type="checkbox" name="testCheckBox" value="2">2
+   <input    type="radio" name="testRadio" value="1">1
+   <input   type="radio" name="testRadio" value="2">2
+   <input   type="checkbox" name="testCheckBox" value="1">1
+   <input   type="checkbox" name="testCheckBox" value="2">2
 
 <input  class="btn btn-alert" type="submit" name="button" value="Click">
 
   <button>Submit</button>
 </form>
 
-<form>
+<form name="SomeData">
   <div class="form-group">
     <label for="exampleInputEmail1">Email address</label>
-    <input type="email" class="form-control" id="exampleInputEmail1" aria-describedby="emailHelp" placeholder="Enter email">
+    <input type="email" class="form-control" id="exampleInputEmail1" name="email" aria-describedby="emailHelp" placeholder="Enter email">
     <small id="emailHelp" class="form-text text-muted">We'll never share your email with anyone else.</small>
   </div>
   <div class="form-group">
     <label for="exampleInputPassword1">Password</label>
-    <input type="password" class="form-control" id="exampleInputPassword1" placeholder="Password">
+    <input type="password" class="form-control" id="exampleInputPassword1" name="somePassword" placeholder="Password">
   </div>
   <div class="form-check">
     <input type="checkbox" class="form-check-input" id="exampleCheck1">
@@ -131,6 +131,9 @@
   </div>
   <button type="submit" class="btn btn-primary">Submit</button>
 </form>
+
+<span onclick="Form3:ShowSomething('World')">Click me</span>
+
 
 </body>
 </html>

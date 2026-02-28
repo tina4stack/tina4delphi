@@ -217,6 +217,7 @@
         <DCCReference Include="Tina4SocketServer.pas"/>
         <DCCReference Include="Tina4Twig.pas"/>
         <DCCReference Include="Tina4HTMLRender.pas"/>
+        <DCCReference Include="Tina4HTMLPages.pas"/>
         <RcItem Include="TTina4HtmlRender.bmp">
             <ResourceType>BITMAP</ResourceType>
             <ResourceId>TTina4HtmlRender</ResourceId>
@@ -244,6 +245,10 @@
         <RcItem Include="TTina4WebServer.bmp">
             <ResourceType>BITMAP</ResourceType>
             <ResourceId>TTina4WebServer</ResourceId>
+        </RcItem>
+        <RcItem Include="TTina4HTMLPages.bmp">
+            <ResourceType>BITMAP</ResourceType>
+            <ResourceId>TTina4HTMLPages</ResourceId>
         </RcItem>
         <BuildConfiguration Include="Base">
             <Key>Base</Key>

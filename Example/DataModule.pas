@@ -23,6 +23,7 @@ type
     Tina4RESTRequest1: TTina4RESTRequest;
     Tina4JSONAdapter1: TTina4JSONAdapter;
     FDMemTable3: TFDMemTable;
+    Tina4REST1: TTina4REST;
 
     procedure Tina4HttpServer1CommandGet(AContext: TIdContext; ARequestInfo: TIdHTTPRequestInfo; AResponseInfo: TIdHTTPResponseInfo);
     procedure Tina4RESTRequest1ExecuteDone(Sender: TObject);

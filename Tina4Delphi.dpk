@@ -50,7 +50,8 @@ contains
   Tina4InterposerClasses in 'Tina4InterposerClasses.pas',
   Tina4SocketServer in 'Tina4SocketServer.pas',
   Tina4Twig in 'Tina4Twig.pas',
-  Tina4HTMLRender in 'Tina4HTMLRender.pas';
+  Tina4HTMLRender in 'Tina4HTMLRender.pas',
+  Tina4HTMLPages in 'Tina4HTMLPages.pas';
 
 end.
 

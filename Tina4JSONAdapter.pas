@@ -92,53 +92,38 @@ begin
   if not Assigned(FMemTable) then
     Exit;
 
-  //Populate from JSONData property if it has content
+  // Populate from JSONData property if it has content
   if FJSONData.Text <> '' then
-  begin
     PopulateMemTableFromJSON(FMemTable, FDataKey, FJSONData.Text, FIndexFieldNames, FSyncMode);
-  end;
 
-  //Populate from MasterSource if assigned
+  // Populate from MasterSource if assigned
   if Assigned(FMasterSource) then
   begin
-    var MasterJSONData: String :=  FMasterSource.ResponseBody.Text;
+    var MasterJSON: String := FMasterSource.ResponseBody.Text;
 
-    //check if master source has a mem table
     if Assigned(FMasterSource.MemTable) then
     begin
-      if (FMasterSource.MemTable.FieldDefs.IndexOf(FDataKey) = -1) then
+      if FMasterSource.MemTable.FieldDefs.IndexOf(FDataKey) <> -1 then
       begin
-        MasterJSONData := FMasterSource.ResponseBody.Text;
-      end
-        else
-      begin
-        if (FMasterSource.MemTable.FieldByName(FDataKey).AsString <> '') then
+        var FieldValue := FMasterSource.MemTable.FieldByName(FDataKey).AsString;
+        if FieldValue <> '' then
         begin
-          if FMasterSource.MemTable.FieldByName(FDataKey).AsString[1] = '{' then
-          begin
-            MasterJSONData := '{"'+FDataKey+'": ['+FMasterSource.MemTable.FieldByName(FDataKey).AsString+']}';
-          end
-            else
-          begin
-            MasterJSONData := '{"'+FDataKey+'": '+FMasterSource.MemTable.FieldByName(FDataKey).AsString+'}';
-          end;
+          if FieldValue[1] = '{' then
+            MasterJSON := '{"' + FDataKey + '": [' + FieldValue + ']}'
+          else
+            MasterJSON := '{"' + FDataKey + '": ' + FieldValue + '}';
         end;
       end;
     end;
-    PopulateMemTableFromJSON(FMemTable, FDataKey, MasterJSONData, FIndexFieldNames, FSyncMode);
+    PopulateMemTableFromJSON(FMemTable, FDataKey, MasterJSON, FIndexFieldNames, FSyncMode);
   end;
 end;
 
 procedure TTina4JSONAdapter.RunExecute(Sender: TObject);
 begin
-  //Call our Execute
   Execute;
-
-  //Call the original on done event
   if Assigned(FMasterOnExecuteDone) then
-  begin
     FMasterOnExecuteDone(Self);
-  end;
 end;
 
 procedure TTina4JSONAdapter.SetMasterSource(const Source: TTina4RESTRequest);

@@ -47,11 +47,6 @@ end;
 constructor TTina4WebServer.Create(AOwner: TComponent);
 begin
   inherited Create(AOwner);
-
-  //Look for Tina4Route components belonging to the same project or parent to create a path map
-
-
-
 end;
 
 procedure TTina4WebServer.HandleWebEvents(AContext: TIdContext;
@@ -77,10 +72,8 @@ end;
 function TTina4WebServer.JSONFromDB(SQL, DataSetName: String; Params: TFDParams): TJSONObject;
 begin
   if Assigned(FConnection) then
-  begin
-    Result := GetJSONFromDB(Self.FConnection, SQL, Params, DataSetName);
-  end
-    else
+    Result := GetJSONFromDB(FConnection, SQL, Params, DataSetName)
+  else
   begin
     Result := TJSONObject.Create;
     Result.AddPair('error', 'Please assign a FDConnection database component to the Tina4HttpServer component')
@@ -89,14 +82,13 @@ end;
 
 procedure TTina4WebServer.SetActive(Active: Boolean);
 begin
-  if (Assigned(Self.FHTTPServer)) then
+  if Assigned(FHTTPServer) then
   begin
-    Self.FHTTPServer.Active := Active;
-    Self.FHTTPServer.OnCommandGet := Self.HandleWebEvents;
-    Self.FHTTPServer.OnCommandOther := Self.HandleWebEvents;
-
+    FHTTPServer.Active := Active;
+    FHTTPServer.OnCommandGet := HandleWebEvents;
+    FHTTPServer.OnCommandOther := HandleWebEvents;
   end;
-  Self.FActive := Active;
+  FActive := Active;
 end;
 
 end.

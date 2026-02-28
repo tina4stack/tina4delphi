@@ -22,6 +22,7 @@ This is not another framework for Delphi
 | `TTina4Route` | Tina4Route | Defines an endpoint route for the web server |
 | `TTina4SocketServer` | Tina4SocketServer | TCP/UDP socket server |
 | `TTina4HTMLRender` | Tina4HTMLRender | FMX control that renders HTML to canvas |
+| `TTina4HTMLPages` | Tina4HTMLPages | Design-time page navigation for TTina4HTMLRender |
 | `TTina4Twig` | Tina4Twig | Twig-style template engine |
 
 ## Tina4Core Reference
@@ -829,6 +830,107 @@ Tina4HTMLRender1.Twig.LoadFromFile('C:\MyApp\templates\page.html');
 | `TwigTemplatePath: string` | Base path for `{% include %}` and `{% extends %}` resolution |
 | `SetTwigVariable(Name, Value)` | Pass a variable to the Twig rendering context |
 
+## TTina4HTMLPages -- Page Navigation
+
+A design-time component that provides SPA-style page navigation using `TTina4HTMLRender`. Pages are defined as a collection at design time via the Object Inspector's collection editor. Each page contains Twig or raw HTML content. Navigation is triggered by clicking `<a href="#pagename">` links in the rendered HTML.
+
+### Basic Setup
+
+```delphi
+// Drop TTina4HTMLPages and TTina4HTMLRender on the form
+// Link them at design time or runtime:
+Tina4HTMLPages1.Renderer := Tina4HTMLRender1;
+
+// Pages are defined in the collection editor at design time,
+// or created at runtime:
+var Page := Tina4HTMLPages1.Pages.Add;
+Page.PageName := 'home';
+Page.IsDefault := True;
+Page.HTMLContent.Text := '<h1>Home</h1><a href="#about">Go to About</a>';
+
+Page := Tina4HTMLPages1.Pages.Add;
+Page.PageName := 'about';
+Page.HTMLContent.Text := '<h1>About</h1><a href="#home">Back to Home</a>';
+```
+
+### Navigation with Twig Templates
+
+Pages can use Twig templates instead of raw HTML. Set template variables before navigating:
+
+```delphi
+Tina4HTMLPages1.SetTwigVariable('userName', 'Andre');
+
+var Page := Tina4HTMLPages1.Pages.Add;
+Page.PageName := 'dashboard';
+Page.TwigContent.Text :=
+  '<h1>Welcome {{ userName }}</h1>' +
+  '<a href="#settings">Settings</a>';
+```
+
+If templates use `{% include %}` or `{% extends %}`, set the template path:
+
+```delphi
+Tina4HTMLPages1.TwigTemplatePath := 'C:\MyApp\templates';
+```
+
+### Programmatic Navigation
+
+```delphi
+Tina4HTMLPages1.NavigateTo('dashboard');
+```
+
+### Link Convention
+
+Anchor `href` values are mapped to page names by stripping the leading `#` or `/`:
+
+| `href` value | Maps to PageName |
+|---|---|
+| `#dashboard` | `dashboard` |
+| `/settings` | `settings` |
+| `about` | `about` |
+
+### Events
+
+| Event | Signature | Description |
+|---|---|---|
+| `OnBeforeNavigate` | `procedure(Sender: TObject; const FromPage, ToPage: string; var Allow: Boolean)` | Fires before navigation; set `Allow := False` to cancel |
+| `OnAfterNavigate` | `procedure(Sender: TObject)` | Fires after the new page has been rendered |
+
+### TTina4Page Properties
+
+| Property | Type | Description |
+|---|---|---|
+| `PageName` | `string` | Unique name used as navigation target |
+| `TwigContent` | `TStringList` | Twig template source (rendered via TTina4Twig) |
+| `HTMLContent` | `TStringList` | Raw HTML (used when TwigContent is empty) |
+| `IsDefault` | `Boolean` | If `True`, this page is shown on startup |
+
+### TTina4HTMLPages Properties
+
+| Property | Type | Description |
+|---|---|---|
+| `Pages` | `TTina4PageCollection` | Collection of pages (design-time editable) |
+| `Renderer` | `TTina4HTMLRender` | The HTML renderer that displays the active page |
+| `ActivePage` | `string` | Name of the currently displayed page |
+| `TwigTemplatePath` | `string` | Base path for Twig `{% include %}` / `{% extends %}` |
+
+### OnLinkClick Event on TTina4HTMLRender
+
+The renderer exposes an `OnLinkClick` event that fires when any `<a href="...">` link is clicked. TTina4HTMLPages hooks into this automatically, but you can also use it independently:
+
+```delphi
+procedure TForm1.HTMLRender1LinkClick(Sender: TObject; const AURL: string;
+  var Handled: Boolean);
+begin
+  if AURL.StartsWith('http') then
+  begin
+    // Open external links in browser
+    ShellExecute(0, 'open', PChar(AURL), nil, nil, SW_SHOW);
+    Handled := True;
+  end;
+end;
+```
+
 ## TTina4Twig -- Template Engine
 
 A Twig-compatible template engine for server-side rendering.
@@ -886,3 +988,5 @@ Template syntax supports: `{{ variable }}`, `{% if %}`, `{% for %}`, `{% include
 - 2026-02-28 TTina4HTMLRender: Added CSS `box-shadow` with offset, blur, spread, and colored shadows
 - 2026-02-28 TTina4HTMLRender: Added `Twig` property for automatic Twig-to-HTML template rendering
 - 2026-02-28 TTina4HTMLRender: Added `TwigTemplatePath` property and `SetTwigVariable` method for template context
+- 2026-02-28 TTina4HTMLRender: Added `OnLinkClick` event for anchor `<a href>` click interception
+- 2026-02-28 TTina4HTMLPages: New design-time page navigation component with collection editor, Twig/HTML pages, `OnBeforeNavigate`/`OnAfterNavigate` events

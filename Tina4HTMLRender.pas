@@ -18,17 +18,34 @@ type
   // DOM Node
   // ─────────────────────────────────────────────────────────────────────────
 
+  /// <summary>
+  /// Represents a single node in the parsed HTML DOM tree. Stores the tag name,
+  /// text content, inline styles, HTML attributes, and child nodes.
+  /// </summary>
   THTMLTag = class
   public
+    /// <summary>The HTML tag name (e.g. 'div', 'p', 'a'). '#text' for text nodes.</summary>
     TagName: string;
+    /// <summary>The text content of this node (for text nodes).</summary>
     Text: string;
+    /// <summary>Inline CSS styles parsed from the style attribute.</summary>
     Style: TDictionary<string, string>;
+    /// <summary>HTML attributes dictionary (e.g. 'id', 'class', 'href', 'onclick').</summary>
     Attributes: TDictionary<string, string>;
+    /// <summary>Ordered list of child nodes.</summary>
     Children: TList<THTMLTag>;
+    /// <summary>Reference to the parent node. Nil for the root.</summary>
     Parent: THTMLTag;
+    /// <summary>Creates an empty tag with initialised dictionaries and child list.</summary>
     constructor Create;
+    /// <summary>Frees all children recursively and the internal dictionaries.</summary>
     destructor Destroy; override;
+    /// <summary>Returns an attribute value by name, or Default if not found.</summary>
+    /// <param name="Name">The attribute name to look up.</param>
+    /// <param name="Default">Value returned when the attribute does not exist.</param>
     function GetAttribute(const Name: string; const Default: string = ''): string;
+    /// <summary>Returns True if the attribute exists on this element.</summary>
+    /// <param name="Name">The attribute name to check.</param>
     function HasAttribute(const Name: string): Boolean;
   end;
 
@@ -287,9 +304,14 @@ type
   // Form Control Support Types
   // ─────────────────────────────────────────────────────────────────────────
 
+  /// <summary>Event for form control changes and clicks (Name = control name, Value = current value).</summary>
   THTMLFormControlEvent = procedure(Sender: TObject; const Name, Value: string) of object;
+  /// <summary>Event for form submission (FormName = form name attribute, FormData = name=value pairs).</summary>
   THTMLFormSubmitEvent = procedure(Sender: TObject; const FormName: string; FormData: TStrings) of object;
+  /// <summary>Event for onclick attribute handling when RTTI invocation is not available.</summary>
   THTMLElementClickEvent = procedure(Sender: TObject; const ObjectName, MethodName: string; Params: TStrings) of object;
+  /// <summary>Event for anchor link clicks. Set Handled := True to prevent default processing.</summary>
+  THTMLLinkClickEvent = procedure(Sender: TObject; const AURL: string; var Handled: Boolean) of object;
 
   TNativeFormControl = record
     Control: TControl;
@@ -333,6 +355,7 @@ type
     FOnExit: THTMLFormControlEvent;
     FOnSubmit: THTMLFormSubmitEvent;
     FOnElementClick: THTMLElementClickEvent;
+    FOnLinkClick: THTMLLinkClickEvent;
     FTwig: TStringList;
     FTwigEngine: TObject;        // TTina4Twig (declared in implementation uses)
     FTwigTemplatePath: string;
@@ -382,37 +405,111 @@ type
     procedure MouseUp(Button: TMouseButton; Shift: TShiftState;
       X, Y: Single); override;
   public
+    /// <summary>Creates the HTML renderer and initialises internal caches, parser, and layout engine.</summary>
     constructor Create(AOwner: TComponent); override;
+    /// <summary>Frees all internal objects, form controls, caches, and the DOM tree.</summary>
     destructor Destroy; override;
+    /// <summary>Clears the in-memory image cache and the on-disk file cache.</summary>
     procedure ClearCache;
-    // Register objects for direct RTTI method invocation from onclick attributes
+    /// <summary>
+    /// Registers a Delphi object for direct RTTI method invocation from HTML
+    /// onclick attributes. Format: onclick="ObjectName:MethodName(params)".
+    /// </summary>
+    /// <param name="Name">The name used to reference this object in onclick attributes.</param>
+    /// <param name="Obj">The Delphi object instance whose published methods will be callable.</param>
     procedure RegisterObject(const Name: string; Obj: TObject);
+    /// <summary>Removes a previously registered object by name.</summary>
+    /// <param name="Name">The registered name to remove.</param>
     procedure UnregisterObject(const Name: string);
-    // DOM manipulation: find and modify elements by id
+    /// <summary>Finds a DOM element by its id attribute. Returns nil if not found.</summary>
+    /// <param name="Id">The HTML id attribute value to search for.</param>
     function GetElementById(const Id: string): THTMLTag;
+    /// <summary>
+    /// Gets the current value of a form element. For native controls (TEdit, TCheckBox, etc.)
+    /// returns the live control value; otherwise returns the DOM value attribute.
+    /// </summary>
+    /// <param name="Id">The HTML id of the element.</param>
     function GetElementValue(const Id: string): string;
+    /// <summary>
+    /// Sets the value of a form element. Updates both the native FMX control
+    /// (TEdit, TCheckBox, TComboBox, etc.) and the DOM value attribute.
+    /// </summary>
+    /// <param name="Id">The HTML id of the element.</param>
+    /// <param name="Value">The new value to set.</param>
     procedure SetElementValue(const Id: string; const Value: string);
+    /// <summary>
+    /// Sets any HTML attribute on an element. Triggers relayout for class or
+    /// style changes.
+    /// </summary>
+    /// <param name="Id">The HTML id of the element.</param>
+    /// <param name="AttrName">The attribute name (e.g. 'class', 'href', 'data-value').</param>
+    /// <param name="AttrValue">The new attribute value.</param>
     procedure SetElementAttribute(const Id, AttrName, AttrValue: string);
+    /// <summary>
+    /// Enables or disables a native form control and adjusts its opacity.
+    /// </summary>
+    /// <param name="Id">The HTML id of the element.</param>
+    /// <param name="Enabled">True to enable, False to disable (opacity 0.5).</param>
     procedure SetElementEnabled(const Id: string; Enabled: Boolean);
+    /// <summary>
+    /// Shows or hides an element by toggling display:none. Triggers relayout.
+    /// </summary>
+    /// <param name="Id">The HTML id of the element.</param>
+    /// <param name="Visible">True to show, False to hide.</param>
     procedure SetElementVisible(const Id: string; Visible: Boolean);
+    /// <summary>
+    /// Updates the inner text content of an element and its native control label.
+    /// </summary>
+    /// <param name="Id">The HTML id of the element.</param>
+    /// <param name="Text">The new text content.</param>
     procedure SetElementText(const Id: string; const Text: string);
+    /// <summary>
+    /// Sets an inline CSS style property on an element. Triggers relayout.
+    /// </summary>
+    /// <param name="Id">The HTML id of the element.</param>
+    /// <param name="StyleProp">CSS property name (e.g. 'background-color', 'display').</param>
+    /// <param name="StyleValue">CSS property value (e.g. 'red', 'none').</param>
     procedure SetElementStyle(const Id, StyleProp, StyleValue: string);
+    /// <summary>Forces a full re-layout and repaint of the rendered HTML.</summary>
+    /// <param name="Id">The HTML id of the element (currently triggers full relayout).</param>
     procedure RefreshElement(const Id: string);
-    // Twig template engine: pass variables for template rendering
+    /// <summary>
+    /// Sets a variable in the Twig rendering context. Call before setting
+    /// the Twig property to make variables available in templates.
+    /// </summary>
+    /// <param name="AName">Variable name (used as {{ name }} in Twig templates).</param>
+    /// <param name="AValue">Variable value.</param>
     procedure SetTwigVariable(const AName: string; const AValue: string);
   published
+    /// <summary>HTML content to render. Changes trigger automatic relayout and repaint.</summary>
     property HTML: TStringList read GetHTML write SetHTML;
+    /// <summary>Twig template content. Automatically rendered to HTML via TTina4Twig on change.</summary>
     property Twig: TStringList read GetTwig write SetTwig;
+    /// <summary>Base path for Twig {% include %} and {% extends %} resolution.</summary>
     property TwigTemplatePath: string read FTwigTemplatePath write SetTwigTemplatePath;
+    /// <summary>Debug output string list for diagnostic information.</summary>
     property Debug: TStringList read FDebug write FDebug;
+    /// <summary>Enables disk-based caching for downloaded images and stylesheets.</summary>
     property CacheEnabled: Boolean read FCacheEnabled write SetCacheEnabled default False;
+    /// <summary>Directory path for the disk-based file cache.</summary>
     property CacheDir: string read FCacheDir write SetCacheDir;
+    /// <summary>Fires when any form control value changes.</summary>
     property OnFormControlChange: THTMLFormControlEvent read FOnChange write FOnChange;
+    /// <summary>Fires when a form control is clicked.</summary>
     property OnFormControlClick: THTMLFormControlEvent read FOnClick write FOnClick;
+    /// <summary>Fires when a form control gains focus.</summary>
     property OnFormControlEnter: THTMLFormControlEvent read FOnEnter write FOnEnter;
+    /// <summary>Fires when a form control loses focus.</summary>
     property OnFormControlExit: THTMLFormControlEvent read FOnExit write FOnExit;
+    /// <summary>Fires when a submit button is clicked with form name and name=value data.</summary>
     property OnFormSubmit: THTMLFormSubmitEvent read FOnSubmit write FOnSubmit;
+    /// <summary>Fires when an element with onclick attribute is clicked (RTTI fallback).</summary>
     property OnElementClick: THTMLElementClickEvent read FOnElementClick write FOnElementClick;
+    /// <summary>
+    /// Fires when an anchor tag with href is clicked. Set Handled := True to
+    /// prevent default processing. Used by TTina4HTMLPages for page navigation.
+    /// </summary>
+    property OnLinkClick: THTMLLinkClickEvent read FOnLinkClick write FOnLinkClick;
     property Align;
     property Position;
     property Width;
@@ -4962,9 +5059,10 @@ begin
   // Border
   PaintBorder(Canvas, Box, AbsX, AbsY);
 
-  // Record clickable regions for elements with onclick attribute
+  // Record clickable regions for elements with onclick attribute or <a> with href
   if Assigned(Box.Tag) and (Box.Tag.TagName <> '#text') and
-     (Box.Tag.GetAttribute('onclick', '') <> '') then
+     ((Box.Tag.GetAttribute('onclick', '') <> '') or
+      ((Box.Tag.TagName = 'a') and (Box.Tag.GetAttribute('href', '') <> ''))) then
   begin
     var ML := ResolveAutoMargin(Box.Style.Margin.Left);
     var MT := ResolveAutoMargin(Box.Style.Margin.Top);
@@ -5996,6 +6094,30 @@ begin
       begin
         FireOnClick(Region.Tag);
         Break;
+      end;
+    end;
+  end;
+
+  // Check for anchor link clicks — walk up the DOM tree from the hit element
+  // to find the nearest <a> ancestor with href attribute
+  if (Button = TMouseButton.mbLeft) and Assigned(FOnLinkClick) and
+     Assigned(FLayoutEngine) and Assigned(FLayoutEngine.Root) then
+  begin
+    var HitTag2 := HitTestElement(FLayoutEngine.Root, 0, 0, X, Y + FScrollY);
+    if Assigned(HitTag2) then
+    begin
+      var WalkTag := HitTag2;
+      while Assigned(WalkTag) do
+      begin
+        if SameText(WalkTag.TagName, 'a') and
+           (WalkTag.GetAttribute('href', '') <> '') then
+        begin
+          var LinkURL := WalkTag.GetAttribute('href', '');
+          var LinkHandled := False;
+          FOnLinkClick(Self, LinkURL, LinkHandled);
+          Break;
+        end;
+        WalkTag := WalkTag.Parent;
       end;
     end;
   end;

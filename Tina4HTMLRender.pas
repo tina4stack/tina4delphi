@@ -511,12 +511,16 @@ type
     /// </summary>
     property OnLinkClick: THTMLLinkClickEvent read FOnLinkClick write FOnLinkClick;
     property Align;
-    property Position;
-    property Width;
-    property Height;
-    property Visible;
-    property Enabled;
+    property Anchors;
     property ClipChildren;
+    property Enabled;
+    property Height;
+    property Margins;
+    property Padding;
+    property Position;
+    property Size;
+    property Visible;
+    property Width;
   end;
 
 procedure Register;

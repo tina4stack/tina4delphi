@@ -5,6 +5,7 @@ Model Context Protocol (MCP) for use with Claude.
 """
 
 from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp.utilities.types import Image
 
 from pascal_mcp.compiler import (
     cleanup_compile_result,
@@ -19,6 +20,7 @@ from pascal_mcp.form_parser import (
     parse_form_file,
 )
 from pascal_mcp.installer import download_and_install_fpc
+from pascal_mcp.screenshot import capture_window, list_windows
 
 mcp = FastMCP(
     "pascal-dev",
@@ -199,6 +201,66 @@ async def parse_form(
         return format_component_list(root)
     else:
         return format_tree(root)
+
+
+@mcp.tool()
+async def screenshot_app(
+    window_title: str,
+) -> list:
+    """Take a screenshot of a running application window.
+
+    Finds a window by its title (or partial title), brings it to the
+    foreground, and captures just that window as a PNG image.
+    Use list_app_windows first if you need to find the exact title.
+
+    Args:
+        window_title: Full or partial window title to capture (case-insensitive).
+            For example: 'Hello World App' or just 'Hello'.
+    """
+    result = capture_window(window_title)
+
+    if result is None:
+        windows = list_windows(window_title)
+        if windows:
+            titles = "\n".join(f"  - {w['title']}" for w in windows[:10])
+            return f"Window not found for '{window_title}'. Similar windows:\n{titles}"
+        return (
+            f"No window found matching '{window_title}'. "
+            "Use the list_app_windows tool to see all open windows."
+        )
+
+    b64_data, actual_title, width, height = result
+    return [
+        Image(data=b64_data, format="png"),
+        f"Screenshot of '{actual_title}' ({width}x{height})",
+    ]
+
+
+@mcp.tool()
+async def list_app_windows(
+    filter_text: str = "",
+) -> str:
+    """List visible application windows on the desktop.
+
+    Use this to find the exact title of a window before taking
+    a screenshot with screenshot_app.
+
+    Args:
+        filter_text: Optional text to filter window titles (case-insensitive).
+            Leave empty to list all visible windows.
+    """
+    windows = list_windows(filter_text)
+
+    if not windows:
+        if filter_text:
+            return f"No visible windows matching '{filter_text}'."
+        return "No visible windows found."
+
+    lines = [f"Found {len(windows)} window(s):\n"]
+    for w in windows:
+        lines.append(f"  {w['title']}")
+
+    return "\n".join(lines)
 
 
 @mcp.tool()

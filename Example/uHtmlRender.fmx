@@ -38,8 +38,7 @@ object Form3: TForm3
     OnFormControlChange = Tina4HTMLRender1FormControlChange
     OnFormControlClick = Tina4HTMLRender1FormControlClick
     OnFormSubmit = Tina4HTMLRender1FormSubmit
-    Position.X = 8.000000000000000000
-    Position.Y = 38.000000000000000000
+    Align = Client
     ClipChildren = True
     object TRectangle
       Cursor = crHandPoint
@@ -89,7 +88,7 @@ object Form3: TForm3
       Size.Width = 16.000000000000000000
       Size.Height = 16.000000000000000000
       Size.PlatformDefault = False
-      TabOrder = 30
+      TabOrder = 32
       TextSettings.Font.Size = 14.000000000000000000
     end
     object TLayout
@@ -97,7 +96,7 @@ object Form3: TForm3
       Size.Width = 250.000000000000000000
       Size.Height = 24.000000000000000000
       Size.PlatformDefault = False
-      TabOrder = 31
+      TabOrder = 33
       object TRectangle
         Align = Left
         Cursor = crHandPoint

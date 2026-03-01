@@ -1,6 +1,6 @@
 object frmDataModule: TfrmDataModule
-  Height = 1099
-  Width = 1273
+  Height = 879
+  Width = 1304
   PixelsPerInch = 144
   object IdSchedulerOfThreadPool1: TIdSchedulerOfThreadPool
     MaxThreads = 50

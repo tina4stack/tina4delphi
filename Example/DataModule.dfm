@@ -163,8 +163,8 @@ object frmDataModule: TfrmDataModule
         'ame": "Bob", "lastName": "Wilson", "email": "bob@example.com", "' +
         'department": "Engineering"}]}')
     SyncMode = Clear
-    Left = 672
-    Top = 653
+    Left = 480
+    Top = 597
   end
   object FDMemTable3: TFDMemTable
     Active = True

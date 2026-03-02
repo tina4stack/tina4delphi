@@ -244,11 +244,12 @@ CONSOLE_DPR_MODERN = """\
 program {project_name};
 
 {{$APPTYPE CONSOLE}}
+{{$R *.res}}
 
 uses
   System.SysUtils;
 
-begin
+{var_declarations}begin
   try
 {program_body}
   except
@@ -262,11 +263,12 @@ CONSOLE_DPR_LEGACY = """\
 program {project_name};
 
 {{$APPTYPE CONSOLE}}
+{{$R *.res}}
 
 uses
   SysUtils;
 
-begin
+{var_declarations}begin
   try
 {program_body}
   except
@@ -634,6 +636,7 @@ def generate_fmx_project(
 def generate_console_project(
     project_name: str = "Project1",
     program_body: str = "    Writeln('Hello, World!');",
+    var_declarations: str = "",
     compiler_type: str | None = None,
 ) -> dict[str, str]:
     """Generate a console application project.
@@ -642,6 +645,8 @@ def generate_console_project(
         project_name: Name for the .dpr file (without extension).
         program_body: The Pascal code to put in the main begin..end block.
             Each line should be indented with 4 spaces.
+        var_declarations: Optional var block content (without 'var' keyword).
+            Example: "  Name: string;\\n  Age: Integer;"
         compiler_type: Compiler type/path to determine legacy vs modern units.
 
     Returns:
@@ -650,10 +655,16 @@ def generate_console_project(
     legacy = _is_legacy_compiler(compiler_type)
     tmpl = CONSOLE_DPR_LEGACY if legacy else CONSOLE_DPR_MODERN
 
+    # Build var block
+    var_block = ""
+    if var_declarations.strip():
+        var_block = f"var\n{var_declarations}\n"
+
     return {
         f"{project_name}.dpr": tmpl.format(
             project_name=project_name,
             program_body=program_body,
+            var_declarations=var_block,
         ),
     }
 

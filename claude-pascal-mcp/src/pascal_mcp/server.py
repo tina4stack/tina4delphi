@@ -331,6 +331,7 @@ async def compile_delphi_project(
     output_dir: str | None = None,
     project_type: str = "vcl",
     program_body: str = "",
+    var_declarations: str = "",
 ) -> str:
     """Compile a Delphi project using proper templates (DPR + PAS + DFM).
 
@@ -354,6 +355,8 @@ async def compile_delphi_project(
         project_type: 'vcl' for VCL GUI app, 'fmx' for FireMonkey GUI app,
             'console' for console app, 'fpc' for FPC.
         program_body: For console/fpc projects, the main program code.
+        var_declarations: For console projects, variable declarations
+            (without 'var' keyword). Example: "  Name: string;"
     """
     import json
 
@@ -389,6 +392,7 @@ async def compile_delphi_project(
         files = generate_console_project(
             project_name=project_name,
             program_body=body,
+            var_declarations=var_declarations,
             compiler_type=compiler,
         )
     elif project_type == "fpc":

@@ -51,7 +51,9 @@ contains
   Tina4SocketServer in 'Tina4SocketServer.pas',
   Tina4Twig in 'Tina4Twig.pas',
   Tina4HTMLRender in 'Tina4HTMLRender.pas',
-  Tina4HTMLPages in 'Tina4HTMLPages.pas';
+  Tina4HTMLPages in 'Tina4HTMLPages.pas',
+  Tina4OpenSSL in 'Tina4OpenSSL.pas',
+  Tina4WebSocketClient in 'Tina4WebSocketClient.pas';
 
 end.
 

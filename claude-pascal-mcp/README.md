@@ -236,8 +236,9 @@ compile_pascal(source, compiler="C:\\Path\\To\\dcc64.exe")
 
 The `examples/` directory contains working sample projects:
 
-- **HelloWorld** — Simple VCL console application
+- **HelloWorld** — VCL GUI application with form, edit box and button
 - **HelloFMX** — FMX (FireMonkey) GUI app with edit box and button
+- **HelloConsole** — Console application with ReadLn input
 
 These can be opened directly in the Delphi IDE or compiled from the command line.
 

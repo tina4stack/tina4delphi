@@ -1372,7 +1372,7 @@ The server automatically detects compilers in this priority order:
 
 1. **Free Pascal (fpc)** — open source, cross-platform
 2. **Delphi 64-bit (dcc64)** — RAD Studio command-line compiler
-3. **Delphi 32-bit (dcc32)** — RAD Studio / Delphi 7 command-line compiler
+3. **Delphi 32-bit (dcc32)** — RAD Studio / Delphi  command-line compiler
 
 You can also specify a full path to any compiler executable:
 ```

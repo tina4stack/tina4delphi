@@ -1,14 +1,14 @@
 # Claude Pascal MCP Server
 
-An MCP (Model Context Protocol) server that lets Claude compile, run, and interact with Pascal/Delphi desktop applications. Supports Free Pascal (fpc), Delphi 32-bit (dcc32), and Delphi 64-bit (dcc64) compilers.
+An MCP (Model Context Protocol) server that lets Claude compile, run, and interact with Pascal/Delphi desktop applications. Automatically detects any installed Pascal compiler — Free Pascal, Delphi, or RAD Studio.
 
 ## Features
 
-- **Compiler Detection** — automatically finds Pascal compilers on your system (PATH + known install locations)
-- **Compile** — compile single-file Pascal source or multi-file Delphi projects
-- **Run** — compile and execute console programs, capturing output
+- **Compiler Detection** — automatically finds Pascal compilers on your system (PATH + known install locations for Borland, CodeGear, and Embarcadero eras)
+- **Compile** — compile single-file Pascal source or multi-file Delphi projects (VCL and FMX)
+- **Run** — compile and execute console programs, capturing output (supports stdin for ReadLn)
 - **Launch GUI Apps** — compile and launch VCL/FMX applications in background
-- **Project Templates** — generate proper Delphi project structure (DPR + PAS + DFM) automatically
+- **Project Templates** — generate proper project structure automatically (DPR + PAS + DFM/FMX)
 - **Form Parser** — read and understand DFM/FMX/LFM form files
 - **Window Screenshots** — capture running desktop app windows (non-intrusive, no focus stealing)
 - **Preview Bridge** — live preview of running Pascal apps through Claude's preview system
@@ -21,14 +21,73 @@ An MCP (Model Context Protocol) server that lets Claude compile, run, and intera
 |------|-------------|
 | `get_compiler_info` | Detect available compilers and show versions |
 | `compile_pascal` | Compile single-file source code |
-| `compile_delphi_project` | Compile proper Delphi project from templates (DPR + PAS + DFM) |
-| `run_pascal` | Compile and execute console programs |
+| `compile_delphi_project` | Compile Delphi/FPC project from templates (VCL, FMX, console, FPC) |
+| `run_pascal` | Compile and execute console programs (supports stdin input) |
 | `launch_app` | Compile and launch GUI app in background |
 | `check_syntax` | Syntax check only (no linking) |
 | `parse_form` | Parse DFM/FMX/LFM form files |
 | `screenshot_app` | Capture screenshot of a running app window |
 | `list_app_windows` | List visible windows on the desktop |
 | `setup_fpc` | Download and install Free Pascal (fallback) |
+
+## Project Templates
+
+The `compile_delphi_project` tool generates proper project structure automatically. You specify components and events, and it creates the correct files.
+
+Supported project types: `vcl`, `fmx`, `console`, `fpc`
+
+### VCL Example
+
+```
+compile_delphi_project(
+  project_name="HelloVCL",
+  form_caption="Hello App",
+  project_type="vcl",
+  components='[
+    {"type": "TEdit", "name": "edtName", "text": "",
+     "left": 20, "top": 20, "width": 200, "height": 21},
+    {"type": "TButton", "name": "btnHello", "caption": "Say Hello",
+     "left": 20, "top": 50, "width": 100, "height": 30,
+     "event": "btnHelloClick"}
+  ]',
+  events='[{"name": "btnHelloClick",
+            "body": "ShowMessage(''Hello '' + edtName.Text + ''!'');"}]'
+)
+```
+
+Generates: `HelloVCL.dpr`, `uMain.pas`, `uMain.dfm`
+
+### FMX (FireMonkey) Example
+
+```
+compile_delphi_project(
+  project_name="HelloFMX",
+  form_caption="Hello FMX App",
+  project_type="fmx",
+  components='[
+    {"type": "TEdit", "name": "edtName", "text": "",
+     "left": 20, "top": 20, "width": 200, "height": 22},
+    {"type": "TButton", "name": "btnHello", "caption": "Say Hello",
+     "left": 20, "top": 55, "width": 100, "height": 30,
+     "event": "btnHelloClick"}
+  ]',
+  events='[{"name": "btnHelloClick",
+            "body": "ShowMessage(''Hello '' + edtName.Text + ''!'');"}]'
+)
+```
+
+Generates: `HelloFMX.dpr`, `uMain.pas`, `uMain.fmx`
+
+### Console Example (with ReadLn input)
+
+```
+run_pascal(
+  source_code="program Greeter;\nvar Name: string;\nbegin\n  Write(''Enter your name: '');\n  ReadLn(Name);\n  WriteLn(''Hello '' + Name + ''!'');\nend.",
+  stdin_input="World"
+)
+```
+
+Output: `Hello World!`
 
 ## Preview Bridge
 
@@ -79,35 +138,6 @@ The click endpoint supports three modes, from most to least reliable:
 2. **Client-area coordinates** (`{"x": 200, "y": 142, "client": true}`) — uses Win32 `ClientToScreen` for proper DPI handling.
 3. **Window-relative coordinates** (`{"x": 312, "y": 261}`) — raw coordinates in the screenshot image space.
 
-## Project Templates
-
-The `compile_delphi_project` tool generates proper Delphi project structure automatically. You specify components and events, and it creates the correct DPR, PAS, and DFM files.
-
-Templates automatically handle:
-- **Modern Delphi** (RAD Studio): namespaced units (`Vcl.Forms`, `System.SysUtils`)
-- **Legacy Delphi** (Delphi 7): non-namespaced units (`Forms`, `SysUtils`)
-- Form definitions (DFM) with proper component declarations
-- Event handler wiring between DFM and PAS files
-
-### Example
-
-```
-compile_delphi_project(
-  project_name="HelloWorld",
-  form_caption="My App",
-  components='[{"type": "TButton", "name": "btnHello", "caption": "Click Me",
-                "left": 100, "top": 100, "width": 120, "height": 35,
-                "event": "btnHelloClick"}]',
-  events='[{"name": "btnHelloClick", "body": "ShowMessage(\'Hello!\');"}]',
-  compiler="C:\\Path\\To\\dcc64.exe"
-)
-```
-
-This generates:
-- `HelloWorld.dpr` — project file with proper uses clause
-- `uMain.pas` — unit with form class, component declarations, event handlers
-- `uMain.dfm` — form definition with component properties
-
 ## Installation
 
 ### Prerequisites
@@ -116,43 +146,25 @@ This generates:
 - [uv](https://docs.astral.sh/uv/) package manager
 - A Pascal compiler (Free Pascal, Delphi, or RAD Studio)
 
-### Quick Start
+### Install as Claude Code Plugin (Recommended)
+
+This server includes a `.claude-plugin/marketplace.json` and can be installed directly as a Claude Code plugin:
 
 ```bash
-# Clone the repository
-git clone https://github.com/tina4stack/tina4delphi.git
-cd tina4delphi/claude-pascal-mcp
+# From within Claude Code, add the plugin marketplace
+/plugin marketplace add /path/to/claude-pascal-mcp
 
-# Install dependencies
-uv sync
-
-# Run the MCP server (stdio mode)
-uv run pascal-mcp
-
-# Run the preview bridge (HTTP mode)
-uv run pascal-preview
+# Then install the plugin
+/plugin install pascal-dev
 ```
 
-### Register with Claude Code
+### Alternative: Manual MCP Registration
 
 ```bash
 claude mcp add --transport stdio pascal-dev -- uv run --directory /path/to/claude-pascal-mcp pascal-mcp
 ```
 
-Or add to your project's `.mcp.json`:
-
-```json
-{
-  "mcpServers": {
-    "pascal-dev": {
-      "command": "uv",
-      "args": ["run", "--directory", "/path/to/claude-pascal-mcp", "pascal-mcp"]
-    }
-  }
-}
-```
-
-### Register with Claude Desktop
+### Claude Desktop
 
 Add to your `claude_desktop_config.json`:
 
@@ -190,22 +202,15 @@ Then in Claude Code, use `preview_start("pascal-preview")` to open the preview p
 
 ## Supported Compilers
 
-The server automatically detects compilers in this priority order:
+The server automatically detects any installed Pascal compiler on your system. It searches the system PATH and common installation directories across all eras:
 
-1. **Free Pascal (fpc)** — open source, cross-platform
-2. **Delphi 64-bit (dcc64)** — RAD Studio command-line compiler
-3. **Delphi 32-bit (dcc32)** — RAD Studio / Delphi 7 command-line compiler
+- **Free Pascal (fpc)** — open source, cross-platform
+- **Delphi (dcc32/dcc64)** — Borland, CodeGear, and Embarcadero versions
 
 You can also specify a full path to any compiler executable:
 ```
-compile_pascal(source, compiler="C:\\Program Files (x86)\\Embarcadero\\Studio\\37.0\\bin\\dcc64.exe")
+compile_pascal(source, compiler="C:\\Path\\To\\dcc64.exe")
 ```
-
-Detection checks the system PATH first, then known installation directories:
-
-- `C:\FPC\*\bin\*\fpc.exe`
-- `C:\Lazarus\fpc\*\bin\*\fpc.exe`
-- `C:\Program Files (x86)\Embarcadero\Studio\*\bin\dcc*.exe`
 
 ## License
 

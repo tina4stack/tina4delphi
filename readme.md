@@ -7,9 +7,11 @@ This is not another framework for Delphi
 - Delphi 10.4+ (FireMonkey / FMX)
 - FireDAC components
 - Indy (for TTina4WebServer)
-- SSL DLLs:
-  - Extract **32-bit** SSL DLLs to `C:\Windows\SysWOW64` (required for the IDE)
-  - Extract **64-bit** SSL DLLs to `C:\Windows\System32` (required for your applications)
+- OpenSSL DLLs (for `TTina4WebServer`, `TTina4RESTRequest`, and `TTina4WebSocketClient`):
+  - **Bundled**: 32-bit and 64-bit OpenSSL 3.x DLLs are included in `lib/win32` and `lib/win64`
+  - Copy the appropriate DLLs next to your executable, or install system-wide:
+    - **32-bit** DLLs (`libssl-3.dll`, `libcrypto-3.dll`) to `C:\Windows\SysWOW64` or next to your 32-bit exe
+    - **64-bit** DLLs (`libssl-3-x64.dll`, `libcrypto-3-x64.dll`) to `C:\Windows\System32` or next to your 64-bit exe
 
 ## Components
 
@@ -24,6 +26,7 @@ This is not another framework for Delphi
 | `TTina4HTMLRender` | Tina4HTMLRender | FMX control that renders HTML to canvas |
 | `TTina4HTMLPages` | Tina4HTMLPages | Design-time page navigation for TTina4HTMLRender |
 | `TTina4Twig` | Tina4Twig | Twig-style template engine |
+| `TTina4WebSocketClient` | Tina4WebSocketClient | WebSocket client with TLS, auto-reconnect, and ping/pong |
 | `TFMXStyleSheet` | FMXStyle.StyleSheet | CSS/SCSS to FMX StyleBook converter with live reload |
 
 ## Tina4Core Reference
@@ -957,6 +960,145 @@ end;
 
 Template syntax supports: `{{ variable }}`, `{% if %}`, `{% for %}`, `{% include %}`, `{% extends %}`, `{% block %}`, `{% macro %}`, filters (`|upper`, `|lower`, `|length`, `|default`, etc.), and functions (`range()`, `dump()`, etc.).
 
+## TTina4WebSocketClient -- WebSocket Client
+
+A cross-platform WebSocket client component using `System.Net.Socket` (no Indy dependency). Supports `ws://` and `wss://` (TLS via OpenSSL), auto-reconnect, custom headers, and ping/pong keep-alive.
+
+### Basic Usage (Console)
+
+```delphi
+type
+  TWSHandler = class
+    Client: TTina4WebSocketClient;
+    procedure OnConnected(Sender: TObject);
+    procedure OnMessage(Sender: TObject; const AMessage: string);
+    procedure OnError(Sender: TObject; const AError: string);
+    procedure OnDisconnected(Sender: TObject; const ACode: Integer;
+      const AReason: string);
+  end;
+
+procedure TWSHandler.OnConnected(Sender: TObject);
+begin
+  WriteLn('Connected!');
+  Client.Send('{"action": "subscribe", "topic": "MyTopic"}');
+end;
+
+procedure TWSHandler.OnMessage(Sender: TObject; const AMessage: string);
+begin
+  WriteLn('Received: ' + AMessage);
+end;
+
+// ... create handler, assign events, connect:
+Handler.Client := TTina4WebSocketClient.Create(nil);
+Handler.Client.URL := 'wss://example.com/ws';
+Handler.Client.Headers.Add('Authorization: Bearer <token>');
+Handler.Client.OnConnected := Handler.OnConnected;
+Handler.Client.OnMessage := Handler.OnMessage;
+Handler.Client.Connect;
+
+// Event loop (console apps only -- GUI apps use the message pump)
+while SecondsBetween(Now, StartTime) < 60 do
+  CheckSynchronize(100);
+```
+
+### VCL/FMX Usage
+
+In GUI applications, events are dispatched automatically via `TThread.Queue`. No `CheckSynchronize` loop is needed.
+
+```delphi
+procedure TForm1.FormCreate(Sender: TObject);
+begin
+  WS := TTina4WebSocketClient.Create(Self);
+  WS.URL := 'wss://api.example.com/notifications';
+  WS.Headers.Add('Authorization: Bearer my-token');
+  WS.OnConnected := HandleConnected;
+  WS.OnMessage := HandleMessage;
+  WS.OnError := HandleError;
+  WS.OnDisconnected := HandleDisconnected;
+end;
+
+procedure TForm1.btnConnectClick(Sender: TObject);
+begin
+  WS.Connect;
+end;
+
+procedure TForm1.HandleConnected(Sender: TObject);
+begin
+  Label1.Text := 'Connected';
+end;
+
+procedure TForm1.HandleMessage(Sender: TObject; const AMessage: string);
+begin
+  Memo1.Lines.Add(AMessage);
+end;
+```
+
+### Properties
+
+| Property | Type | Default | Description |
+|---|---|---|---|
+| `URL` | `string` | `''` | WebSocket endpoint (`ws://` or `wss://`) |
+| `Headers` | `TStrings` | empty | Custom HTTP headers (e.g. `Authorization: Bearer xxx`) |
+| `AutoReconnect` | `Boolean` | `True` | Automatically reconnect on unexpected disconnect |
+| `ReconnectInterval` | `Integer` | `3000` | Milliseconds between reconnect attempts |
+| `ReconnectMaxAttempts` | `Integer` | `10` | Maximum reconnect attempts (0 = unlimited) |
+| `PingInterval` | `Integer` | `30000` | Milliseconds between ping frames (0 = disabled) |
+| `ConnectTimeout` | `Integer` | `5000` | TCP connection timeout in milliseconds |
+| `State` | `TTina4WSState` | `wsClosed` | Current connection state (read-only) |
+
+### Events
+
+| Event | Signature | Description |
+|---|---|---|
+| `OnConnected` | `TNotifyEvent` | Fired when the WebSocket handshake completes |
+| `OnMessage` | `procedure(Sender: TObject; const AMessage: string)` | Fired when a text message is received |
+| `OnBinaryReceived` | `procedure(Sender: TObject; const AData: TBytes)` | Fired when a binary message is received |
+| `OnError` | `procedure(Sender: TObject; const AError: string)` | Fired on connection or protocol errors |
+| `OnDisconnected` | `procedure(Sender: TObject; const ACode: Integer; const AReason: string)` | Fired when the connection closes (code 1000 = normal) |
+| `OnReconnecting` | `procedure(Sender: TObject; AAttempt: Integer)` | Fired before each reconnect attempt |
+
+### Methods
+
+| Method | Description |
+|---|---|
+| `Connect` | Start the WebSocket connection (async) |
+| `Disconnect` | Send a close frame and shut down cleanly |
+| `Send(const AMessage: string)` | Send a text message |
+| `Send(const AData: TBytes)` | Send a binary message |
+| `IsConnected: Boolean` | Returns `True` if the connection is open |
+
+### Connection States
+
+| State | Description |
+|---|---|
+| `wsClosed` | Not connected |
+| `wsConnecting` | TCP/TLS handshake in progress |
+| `wsOpen` | Connected and ready to send/receive |
+| `wsClosing` | Close handshake in progress |
+| `wsReconnecting` | Waiting to reconnect after unexpected disconnect |
+
+### OpenSSL / TLS
+
+The `Tina4OpenSSL` unit dynamically loads OpenSSL at runtime. No compile-time linking is required. The loader searches for libraries in this order:
+
+| Platform | Libraries tried |
+|---|---|
+| Windows 64-bit | `libssl-3-x64.dll`, `libssl-1_1-x64.dll`, `libssl-3.dll`, `libssl-1_1.dll` |
+| Windows 32-bit | `libssl-3.dll`, `libssl-1_1.dll`, `libssl-3-x64.dll`, `libssl-1_1-x64.dll` |
+| macOS | `libssl.3.dylib`, `libssl.1.1.dylib` |
+| Linux | `libssl.so.3`, `libssl.so.1.1` |
+
+Pre-built OpenSSL 3.x DLLs are bundled in `lib/win32` and `lib/win64`. Copy the appropriate pair next to your executable if OpenSSL is not installed system-wide.
+
+```delphi
+uses Tina4OpenSSL;
+
+if LoadOpenSSL then
+  WriteLn('OpenSSL loaded')
+else
+  WriteLn('OpenSSL not found - wss:// will not work');
+```
+
 ## TFMXStyleSheet -- CSS/SCSS to FMX StyleBook
 
 A separate companion component that converts CSS and SCSS files into FMX StyleBook resources. CSS class names map directly to FMX `StyleLookup` values.
@@ -1081,3 +1223,6 @@ See the [claude-pascal-mcp](https://github.com/niclasborgworx/claude-pascal-mcp)
 - 2026-02-28 TTina4HTMLRender: Added `TwigTemplatePath` property and `SetTwigVariable` method for template context
 - 2026-02-28 TTina4HTMLRender: Added `OnLinkClick` event for anchor `<a href>` click interception
 - 2026-02-28 TTina4HTMLPages: New design-time page navigation component with collection editor, Twig/HTML pages, `OnBeforeNavigate`/`OnAfterNavigate` events
+- 2026-03-02 TTina4WebSocketClient: New WebSocket client component with RFC 6455 protocol, `ws://` and `wss://` support
+- 2026-03-02 Tina4OpenSSL: New OpenSSL dynamic loader for TLS — supports OpenSSL 3.x and 1.1.x on Windows, macOS, Linux
+- 2026-03-02 Bundled OpenSSL 3.6.1 DLLs for Windows (32-bit in `lib/win32`, 64-bit in `lib/win64`)

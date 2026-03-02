@@ -81,13 +81,33 @@ Generates: `HelloFMX.dpr`, `uMain.pas`, `uMain.fmx`
 ### Console Example (with ReadLn input)
 
 ```
+compile_delphi_project(
+  project_name="Greeter",
+  project_type="console",
+  var_declarations="  Name: string;",
+  program_body="    Write('Enter your name: ');\n    ReadLn(Name);\n    WriteLn('Hello ' + Name + '!');"
+)
+```
+
+Generates a standard Delphi console project with `{$APPTYPE CONSOLE}`, `{$R *.res}`, and proper `var` section — matching IDE-generated code.
+
+You can also run console apps directly with stdin input:
+
+```
 run_pascal(
-  source_code="program Greeter;\nvar Name: string;\nbegin\n  Write(''Enter your name: '');\n  ReadLn(Name);\n  WriteLn(''Hello '' + Name + ''!'');\nend.",
+  source_code="program Greeter;\nvar Name: string;\nbegin\n  Write('Enter: ');\n  ReadLn(Name);\n  WriteLn('Hello ' + Name + '!');\nend.",
   stdin_input="World"
 )
 ```
 
-Output: `Hello World!`
+## Resource Files
+
+FMX and console projects include `{$R *.res}` which requires a `.res` file at compile time. The server handles this automatically:
+
+1. If `.rc` files are present and `brcc32` is available, they are compiled to `.res` (for custom icons, version info, etc.)
+2. Otherwise, a minimal `.res` is generated directly — no external resource compiler needed
+
+This means FMX projects compile out of the box without requiring `brcc32` or any manual resource setup.
 
 ## Preview Bridge
 
@@ -211,6 +231,15 @@ You can also specify a full path to any compiler executable:
 ```
 compile_pascal(source, compiler="C:\\Path\\To\\dcc64.exe")
 ```
+
+## Examples
+
+The `examples/` directory contains working sample projects:
+
+- **HelloWorld** — Simple VCL console application
+- **HelloFMX** — FMX (FireMonkey) GUI app with edit box and button
+
+These can be opened directly in the Delphi IDE or compiled from the command line.
 
 ## License
 

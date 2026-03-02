@@ -4,14 +4,23 @@ Exposes Pascal/Delphi compilation and execution tools via the
 Model Context Protocol (MCP) for use with Claude.
 """
 
+import base64
+
 from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.utilities.types import Image
 
 from pascal_mcp.compiler import (
     cleanup_compile_result,
+    compile_and_launch,
+    compile_project,
     compile_source,
     detect_compilers,
     run_source,
+)
+from pascal_mcp.templates import (
+    generate_console_project,
+    generate_fpc_project,
+    generate_vcl_project,
 )
 from pascal_mcp.form_parser import (
     format_component_list,
@@ -26,10 +35,12 @@ mcp = FastMCP(
     "pascal-dev",
     instructions=(
         "Pascal/Delphi development tools. Use get_compiler_info to check "
-        "available compilers. Use compile_pascal to compile code and see "
-        "errors. Use run_pascal to compile and execute code. If no compiler "
-        "is found, use setup_fpc to install Free Pascal. Use parse_form to "
-        "read and understand DFM/FMX/LFM form files."
+        "available compilers. Use compile_pascal to compile single-file code. "
+        "Use compile_delphi_project to compile proper multi-file Delphi "
+        "projects (DPR + PAS + DFM). Use run_pascal to compile and execute "
+        "console programs. Use launch_app for GUI applications that need to "
+        "stay running. If no compiler is found, use setup_fpc to install "
+        "Free Pascal. Use parse_form to read DFM/FMX/LFM form files."
     ),
 )
 
@@ -236,7 +247,7 @@ async def screenshot_app(
 
     b64_data, actual_title, width, height = result
     return [
-        Image(data=b64_data, format="png"),
+        Image(data=base64.b64decode(b64_data), format="png"),
         f"Screenshot of '{actual_title}' ({width}x{height})",
     ]
 
@@ -266,6 +277,140 @@ async def list_app_windows(
         lines.append(f"  {w['title']}")
 
     return "\n".join(lines)
+
+
+@mcp.tool()
+async def launch_app(
+    source_code: str,
+    compiler: str | None = None,
+) -> str:
+    """Compile Pascal source and launch the GUI application in background.
+
+    Use this for GUI applications (VCL/FMX) that need to stay running
+    so you can see and interact with them. Unlike run_pascal, this does
+    not wait for the program to finish — it launches and returns immediately.
+
+    After launching, use the preview system (preview_start with
+    "pascal-preview") to see the running application, or use
+    screenshot_app to capture a screenshot.
+
+    Args:
+        source_code: The complete Pascal source code to compile and launch.
+            Should be a GUI program (VCL/FMX) with forms.
+        compiler: Which compiler to use. Can be a type name ('fpc', 'dcc32',
+            'dcc64') or a full path to a specific compiler executable.
+            If not specified, auto-selects the best available compiler.
+    """
+    result = compile_and_launch(source_code, compiler_type=compiler)
+
+    parts = [f"Success: {result.success}"]
+    parts.append(result.message)
+
+    if result.exe_path:
+        parts.append(f"Executable: {result.exe_path}")
+
+    if result.success:
+        parts.append(
+            "\nTo see the app, use preview_start('pascal-preview') or "
+            "screenshot_app with the window title."
+        )
+
+    return "\n".join(parts)
+
+
+@mcp.tool()
+async def compile_delphi_project(
+    project_name: str = "Project1",
+    form_caption: str = "My Application",
+    components: str = "[]",
+    events: str = "[]",
+    compiler: str | None = None,
+    output_dir: str | None = None,
+    project_type: str = "vcl",
+    program_body: str = "",
+) -> str:
+    """Compile a Delphi project using proper templates (DPR + PAS + DFM).
+
+    This is the PREFERRED way to build Delphi applications. It generates
+    proper project structure automatically — you don't need to write
+    boilerplate DPR/DFM code.
+
+    Args:
+        project_name: Name for the project (e.g., 'HelloWorld').
+        form_caption: Title bar text for the main form (VCL only).
+        components: JSON array of components. Each component is an object:
+            [{"type": "TButton", "name": "btnHello", "caption": "Say Hello",
+              "left": 130, "top": 120, "width": 140, "height": 45,
+              "event": "btnHelloClick"}]
+            Supported types: TButton, TEdit, TLabel, TMemo.
+        events: JSON array of event handlers:
+            [{"name": "btnHelloClick", "body": "ShowMessage('Hello!');"}]
+        compiler: Which compiler to use ('fpc', 'dcc32', 'dcc64', or full path).
+        output_dir: Optional directory for output files. If not specified,
+            uses a temp directory.
+        project_type: 'vcl' for GUI app, 'console' for console app, 'fpc' for FPC.
+        program_body: For console/fpc projects, the main program code.
+    """
+    import json
+
+    try:
+        comp_list = json.loads(components) if components else []
+    except json.JSONDecodeError as e:
+        return f"Invalid components JSON: {e}"
+
+    try:
+        evt_list = json.loads(events) if events else []
+    except json.JSONDecodeError as e:
+        return f"Invalid events JSON: {e}"
+
+    # Generate project files from templates
+    if project_type == "vcl":
+        files = generate_vcl_project(
+            project_name=project_name,
+            form_caption=form_caption,
+            components=comp_list,
+            events=evt_list,
+            compiler_type=compiler,
+        )
+    elif project_type == "console":
+        body = program_body or "    Writeln('Hello, World!');"
+        files = generate_console_project(
+            project_name=project_name,
+            program_body=body,
+            compiler_type=compiler,
+        )
+    elif project_type == "fpc":
+        body = program_body or "  Writeln('Hello, World!');"
+        files = generate_fpc_project(
+            project_name=project_name,
+            program_body=body,
+        )
+    else:
+        return f"Unknown project_type: {project_type}. Use 'vcl', 'console', or 'fpc'."
+
+    # Show what was generated
+    parts = [f"Generated {len(files)} file(s):"]
+    for fname in files:
+        parts.append(f"  - {fname}")
+
+    # Compile the project
+    result = compile_project(files, compiler_type=compiler, output_dir=output_dir)
+
+    parts.append(f"\nCompiler: {result.compiler_used}")
+    parts.append(f"Success: {result.success}")
+
+    if result.stdout.strip():
+        parts.append(f"\n--- Compiler Output ---\n{result.stdout.strip()}")
+    if result.stderr.strip():
+        parts.append(f"\n--- Compiler Messages ---\n{result.stderr.strip()}")
+
+    if result.exe_path:
+        parts.append(f"\nExecutable: {result.exe_path}")
+
+    if not output_dir and result.exe_path:
+        parts.append("\nNote: Files are in a temp directory. Use output_dir to save permanently.")
+
+    return "\n".join(parts)
 
 
 @mcp.tool()

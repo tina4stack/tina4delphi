@@ -43,6 +43,7 @@ type
     procedure FormCreate(Sender: TObject);
     procedure Button1Click(Sender: TObject);
     procedure Button2Click(Sender: TObject);
+    procedure Tina4WebSocketClient1Connected(Sender: TObject);
   private
     { Private declarations }
   public
@@ -83,6 +84,7 @@ end;
 procedure TForm2.Button2Click(Sender: TObject);
 begin
   Tina4WebSocketClient1.Connect;
+
 end;
 
 procedure TForm2.FormCreate(Sender: TObject);
@@ -96,6 +98,11 @@ end;
 procedure TForm2.HtPanel1Click(Sender: TObject);
 begin
   ShowMessage('Clicked');
+end;
+
+procedure TForm2.Tina4WebSocketClient1Connected(Sender: TObject);
+begin
+  Tina4WebSocketClient1.Send('{"action": "publish", "topic": "Sleek1", "data": {"data": "Test"}}');
 end;
 
 end.

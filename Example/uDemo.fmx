@@ -497,7 +497,8 @@ object Form2: TForm2
     URL = 'wss://api.aatos-ai.com/api/notifications'
     Headers.Strings = (
       'Authorization: Bearer ded53236-19fa-11f0-b129-07867f38df3b')
-    Left = 560
-    Top = 465
+    OnConnected = Tina4WebSocketClient1Connected
+    Left = 568
+    Top = 473
   end
 end

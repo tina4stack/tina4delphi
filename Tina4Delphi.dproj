@@ -252,6 +252,10 @@
             <ResourceType>BITMAP</ResourceType>
             <ResourceId>TTina4HTMLPages</ResourceId>
         </RcItem>
+        <RcItem Include="TTina4WebSocketClient.bmp">
+            <ResourceType>BITMAP</ResourceType>
+            <ResourceId>TTina4WebSocketClient</ResourceId>
+        </RcItem>
         <BuildConfiguration Include="Base">
             <Key>Base</Key>
         </BuildConfiguration>

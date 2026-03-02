@@ -302,7 +302,6 @@ def _build_compile_args(
         args.extend([
             f"-E{output_dir}",  # exe output directory
             f"-N{output_dir}",  # unit output directory
-            "-CC",  # console application
             "-NSSystem;System.Win;Winapi",  # namespace search
             source_path,
         ])
@@ -466,6 +465,189 @@ def run_source(
             shutil.rmtree(work_dir, ignore_errors=True)
         except Exception:
             pass
+
+
+def compile_project(
+    files: dict[str, str],
+    compiler_type: str | None = None,
+    output_dir: str | None = None,
+) -> CompileResult:
+    """Compile a multi-file Delphi project.
+
+    Args:
+        files: Dict mapping filenames to content. Must include a .dpr file.
+        compiler_type: Preferred compiler (fpc, dcc32, dcc64, or full path).
+        output_dir: Optional output directory. If None, uses a temp dir.
+
+    Returns:
+        CompileResult with compilation output.
+    """
+    compilers = detect_compilers()
+    compiler = _select_compiler(compilers, compiler_type)
+
+    if not compiler:
+        return CompileResult(
+            success=False,
+            exit_code=-1,
+            stdout="",
+            stderr="No Pascal compiler found. Use the setup_fpc tool to install Free Pascal.",
+            compiler_used="none",
+        )
+
+    # Find the .dpr file (main project file)
+    dpr_file = None
+    for fname in files:
+        if fname.lower().endswith(".dpr"):
+            dpr_file = fname
+            break
+
+    if not dpr_file:
+        # Fall back to .pas file
+        for fname in files:
+            if fname.lower().endswith(".pas"):
+                dpr_file = fname
+                break
+
+    if not dpr_file:
+        return CompileResult(
+            success=False,
+            exit_code=-1,
+            stdout="",
+            stderr="No .dpr or .pas file found in project files.",
+            compiler_used="none",
+        )
+
+    # Create work directory
+    if output_dir:
+        work_dir = output_dir
+        os.makedirs(work_dir, exist_ok=True)
+    else:
+        work_dir = tempfile.mkdtemp(prefix="pascal_mcp_")
+
+    try:
+        # Write all project files
+        for fname, content in files.items():
+            fpath = os.path.join(work_dir, fname)
+            os.makedirs(os.path.dirname(fpath) if os.path.dirname(fname) else work_dir, exist_ok=True)
+            with open(fpath, "w", encoding="utf-8") as f:
+                f.write(content)
+
+        # Build compiler command
+        source_path = os.path.join(work_dir, dpr_file)
+        args = _build_compile_args(compiler, source_path, work_dir)
+
+        # Run compiler
+        result = subprocess.run(
+            args,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            cwd=work_dir,
+        )
+
+        # Find the compiled executable
+        exe_path = None
+        if result.returncode == 0:
+            project_name = os.path.splitext(dpr_file)[0]
+            if sys.platform == "win32":
+                candidate = os.path.join(work_dir, f"{project_name}.exe")
+            else:
+                candidate = os.path.join(work_dir, project_name)
+            if os.path.exists(candidate):
+                exe_path = candidate
+
+        return CompileResult(
+            success=result.returncode == 0,
+            exit_code=result.returncode,
+            stdout=result.stdout,
+            stderr=result.stderr,
+            compiler_used=f"{compiler.name} ({compiler.compiler_type}) at {compiler.path}",
+            exe_path=exe_path,
+        )
+
+    except subprocess.TimeoutExpired:
+        return CompileResult(
+            success=False,
+            exit_code=-1,
+            stdout="",
+            stderr="Compilation timed out after 30 seconds.",
+            compiler_used=f"{compiler.name} ({compiler.compiler_type})",
+        )
+    except Exception as e:
+        return CompileResult(
+            success=False,
+            exit_code=-1,
+            stdout="",
+            stderr=f"Compilation error: {e}",
+            compiler_used=f"{compiler.name} ({compiler.compiler_type})",
+        )
+
+
+@dataclass
+class LaunchResult:
+    """Result of compiling and launching a GUI application."""
+    success: bool
+    message: str
+    exe_path: str | None = None
+    process: object | None = None  # subprocess.Popen
+
+
+def compile_and_launch(
+    source_code: str,
+    compiler_type: str | None = None,
+) -> LaunchResult:
+    """Compile Pascal source and launch the executable in the background.
+
+    Unlike run_source(), this does NOT wait for the process to finish.
+    The temp directory is NOT cleaned up so the exe stays available.
+
+    Args:
+        source_code: Pascal source code to compile.
+        compiler_type: Compiler selection (type name or full path).
+
+    Returns:
+        LaunchResult with process info and exe path.
+    """
+    compile_result = compile_source(source_code, compiler_type, syntax_only=False)
+
+    if not compile_result.success or not compile_result.exe_path:
+        error = compile_result.stderr.strip() or compile_result.stdout.strip()
+        return LaunchResult(
+            success=False,
+            message=f"Compilation failed:\n{error}",
+        )
+
+    try:
+        proc = subprocess.Popen(
+            [compile_result.exe_path],
+            cwd=os.path.dirname(compile_result.exe_path),
+            creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == "win32" else 0,
+        )
+
+        # Brief pause to let the window appear
+        import time
+        time.sleep(1.0)
+
+        if proc.poll() is not None:
+            return LaunchResult(
+                success=False,
+                message=f"Application exited immediately with code {proc.returncode}",
+                exe_path=compile_result.exe_path,
+            )
+
+        return LaunchResult(
+            success=True,
+            message=f"Application launched (PID {proc.pid})",
+            exe_path=compile_result.exe_path,
+            process=proc,
+        )
+
+    except Exception as e:
+        return LaunchResult(
+            success=False,
+            message=f"Failed to launch: {e}",
+            exe_path=compile_result.exe_path,
+        )
 
 
 def cleanup_compile_result(result: CompileResult) -> None:

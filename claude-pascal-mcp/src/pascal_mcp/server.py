@@ -77,7 +77,9 @@ async def compile_pascal(
     Args:
         source_code: The complete Pascal source code to compile. Should include
             the program/unit header (e.g., 'program Hello;').
-        compiler: Which compiler to use: 'fpc', 'dcc32', or 'dcc64'.
+        compiler: Which compiler to use. Can be a type name ('fpc', 'dcc32',
+            'dcc64') or a full path to a specific compiler executable (e.g.,
+            'C:\\Program Files (x86)\\Embarcadero\\Studio\\37.0\\bin\\dcc64.exe').
             If not specified, auto-selects the best available compiler.
     """
     result = compile_source(source_code, compiler_type=compiler)
@@ -111,7 +113,9 @@ async def run_pascal(
     Args:
         source_code: The complete Pascal source code to compile and run.
             Should be a program (not a unit) with a begin..end block.
-        compiler: Which compiler to use: 'fpc', 'dcc32', or 'dcc64'.
+        compiler: Which compiler to use. Can be a type name ('fpc', 'dcc32',
+            'dcc64') or a full path to a specific compiler executable (e.g.,
+            'C:\\Program Files (x86)\\Embarcadero\\Studio\\37.0\\bin\\dcc64.exe').
             If not specified, auto-selects the best available compiler.
         stdin_input: Optional text input to send to the program's stdin.
             Useful for programs that read from input.
@@ -146,7 +150,8 @@ async def check_syntax(
 
     Args:
         source_code: The Pascal source code to check.
-        compiler: Which compiler to use: 'fpc', 'dcc32', or 'dcc64'.
+        compiler: Which compiler to use. Can be a type name ('fpc', 'dcc32',
+            'dcc64') or a full path to a specific compiler executable.
             If not specified, auto-selects the best available compiler.
     """
     result = compile_source(source_code, compiler_type=compiler, syntax_only=True)

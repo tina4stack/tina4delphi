@@ -151,6 +151,10 @@ MOUSEEVENTF_LEFTUP = 0x0004
 MOUSEEVENTF_RIGHTDOWN = 0x0008
 MOUSEEVENTF_RIGHTUP = 0x0010
 MOUSEEVENTF_ABSOLUTE = 0x8000
+MOUSEEVENTF_VIRTUALDESK = 0x4000
+
+# Combined flags for multi-monitor absolute positioning
+_ABS_FLAGS = MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK
 
 KEYEVENTF_UNICODE = 0x0004
 KEYEVENTF_KEYUP = 0x0002
@@ -303,7 +307,7 @@ def _click_window(
         inp_move.type = INPUT_MOUSE
         inp_move.ii.mi.dx = abs_x
         inp_move.ii.mi.dy = abs_y
-        inp_move.ii.mi.dwFlags = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE
+        inp_move.ii.mi.dwFlags = MOUSEEVENTF_MOVE | _ABS_FLAGS
         _send_input(inp_move)
         time.sleep(0.03)
 
@@ -312,7 +316,7 @@ def _click_window(
         inp_down.type = INPUT_MOUSE
         inp_down.ii.mi.dx = abs_x
         inp_down.ii.mi.dy = abs_y
-        inp_down.ii.mi.dwFlags = down_flag | MOUSEEVENTF_ABSOLUTE
+        inp_down.ii.mi.dwFlags = down_flag | _ABS_FLAGS
         _send_input(inp_down)
         time.sleep(0.03)
 
@@ -321,7 +325,7 @@ def _click_window(
         inp_up.type = INPUT_MOUSE
         inp_up.ii.mi.dx = abs_x
         inp_up.ii.mi.dy = abs_y
-        inp_up.ii.mi.dwFlags = up_flag | MOUSEEVENTF_ABSOLUTE
+        inp_up.ii.mi.dwFlags = up_flag | _ABS_FLAGS
         _send_input(inp_up)
         time.sleep(0.05)
 
@@ -361,7 +365,7 @@ def _click_client(
         inp_move.type = INPUT_MOUSE
         inp_move.ii.mi.dx = abs_x
         inp_move.ii.mi.dy = abs_y
-        inp_move.ii.mi.dwFlags = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE
+        inp_move.ii.mi.dwFlags = MOUSEEVENTF_MOVE | _ABS_FLAGS
         _send_input(inp_move)
         time.sleep(0.03)
 
@@ -369,7 +373,7 @@ def _click_client(
         inp_down.type = INPUT_MOUSE
         inp_down.ii.mi.dx = abs_x
         inp_down.ii.mi.dy = abs_y
-        inp_down.ii.mi.dwFlags = down_flag | MOUSEEVENTF_ABSOLUTE
+        inp_down.ii.mi.dwFlags = down_flag | _ABS_FLAGS
         _send_input(inp_down)
         time.sleep(0.03)
 
@@ -377,12 +381,151 @@ def _click_client(
         inp_up.type = INPUT_MOUSE
         inp_up.ii.mi.dx = abs_x
         inp_up.ii.mi.dy = abs_y
-        inp_up.ii.mi.dwFlags = up_flag | MOUSEEVENTF_ABSOLUTE
+        inp_up.ii.mi.dwFlags = up_flag | _ABS_FLAGS
         _send_input(inp_up)
         time.sleep(0.05)
 
     time.sleep(0.1)
     return True
+
+
+def _find_deepest_child(hwnd: int, screen_x: int, screen_y: int) -> int:
+    """Find the deepest child window at a screen position.
+
+    Recursively walks child windows using ChildWindowFromPoint
+    to find the most specific target for mouse messages.
+    Returns the original hwnd if no child is found.
+    """
+    CWP_SKIPINVISIBLE = 0x0001
+    CWP_SKIPDISABLED = 0x0002
+    CWP_SKIPTRANSPARENT = 0x0004
+
+    current = hwnd
+    for _ in range(10):  # Max depth to prevent infinite loops
+        # Convert screen coords to current window's client coords
+        pt = ctypes.wintypes.POINT(screen_x, screen_y)
+        ctypes.windll.user32.ScreenToClient(current, ctypes.byref(pt))
+
+        # Find child at this position (skip transparent/disabled)
+        child = ctypes.windll.user32.ChildWindowFromPointEx(
+            current, pt, CWP_SKIPTRANSPARENT,
+        )
+
+        if not child or child == current:
+            break
+        current = child
+
+    return current
+
+
+def _click_message(
+    hwnd: int, x: int, y: int,
+    button: str = "left",
+    double: bool = False,
+) -> dict:
+    """Click via PostMessage using screenshot pixel coordinates.
+
+    The screenshot from PrintWindow is in physical pixels relative to
+    the window's top-left corner (matching GetWindowRect).
+
+    Automatically finds the deepest child window at the click position
+    (e.g., a WebView2 control inside an FMX window) and sends the
+    click directly to it with properly translated coordinates.
+
+    Returns a dict with status and debug info about the coordinate
+    mapping so we can verify accuracy.
+    """
+    if sys.platform != "win32":
+        return {"ok": False, "error": "Windows only"}
+
+    WM_LBUTTONDOWN = 0x0201
+    WM_LBUTTONUP = 0x0202
+    WM_RBUTTONDOWN = 0x0204
+    WM_RBUTTONUP = 0x0205
+    WM_LBUTTONDBLCLK = 0x0203
+    MK_LBUTTON = 0x0001
+    MK_RBUTTON = 0x0002
+
+    # --- Step 1: Get window geometry ---
+    rect = ctypes.wintypes.RECT()
+    ctypes.windll.user32.GetWindowRect(hwnd, ctypes.byref(rect))
+
+    # --- Step 2: Screenshot pixel → screen position ---
+    screen_x = rect.left + x
+    screen_y = rect.top + y
+
+    # --- Step 3: Find the deepest child at this screen position ---
+    # For VCL apps, this finds native controls (TButton, TEdit, etc.)
+    # and we can send clicks directly to them for better accuracy.
+    # For Chrome/WebView2 widgets, we keep the main window as target
+    # because FMX handles focus routing to the embedded browser.
+    child_hwnd = _find_deepest_child(hwnd, screen_x, screen_y)
+
+    # Get child's class name to decide targeting strategy
+    class_buf = ctypes.create_unicode_buffer(256)
+    ctypes.windll.user32.GetClassNameW(child_hwnd, class_buf, 256)
+    child_class = class_buf.value
+
+    # Chrome/WebView2 controls don't process PostMessage clicks properly
+    # for focus management — send to the main (FMX) window instead.
+    chrome_classes = {"Chrome_WidgetWin_0", "Chrome_WidgetWin_1",
+                      "Chrome_RenderWidgetHostHWND",
+                      "Intermediate D3D Window"}
+    if child_class in chrome_classes or child_hwnd == hwnd:
+        target_hwnd = hwnd
+        target_class = "main"
+    else:
+        target_hwnd = child_hwnd
+        target_class = child_class
+
+    # --- Step 4: Screen → target's client coords ---
+    pt = ctypes.wintypes.POINT(screen_x, screen_y)
+    ctypes.windll.user32.ScreenToClient(target_hwnd, ctypes.byref(pt))
+    cx, cy = pt.x, pt.y
+
+    # --- Debug info ---
+    try:
+        dpi = ctypes.windll.user32.GetDpiForWindow(hwnd)
+    except Exception:
+        dpi = 96
+
+    debug = {
+        "input_px": [x, y],
+        "screen_pos": [screen_x, screen_y],
+        "target_hwnd": str(target_hwnd),
+        "target_class": target_class,
+        "target_client": [cx, cy],
+        "is_child": target_hwnd != hwnd,
+        "window_origin": [rect.left, rect.top],
+        "dpi": dpi,
+    }
+
+    # --- Step 5: Pack and send to target ---
+    lparam = ((cy & 0xFFFF) << 16) | (cx & 0xFFFF)
+
+    if button == "right":
+        down_msg = WM_RBUTTONDOWN
+        up_msg = WM_RBUTTONUP
+        wparam = MK_RBUTTON
+    else:
+        down_msg = WM_LBUTTONDOWN
+        up_msg = WM_LBUTTONUP
+        wparam = MK_LBUTTON
+
+    _bring_window_to_front(hwnd)
+    time.sleep(0.1)
+
+    clicks = 2 if double else 1
+    for i in range(clicks):
+        if i == 1 and button == "left":
+            down_msg = WM_LBUTTONDBLCLK
+        ctypes.windll.user32.PostMessageW(target_hwnd, down_msg, wparam, lparam)
+        time.sleep(0.05)
+        ctypes.windll.user32.PostMessageW(target_hwnd, up_msg, 0, lparam)
+        time.sleep(0.05)
+
+    time.sleep(0.1)
+    return {"ok": True, "debug": debug}
 
 
 def _drag_window(
@@ -412,7 +555,7 @@ def _drag_window(
     inp.type = INPUT_MOUSE
     inp.ii.mi.dx = abs_x1
     inp.ii.mi.dy = abs_y1
-    inp.ii.mi.dwFlags = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE
+    inp.ii.mi.dwFlags = MOUSEEVENTF_MOVE | _ABS_FLAGS
     _send_input(inp)
     time.sleep(0.05)
 
@@ -421,7 +564,7 @@ def _drag_window(
     inp.type = INPUT_MOUSE
     inp.ii.mi.dx = abs_x1
     inp.ii.mi.dy = abs_y1
-    inp.ii.mi.dwFlags = MOUSEEVENTF_LEFTDOWN | MOUSEEVENTF_ABSOLUTE
+    inp.ii.mi.dwFlags = MOUSEEVENTF_LEFTDOWN | _ABS_FLAGS
     _send_input(inp)
     time.sleep(0.05)
 
@@ -435,7 +578,7 @@ def _drag_window(
         inp.type = INPUT_MOUSE
         inp.ii.mi.dx = cx
         inp.ii.mi.dy = cy
-        inp.ii.mi.dwFlags = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE
+        inp.ii.mi.dwFlags = MOUSEEVENTF_MOVE | _ABS_FLAGS
         _send_input(inp)
         time.sleep(step_delay)
 
@@ -444,7 +587,7 @@ def _drag_window(
     inp.type = INPUT_MOUSE
     inp.ii.mi.dx = abs_x2
     inp.ii.mi.dy = abs_y2
-    inp.ii.mi.dwFlags = MOUSEEVENTF_LEFTUP | MOUSEEVENTF_ABSOLUTE
+    inp.ii.mi.dwFlags = MOUSEEVENTF_LEFTUP | _ABS_FLAGS
     _send_input(inp)
     time.sleep(0.1)
     return True
@@ -718,6 +861,7 @@ async def api_click(request: Request) -> JSONResponse:
     Body options:
       {"x": N, "y": N}                    - window-relative coords (from screenshot)
       {"x": N, "y": N, "client": true}    - client-area coords (DPI-aware)
+      {"x": N, "y": N, "message": true}   - window coords via WM messages (best for FMX/WebView)
       {"hwnd": "12345"}                    - direct BM_CLICK to a control by hwnd
                                              (get hwnd from /api/controls endpoint)
     """
@@ -739,17 +883,255 @@ async def api_click(request: Request) -> JSONResponse:
     button = body.get("button", "left")
     double = body.get("double", False)
     use_client = body.get("client", False)
+    use_message = body.get("message", False)
 
-    if use_client:
+    if use_message:
+        result = _click_message(hwnd, x, y, button=button, double=double)
+        coord_type = "message"
+        success = result.get("ok", False)
+        debug = result.get("debug", {})
+    elif use_client:
         success = _click_client(hwnd, x, y, button=button, double=double)
         coord_type = "client"
+        debug = {}
     else:
         success = _click_window(hwnd, x, y, button=button, double=double)
         coord_type = "window"
+        debug = {}
 
     action = f"{'Double-' if double else ''}{'Right-' if button == 'right' else ''}Click"
-    add_console_message(f"{action} at {coord_type}({x}, {y})", "info")
-    return JSONResponse({"status": "ok" if success else "failed", "x": x, "y": y})
+    client_info = f" -> {debug.get('target_class', '?')}({debug.get('target_client', '?')})" if debug else ""
+    add_console_message(f"{action} at {coord_type}({x}, {y}){client_info}", "info")
+
+    resp = {"status": "ok" if success else "failed", "x": x, "y": y, "mode": coord_type}
+    if debug:
+        resp["debug"] = debug
+    return JSONResponse(resp)
+
+
+async def api_debug_coords(request: Request) -> JSONResponse:
+    """Debug endpoint: show coordinate mapping WITHOUT clicking.
+
+    Body: {"x": N, "y": N}  (window/screenshot coords)
+
+    Returns all intermediate coordinate values so we can diagnose
+    where the DPI offset is introduced.
+    """
+    hwnd, title = _resolve_target()
+    if hwnd is None:
+        return JSONResponse({"error": "No target window"}, status_code=400)
+
+    body = await request.json()
+    x = int(body.get("x", 0))
+    y = int(body.get("y", 0))
+
+    # Window rect (physical pixels for DPI-aware process)
+    rect = ctypes.wintypes.RECT()
+    ctypes.windll.user32.GetWindowRect(hwnd, ctypes.byref(rect))
+    win_rect = {"left": rect.left, "top": rect.top, "right": rect.right, "bottom": rect.bottom}
+    win_w = rect.right - rect.left
+    win_h = rect.bottom - rect.top
+
+    # Client rect
+    crect = ctypes.wintypes.RECT()
+    ctypes.windll.user32.GetClientRect(hwnd, ctypes.byref(crect))
+    client_rect = {"width": crect.right, "height": crect.bottom}
+
+    # Client offset
+    off_x, off_y = _get_client_offset(hwnd)
+
+    # Window-to-screen (simple addition)
+    screen_via_window = {"x": rect.left + x, "y": rect.top + y}
+
+    # Client-to-screen (via Win32 API)
+    cx = x - off_x
+    cy = y - off_y
+    pt = ctypes.wintypes.POINT(cx, cy)
+    ctypes.windll.user32.ClientToScreen(hwnd, ctypes.byref(pt))
+    screen_via_client = {"x": pt.x, "y": pt.y}
+
+    # DPI info
+    try:
+        dpi = ctypes.windll.user32.GetDpiForWindow(hwnd)
+    except Exception:
+        dpi = 96
+
+    # Child window at position
+    child_hwnd = ctypes.windll.user32.WindowFromPoint(pt)
+    child_class = ctypes.create_unicode_buffer(256)
+    ctypes.windll.user32.GetClassNameW(child_hwnd, child_class, 256)
+    child_pt = ctypes.wintypes.POINT(pt.x, pt.y)
+    ctypes.windll.user32.ScreenToClient(child_hwnd, ctypes.byref(child_pt))
+
+    # Enumerate monitors
+    monitors = []
+    MONITORINFOEXW = type('MONITORINFOEXW', (ctypes.Structure,), {
+        '_fields_': [
+            ('cbSize', ctypes.wintypes.DWORD),
+            ('rcMonitor', ctypes.wintypes.RECT),
+            ('rcWork', ctypes.wintypes.RECT),
+            ('dwFlags', ctypes.wintypes.DWORD),
+            ('szDevice', ctypes.c_wchar * 32),
+        ]
+    })
+
+    def _enum_callback(hMonitor, hdcMonitor, lprcMonitor, dwData):
+        info = MONITORINFOEXW()
+        info.cbSize = ctypes.sizeof(MONITORINFOEXW)
+        ctypes.windll.user32.GetMonitorInfoW(hMonitor, ctypes.byref(info))
+        try:
+            mon_dpi_x = ctypes.c_uint()
+            mon_dpi_y = ctypes.c_uint()
+            ctypes.windll.shcore.GetDpiForMonitor(hMonitor, 0, ctypes.byref(mon_dpi_x), ctypes.byref(mon_dpi_y))
+            mon_dpi = mon_dpi_x.value
+        except Exception:
+            mon_dpi = 96
+        m = info.rcMonitor
+        monitors.append({
+            "device": info.szDevice,
+            "rect": {"left": m.left, "top": m.top, "right": m.right, "bottom": m.bottom},
+            "width": m.right - m.left,
+            "height": m.bottom - m.top,
+            "dpi": mon_dpi,
+            "scale": round(mon_dpi / 96.0, 2),
+            "primary": bool(info.dwFlags & 1),
+        })
+        return True
+
+    MONITORENUMPROC = ctypes.WINFUNCTYPE(ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p, ctypes.POINTER(ctypes.wintypes.RECT), ctypes.c_long)
+    ctypes.windll.user32.EnumDisplayMonitors(None, None, MONITORENUMPROC(_enum_callback), 0)
+
+    # Virtual screen info
+    vscreen = {
+        "x": ctypes.windll.user32.GetSystemMetrics(76),  # SM_XVIRTUALSCREEN
+        "y": ctypes.windll.user32.GetSystemMetrics(77),  # SM_YVIRTUALSCREEN
+        "width": ctypes.windll.user32.GetSystemMetrics(78),  # SM_CXVIRTUALSCREEN
+        "height": ctypes.windll.user32.GetSystemMetrics(79),  # SM_CYVIRTUALSCREEN
+    }
+
+    # DWM extended frame bounds (actual visible area, no invisible shadow)
+    ext_rect = ctypes.wintypes.RECT()
+    dwm_frame = {}
+    try:
+        DWMWA_EXTENDED_FRAME_BOUNDS = 9
+        hr = ctypes.windll.dwmapi.DwmGetWindowAttribute(
+            hwnd, DWMWA_EXTENDED_FRAME_BOUNDS,
+            ctypes.byref(ext_rect), ctypes.sizeof(ext_rect),
+        )
+        if hr == 0:
+            dwm_frame = {
+                "extended_rect": {
+                    "left": ext_rect.left, "top": ext_rect.top,
+                    "right": ext_rect.right, "bottom": ext_rect.bottom,
+                },
+                "invisible_border": {
+                    "left": ext_rect.left - rect.left,
+                    "top": ext_rect.top - rect.top,
+                    "right": rect.right - ext_rect.right,
+                    "bottom": rect.bottom - ext_rect.bottom,
+                },
+            }
+    except Exception:
+        dwm_frame = {"error": "DwmGetWindowAttribute not available"}
+
+    # ScreenToClient mapping (what _click_message will use)
+    screen_x = rect.left + x
+    screen_y = rect.top + y
+    stc_pt = ctypes.wintypes.POINT(screen_x, screen_y)
+    ctypes.windll.user32.ScreenToClient(hwnd, ctypes.byref(stc_pt))
+
+    return JSONResponse({
+        "input": {"x": x, "y": y},
+        "window_rect": win_rect,
+        "window_size": {"w": win_w, "h": win_h},
+        "client_rect": client_rect,
+        "client_offset": {"x": off_x, "y": off_y},
+        "dwm_frame": dwm_frame,
+        "click_mapping": {
+            "screenshot_px": [x, y],
+            "screen_pos": [screen_x, screen_y],
+            "screen_to_client": [stc_pt.x, stc_pt.y],
+            "manual_offset": [cx, cy],
+            "match": (stc_pt.x == cx and stc_pt.y == cy),
+        },
+        "screen_via_window": screen_via_window,
+        "screen_via_client": screen_via_client,
+        "screen_match": screen_via_window == screen_via_client,
+        "dpi": dpi,
+        "dpi_scale": dpi / 96.0,
+        "child_at_point": {
+            "hwnd": str(child_hwnd),
+            "class": child_class.value,
+            "local_coords": {"x": child_pt.x, "y": child_pt.y},
+        },
+        "monitors": monitors,
+        "virtual_screen": vscreen,
+    })
+
+
+async def api_cursor_test(request: Request) -> JSONResponse:
+    """Calibration endpoint: move cursor to calculated position from screenshot coords.
+
+    Does NOT click — just moves the cursor so you can visually verify
+    where it lands relative to the target window.
+
+    Body: {"x": N, "y": N}  (screenshot pixel coords)
+
+    Returns the calculated screen position, the actual cursor position
+    after moving, and the DWM frame adjustment values.
+    """
+    hwnd, title = _resolve_target()
+    if hwnd is None:
+        return JSONResponse({"error": "No target window"}, status_code=400)
+
+    body = await request.json()
+    x = int(body.get("x", 0))
+    y = int(body.get("y", 0))
+
+    # Get window rect
+    rect = ctypes.wintypes.RECT()
+    ctypes.windll.user32.GetWindowRect(hwnd, ctypes.byref(rect))
+
+    # DWM extended frame bounds
+    ext_rect = ctypes.wintypes.RECT()
+    dwm_left = 0
+    dwm_top = 0
+    try:
+        hr = ctypes.windll.dwmapi.DwmGetWindowAttribute(
+            hwnd, 9, ctypes.byref(ext_rect), ctypes.sizeof(ext_rect))
+        if hr == 0:
+            dwm_left = ext_rect.left - rect.left
+            dwm_top = ext_rect.top - rect.top
+    except Exception:
+        pass
+
+    # Calculate screen position (same as _click_message)
+    screen_x = rect.left + x
+    screen_y = rect.top + y
+
+    # ScreenToClient (what PostMessage will use)
+    stc_pt = ctypes.wintypes.POINT(screen_x, screen_y)
+    ctypes.windll.user32.ScreenToClient(hwnd, ctypes.byref(stc_pt))
+
+    # Move cursor to the calculated screen position
+    _bring_window_to_front(hwnd)
+    time.sleep(0.1)
+    ctypes.windll.user32.SetCursorPos(screen_x, screen_y)
+    time.sleep(0.1)
+
+    # Read back actual cursor position
+    actual_pt = ctypes.wintypes.POINT()
+    ctypes.windll.user32.GetCursorPos(ctypes.byref(actual_pt))
+
+    return JSONResponse({
+        "input_px": [x, y],
+        "calculated_screen": [screen_x, screen_y],
+        "actual_cursor": [actual_pt.x, actual_pt.y],
+        "cursor_offset": [actual_pt.x - screen_x, actual_pt.y - screen_y],
+        "client_coords_for_postmessage": [stc_pt.x, stc_pt.y],
+        "window_origin": [rect.left, rect.top],
+        "dwm_invisible_border": [dwm_left, dwm_top],
+    })
 
 
 async def api_type(request: Request) -> JSONResponse:
@@ -1157,6 +1539,8 @@ app = Starlette(
         Route("/api/windows", api_windows),
         Route("/api/target", api_target, methods=["POST"]),
         Route("/api/click", api_click, methods=["POST"]),
+        Route("/api/debug-coords", api_debug_coords, methods=["POST"]),
+        Route("/api/cursor-test", api_cursor_test, methods=["POST"]),
         Route("/api/type", api_type, methods=["POST"]),
         Route("/api/drag", api_drag, methods=["POST"]),
         Route("/api/move", api_move, methods=["POST"]),

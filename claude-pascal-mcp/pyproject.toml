@@ -16,6 +16,7 @@ dependencies = [
 
 [project.scripts]
 pascal-mcp = "pascal_mcp.server:main"
+pascal-preview = "pascal_mcp.preview_bridge:main"
 
 [build-system]
 requires = ["hatchling"]

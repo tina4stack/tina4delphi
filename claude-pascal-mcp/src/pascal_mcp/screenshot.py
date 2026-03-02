@@ -207,14 +207,20 @@ def list_windows(filter_text: str = "") -> list[dict[str, str]]:
     return windows
 
 
-def capture_window(title: str) -> tuple[str, str, int, int] | None:
+def capture_window(
+    title: str,
+    bring_to_front: bool = False,
+) -> tuple[str, str, int, int] | None:
     """Capture a screenshot of a specific window by title.
 
-    Finds the window, brings it to the foreground, and uses PrintWindow
-    to capture the window content directly (avoiding DPI issues).
+    Uses PrintWindow to capture the window content directly without
+    needing to bring it to the foreground — this avoids stealing focus
+    and disrupting the user's desktop experience.
 
     Args:
         title: Full or partial window title to capture (case-insensitive).
+        bring_to_front: If True, bring the window to the foreground first.
+            Default False to avoid disrupting the user.
 
     Returns:
         Tuple of (base64_png_data, window_title, width, height),
@@ -229,10 +235,11 @@ def capture_window(title: str) -> tuple[str, str, int, int] | None:
 
     actual_title = _get_window_title(hwnd)
 
-    # Bring to front so it paints
-    _bring_window_to_front(hwnd)
+    # Only bring to front if explicitly requested (e.g. before a click)
+    if bring_to_front:
+        _bring_window_to_front(hwnd)
 
-    # Capture using PrintWindow API
+    # Capture using PrintWindow API (works without foreground)
     img = _capture_with_printwindow(hwnd)
     if img is None:
         return None

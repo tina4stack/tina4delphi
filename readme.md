@@ -27,7 +27,7 @@ This is not another framework for Delphi
 | `TTina4HTMLPages` | Tina4HTMLPages | Design-time page navigation for TTina4HTMLRender |
 | `TTina4Twig` | Tina4Twig | Twig-style template engine |
 | `TTina4WebSocketClient` | Tina4WebSocketClient | WebSocket client with TLS, auto-reconnect, and ping/pong |
-| `TFMXStyleSheet` | FMXStyle.StyleSheet | CSS/SCSS to FMX StyleBook converter with live reload |
+
 
 ## Tina4Core Reference
 
@@ -1190,56 +1190,7 @@ else
   WriteLn('OpenSSL not found - wss:// will not work');
 ```
 
-## TFMXStyleSheet -- CSS/SCSS to FMX StyleBook
 
-A separate companion component that converts CSS and SCSS files into FMX StyleBook resources. CSS class names map directly to FMX `StyleLookup` values.
-
-```delphi
-// Drop TFMXStyleSheet on a form, link to a TStyleBook
-FMXStyleSheet1.StyleBook := StyleBook1;
-FMXStyleSheet1.StylePath := 'C:\MyApp\styles';
-FMXStyleSheet1.WatchEnabled := True;  // live reload on file changes
-```
-
-Or use inline SCSS directly in the Object Inspector:
-
-```scss
-// SCSS property (design-time editable)
-$primary: #0d6efd;
-
-.btn-primary {
-  background-color: $primary;
-  color: #ffffff;
-  font-size: 14px;
-  border-radius: 6px;
-  padding: 8px 20px;
-  box-shadow: 0 2px 4px rgba(0,0,0,0.25);
-}
-```
-
-Then assign `StyleLookup` on your FMX controls:
-
-```delphi
-Button1.StyleLookup := 'btn-primary';
-```
-
-### CSS Property Mapping
-
-| CSS Property | FMX Equivalent |
-|---|---|
-| `background-color` | `TRectangle.Fill.Color` |
-| `color` | `TText.TextSettings.FontColor` |
-| `font-size` | `TText.TextSettings.Font.Size` |
-| `font-family` | `TText.TextSettings.Font.Family` |
-| `font-weight: bold` | `TText.TextSettings.Font.Style = [fsBold]` |
-| `border-radius` | `TRectangle.XRadius` / `YRadius` |
-| `border-color` / `border-width` | `TRectangle.Stroke.Color` / `Thickness` |
-| `padding` | `TLayout.Padding` |
-| `margin` | `TLayout.Margins` |
-| `box-shadow` | `TShadowEffect` (distance, direction, softness, opacity) |
-| `opacity` | `TLayout.Opacity` |
-
-See the [FMXStyle project](https://github.com/niclasborgworx/FMXStyle) for full documentation and the sample application.
 
 ## Claude Pascal MCP Server
 

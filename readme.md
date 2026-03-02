@@ -1194,22 +1194,75 @@ else
 
 ## Claude Pascal MCP Server
 
-The Tina4Delphi ecosystem includes an MCP (Model Context Protocol) server that gives Claude direct access to Pascal/Delphi development tools. Once registered, Claude can compile code, run programs, parse form files, and take screenshots of running applications.
+The Tina4Delphi ecosystem includes an MCP (Model Context Protocol) server that gives Claude direct access to Pascal/Delphi development tools. Once registered, Claude can compile code, run programs, launch GUI apps, parse form files, take screenshots, and interact with running desktop applications.
 
 ### Tools
 
 | Tool | Description |
 |---|---|
-| `get_compiler_info` | Detect available Pascal compilers (fpc, dcc32, dcc64) |
-| `compile_pascal` | Compile Pascal source code and return errors/warnings |
-| `run_pascal` | Compile and execute code, return program output |
+| `get_compiler_info` | Detect available compilers (fpc, dcc32, dcc64) and show versions |
+| `compile_pascal` | Compile single-file Pascal source code |
+| `compile_delphi_project` | Compile proper Delphi project from templates (DPR + PAS + DFM) |
+| `run_pascal` | Compile and execute console programs, return output |
+| `launch_app` | Compile and launch a GUI app in the background |
 | `check_syntax` | Fast syntax-only check without linking |
 | `parse_form` | Parse .dfm/.fmx/.lfm form files into component trees |
 | `screenshot_app` | Capture a screenshot of a running application window |
 | `list_app_windows` | List visible windows on the desktop |
 | `setup_fpc` | Download and install Free Pascal Compiler |
 
+### Project Templates
+
+The `compile_delphi_project` tool generates proper Delphi project structure automatically. Specify components and events, and it creates the correct DPR, PAS, and DFM files.
+
+```
+compile_delphi_project(
+  project_name="HelloWorld",
+  form_caption="My App",
+  components='[{"type": "TButton", "name": "btnHello", "caption": "Click Me",
+                "left": 100, "top": 100, "width": 120, "height": 35,
+                "event": "btnHelloClick"}]',
+  events='[{"name": "btnHelloClick", "body": "ShowMessage(\'Hello!\');"}]'
+)
+```
+
+Templates automatically handle modern Delphi namespaced units (`Vcl.Forms`, `System.SysUtils`) and legacy Delphi 7 non-namespaced units.
+
+### Preview Bridge
+
+The preview bridge lets Claude see and interact with running Pascal desktop applications through its web-based preview system. It serves live screenshots of desktop app windows as a web page.
+
+```
+Claude Preview Tools (preview_start, preview_screenshot, preview_click)
+        | HTTP
+        v
+Preview Bridge Server (Python/Starlette)
+        | Win32 PrintWindow API
+        v
+Running Pascal Desktop Application
+```
+
+**API endpoints:**
+
+| Route | Method | Description |
+|---|---|---|
+| `/` | GET | HTML page with auto-refreshing screenshot viewer |
+| `/api/screenshot` | GET | PNG screenshot of target window |
+| `/api/windows` | GET | List visible windows |
+| `/api/target` | POST | Set target window by title |
+| `/api/controls` | GET | Enumerate child controls (buttons, inputs, etc.) |
+| `/api/click` | POST | Click by coordinates or direct control hwnd |
+| `/api/type` | POST | Send text or key combos (e.g. `ctrl+a`, `enter`) |
+| `/api/drag` | POST | Drag from one point to another |
+| `/api/move` | POST | Move target window |
+| `/api/resize` | POST | Resize target window |
+| `/api/window-info` | GET | Window position, size, and client area offset |
+| `/api/console` | GET | Console output from launched apps |
+| `/api/launch` | POST | Launch an executable |
+
 ### Installation
+
+**Prerequisites:** Python 3.11+, [uv](https://docs.astral.sh/uv/) package manager, a Pascal compiler
 
 ```bash
 # Register with Claude Code
@@ -1229,7 +1282,26 @@ Or add to your project's `.mcp.json`:
 }
 ```
 
-See the [claude-pascal-mcp](https://github.com/niclasborgworx/claude-pascal-mcp) repository for full documentation.
+**Preview Bridge setup** — add to `.claude/launch.json`:
+
+```json
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "pascal-preview",
+      "runtimeExecutable": "/path/to/claude-pascal-mcp/.venv/Scripts/pythonw.exe",
+      "runtimeArgs": ["-m", "pascal_mcp.preview_bridge"],
+      "port": 18080,
+      "autoPort": true
+    }
+  ]
+}
+```
+
+Then use `preview_start("pascal-preview")` to open the preview panel.
+
+See the [claude-pascal-mcp](https://github.com/tina4stack/tina4delphi/tree/master/claude-pascal-mcp) directory for full documentation.
 
 ## Change Log
 

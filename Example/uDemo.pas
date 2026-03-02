@@ -10,7 +10,7 @@ uses System.SysUtils, FMX.StdCtrls, FMX.Forms, FMX.Memo.Types, System.Rtti, FMX.
   Data.Bind.DBScope, Tina4JSONAdapter, Data.DB, FireDAC.Comp.DataSet,
   FireDAC.Comp.Client, Tina4RESTRequest, Tina4REST, FMX.Grid, FMX.ScrollBox,
   FMX.Memo, FMX.Dialogs, System.Classes, FMX.Types, FMX.Controls,
-  FMX.Controls.Presentation, Tina4Twig;
+  FMX.Controls.Presentation, Tina4Twig, Tina4WebSocketClient;
 
 
 type
@@ -35,11 +35,14 @@ type
     Tina4JSONAdapter2: TTina4JSONAdapter;
     FDMemTable2: TFDMemTable;
     Tina4HTMLRender1: TTina4HTMLRender;
+    Tina4WebSocketClient1: TTina4WebSocketClient;
+    Button2: TButton;
     procedure HtPanel1Click(Sender: TObject);
     procedure btnRenderClick(Sender: TObject);
     procedure btnSaveClick(Sender: TObject);
     procedure FormCreate(Sender: TObject);
     procedure Button1Click(Sender: TObject);
+    procedure Button2Click(Sender: TObject);
   private
     { Private declarations }
   public
@@ -75,6 +78,11 @@ end;
 procedure TForm2.Button1Click(Sender: TObject);
 begin
   Tina4RESTRequest1.ExecuteRESTCall;
+end;
+
+procedure TForm2.Button2Click(Sender: TObject);
+begin
+  Tina4WebSocketClient1.Connect;
 end;
 
 procedure TForm2.FormCreate(Sender: TObject);

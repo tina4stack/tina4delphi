@@ -40,14 +40,14 @@ object Form2: TForm2
       Align = Left
       Cursor = crHSplit
       MinSize = 20.000000000000000000
-      Position.X = 369.000000000000000000
+      Position.X = 320.000000000000000000
       Size.Width = 24.000000000000000000
       Size.Height = 560.000000000000000000
       Size.PlatformDefault = False
     end
     object Panel2: TPanel
       Align = Client
-      Size.Width = 523.000000000000000000
+      Size.Width = 572.000000000000000000
       Size.Height = 560.000000000000000000
       Size.PlatformDefault = False
       TabOrder = 1
@@ -55,17 +55,17 @@ object Form2: TForm2
         Touch.InteractiveGestures = [Pan, LongTap, DoubleTap]
         DataDetectorTypes = []
         Align = Top
-        Size.Width = 523.000000000000000000
+        Size.Width = 572.000000000000000000
         Size.Height = 441.000000000000000000
         Size.PlatformDefault = False
         TabOrder = 2
-        Viewport.Width = 519.000000000000000000
+        Viewport.Width = 568.000000000000000000
         Viewport.Height = 437.000000000000000000
         object Grid1: TGrid
           CanFocus = True
           ClipChildren = True
-          Position.X = 208.000000000000000000
-          Position.Y = 40.000000000000000000
+          Position.X = 224.000000000000000000
+          Position.Y = 56.000000000000000000
           Size.Width = 329.000000000000000000
           Size.Height = 257.000000000000000000
           Size.PlatformDefault = False
@@ -79,17 +79,20 @@ object Form2: TForm2
         Touch.InteractiveGestures = [Pan, LongTap, DoubleTap]
         DataDetectorTypes = []
         Align = Client
-        Size.Width = 523.000000000000000000
+        Size.Width = 572.000000000000000000
         Size.Height = 119.000000000000000000
         Size.PlatformDefault = False
         TabOrder = 0
-        Viewport.Width = 519.000000000000000000
+        Viewport.Width = 568.000000000000000000
         Viewport.Height = 115.000000000000000000
       end
     end
     object Tina4HTMLRender1: TTina4HTMLRender
       Align = Left
       ClipChildren = True
+      Size.Width = 320.000000000000000000
+      Size.Height = 560.000000000000000000
+      Size.PlatformDefault = False
     end
   end
   object Button1: TButton
@@ -98,6 +101,13 @@ object Form2: TForm2
     TabOrder = 9
     Text = 'Button1'
     OnClick = Button1Click
+  end
+  object Button2: TButton
+    Position.X = 440.000000000000000000
+    Position.Y = 568.000000000000000000
+    TabOrder = 20
+    Text = 'Button2'
+    OnClick = Button2Click
   end
   object Tina4REST1: TTina4REST
     UserAgent = 'Tina4REST'
@@ -482,5 +492,12 @@ object Form2: TForm2
     UpdateOptions.AutoCommitUpdates = True
     Left = 737
     Top = 360
+  end
+  object Tina4WebSocketClient1: TTina4WebSocketClient
+    URL = 'wss://api.aatos-ai.com/api/notifications'
+    Headers.Strings = (
+      'Authorization: Bearer ded53236-19fa-11f0-b129-07867f38df3b')
+    Left = 560
+    Top = 465
   end
 end

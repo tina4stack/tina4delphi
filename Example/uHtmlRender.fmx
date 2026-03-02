@@ -34,21 +34,30 @@ object Form3: TForm3
       ''
       '<li>10</li>'
       ''
+      '<li>11</li>'
+      ''
+      '<li>12</li>'
+      ''
+      '<li>13</li>'
+      ''
+      '<li>14</li>'
+      ''
+      '<li>15</li>'
+      ''
       '</ul>')
     Twig.Strings = (
       '<ul>'
-      '{% for a in 0..10 %}'
+      '{% for a in 0..15 %}'
       '<li>{{a}}</li>'
       '{% endfor %}'
       '</ul>')
     OnFormControlChange = Tina4HTMLRender1FormControlChange
     OnFormControlClick = Tina4HTMLRender1FormControlClick
     OnFormSubmit = Tina4HTMLRender1FormSubmit
+    Align = Client
     ClipChildren = True
-    Position.X = 40.000000000000000000
-    Position.Y = 72.000000000000000000
-    Size.Width = 657.000000000000000000
-    Size.Height = 313.000000000000000000
+    Size.Width = 744.000000000000000000
+    Size.Height = 700.000000000000000000
     Size.PlatformDefault = False
   end
   object Button1: TButton

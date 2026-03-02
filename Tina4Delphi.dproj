@@ -218,6 +218,8 @@
         <DCCReference Include="Tina4Twig.pas"/>
         <DCCReference Include="Tina4HTMLRender.pas"/>
         <DCCReference Include="Tina4HTMLPages.pas"/>
+        <DCCReference Include="Tina4OpenSSL.pas"/>
+        <DCCReference Include="Tina4WebSocketClient.pas"/>
         <RcItem Include="TTina4HtmlRender.bmp">
             <ResourceType>BITMAP</ResourceType>
             <ResourceId>TTina4HtmlRender</ResourceId>

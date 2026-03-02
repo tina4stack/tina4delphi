@@ -451,6 +451,18 @@ begin
 end;
 ```
 
+### Properties
+
+| Property | Type | Description |
+|---|---|---|
+| `BaseUrl` | `string` | Base URL for all REST requests (e.g. `https://api.example.com/v1`) |
+| `Username` | `string` | Username for HTTP Basic Authentication |
+| `Password` | `string` | Password for HTTP Basic Authentication |
+| `UserAgent` | `string` | User-Agent string sent with requests (default: `Tina4REST`) |
+| `CustomHeaders` | `TURLHeaders` | Custom HTTP headers sent with every request |
+| `ReadTimeOut` | `Integer` | Read timeout in milliseconds |
+| `ConnectTimeOut` | `Integer` | Connection timeout in milliseconds |
+
 ### Methods
 
 | Method | Description |
@@ -534,6 +546,28 @@ end;
 Tina4RESTRequest1.ExecuteRESTCallAsync;
 ```
 
+### Properties
+
+| Property | Type | Description |
+|---|---|---|
+| `Tina4REST` | `TTina4REST` | The REST client component to use for HTTP calls |
+| `EndPoint` | `string` | URL path appended to the base URL (supports `{field}` placeholders from MasterSource) |
+| `RequestType` | `TTina4RequestType` | HTTP method: `Get`, `Post`, `Patch`, `Put`, `Delete` |
+| `DataKey` | `string` | JSON key containing the array of records in the response |
+| `QueryParams` | `string` | URL query parameters (supports `{field}` placeholders) |
+| `MemTable` | `TFDMemTable` | Target MemTable to populate with response data |
+| `SourceMemTable` | `TFDMemTable` | Source MemTable whose rows are serialized as the request body |
+| `SourceIgnoreFields` | `string` | Comma-separated field names to exclude from SourceMemTable serialization |
+| `SourceIgnoreBlanks` | `Boolean` | Skip blank values when serializing SourceMemTable |
+| `RequestBody` | `TStringList` | Raw request body (supports `{field}` placeholders) |
+| `ResponseBody` | `TStringList` | Raw response body after execution (read-only at runtime) |
+| `MasterSource` | `TTina4RESTRequest` | Master request whose MemTable fields inject into `{field}` placeholders |
+| `SyncMode` | `TTina4RestSyncMode` | `Clear` (replace all) or `Sync` (upsert by IndexFieldNames) |
+| `IndexFieldNames` | `string` | Comma-separated key fields for Sync mode matching |
+| `StatusCode` | `Integer` | HTTP status code from the last execution |
+| `TransformResultToSnakeCase` | `Boolean` | Convert JSON camelCase keys to snake_case field names |
+| `FreeOnAsyncExecute` | `Boolean` | Auto-free the component after async execution completes |
+
 ### Events
 
 | Event | Description |
@@ -575,6 +609,17 @@ Tina4JSONAdapter1.IndexFieldNames := 'id';
 // Existing records matched by 'id' are updated; new ones are inserted
 ```
 
+### Properties
+
+| Property | Type | Description |
+|---|---|---|
+| `DataKey` | `string` | JSON key containing the array of records |
+| `MemTable` | `TFDMemTable` | Target MemTable to populate |
+| `JSONData` | `TStringList` | Static JSON data source |
+| `SyncMode` | `TTina4RestSyncMode` | `Clear` (replace all) or `Sync` (upsert by IndexFieldNames) |
+| `IndexFieldNames` | `string` | Comma-separated key fields for Sync mode matching |
+| `MasterSource` | `TTina4RESTRequest` | Master request; adapter auto-executes on `OnExecuteDone` |
+
 ## TTina4WebServer -- HTTP Server
 
 Wraps an Indy `TIdHTTPServer` with route dispatching and database integration.
@@ -587,15 +632,20 @@ Tina4WebServer1.PublicPath := 'C:\myapp\public';
 Tina4WebServer1.Active := True;
 ```
 
-### Database Queries
+### Properties
 
-```delphi
-var
-  JSON: TJSONObject;
-begin
-  JSON := Tina4WebServer1.JSONFromDB('SELECT * FROM products', 'products');
-end;
-```
+| Property | Type | Description |
+|---|---|---|
+| `HTTPServer` | `TIdHTTPServer` | The Indy HTTP server component to wrap |
+| `Connection` | `TFDConnection` | FireDAC database connection for `JSONFromDB` queries |
+| `PublicPath` | `string` | Filesystem path to serve static files from |
+| `Active` | `Boolean` | Start/stop the HTTP server |
+
+### Methods
+
+| Method | Description |
+|---|---|
+| `JSONFromDB(SQL, DataSetName, Params)` | Execute a SQL query and return results as `TJSONObject` |
 
 ## TTina4Route -- Endpoint Routing
 
@@ -616,6 +666,15 @@ begin
 end;
 ```
 
+### Properties
+
+| Property | Type | Description |
+|---|---|---|
+| `WebServer` | `TTina4WebServer` | The web server this route belongs to |
+| `EndPoint` | `string` | URL path for this route (e.g. `/api/hello`) |
+| `CRUD` | `Boolean` | If `True`, auto-generates GET/POST/PUT/DELETE routes |
+| `OnExecute` | `TTina4EndpointExecute` | Event handler called when the route is matched |
+
 ## TTina4SocketServer -- TCP/UDP Socket Server
 
 ```delphi
@@ -630,6 +689,16 @@ end;
 Tina4SocketServer1.Active := True;
 ```
 
+### Properties
+
+| Property | Type | Description |
+|---|---|---|
+| `Host` | `string` | Bind address (e.g. `0.0.0.0` for all interfaces, `127.0.0.1` for localhost) |
+| `Port` | `Integer` | Port number to listen on |
+| `SocketType` | `TSocketType` | `TCP` or `UDP` |
+| `Active` | `Boolean` | Start/stop the socket server |
+| `OnMessage` | `TTina4SocketEvent` | `procedure(const Client: TSocket; Content: TBytes)` -- fires when data is received |
+
 ## TTina4HTMLRender -- FMX HTML Renderer
 
 An FMX control that parses and renders HTML with CSS support directly on a canvas, including native form controls, Bootstrap 5 class support, and interactive event handling.
@@ -637,6 +706,28 @@ An FMX control that parses and renders HTML with CSS support directly on a canva
 ```delphi
 Tina4HTMLRender1.HTML.Text := '<h1>Hello</h1><p>This is <b>bold</b> and <i>italic</i>.</p>';
 ```
+
+### Properties
+
+| Property | Type | Description |
+|---|---|---|
+| `HTML` | `TStringList` | HTML content to render; changes trigger automatic relayout |
+| `Twig` | `TStringList` | Twig template content; rendered to HTML via TTina4Twig on change |
+| `TwigTemplatePath` | `string` | Base path for `{% include %}` and `{% extends %}` resolution |
+| `Debug` | `TStringList` | Debug output for diagnostic information |
+| `CacheEnabled` | `Boolean` | Enables disk-based caching for downloaded images/stylesheets (default `False`) |
+| `CacheDir` | `string` | Directory path for the disk-based file cache |
+| `Align` | `TAlignLayout` | FMX alignment within parent container |
+| `Anchors` | `TAnchors` | FMX anchors for resize behavior |
+| `ClipChildren` | `Boolean` | Clip child controls to component bounds |
+| `Enabled` | `Boolean` | Enable/disable the control |
+| `Height` | `Single` | Component height |
+| `Width` | `Single` | Component width |
+| `Margins` | `TBounds` | Outer margins |
+| `Padding` | `TBounds` | Inner padding |
+| `Position` | `TPosition` | Position within parent |
+| `Size` | `TControlSize` | Size (Width + Height) |
+| `Visible` | `Boolean` | Show/hide the control |
 
 ### Supported HTML
 

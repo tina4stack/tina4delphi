@@ -524,6 +524,100 @@ def run_source(
             pass
 
 
+def _generate_minimal_res() -> bytes:
+    """Generate a minimal valid Windows .res file.
+
+    FMX projects require a .res file ({$R *.res} in the DPR).
+    This generates a minimal valid .res directly so the Delphi compiler
+    (dcc32/dcc64) can link it without needing an external resource compiler.
+
+    The minimal .res format is a single 32-byte null resource header.
+    """
+    import struct
+    return struct.pack(
+        '<IIHHHHIHHII',
+        0,       # DataSize (no data)
+        0x20,    # HeaderSize (32 bytes)
+        0xFFFF,  # Type: ordinal marker
+        0,       # Type ID: 0 (null resource)
+        0xFFFF,  # Name: ordinal marker
+        0,       # Name ID: 0 (null resource)
+        0,       # DataVersion
+        0,       # MemoryFlags
+        0,       # LanguageId
+        0,       # Version
+        0,       # Characteristics
+    )
+
+
+def _find_brcc32(compiler: CompilerInfo) -> str | None:
+    """Find brcc32.exe (Borland Resource Compiler) next to the Delphi compiler.
+
+    Used when .rc files with custom resources (icons, version info) need
+    to be compiled to .res. For minimal .res files, use _generate_minimal_res().
+    """
+    if compiler.compiler_type not in ("dcc32", "dcc64"):
+        return None
+    compiler_dir = os.path.dirname(compiler.path)
+    brcc = os.path.join(compiler_dir, "brcc32.exe")
+    if os.path.isfile(brcc):
+        return brcc
+    # Also check PATH
+    brcc = shutil.which("brcc32")
+    return brcc
+
+
+def _ensure_res_files(work_dir: str, compiler: CompilerInfo) -> None:
+    """Ensure .res files exist for any DPR that references {$R *.res}.
+
+    Two-step process:
+    1. If .rc files exist and brcc32 is available, compile them to .res
+       (handles custom resources like icons and version info).
+    2. For any DPR with {$R *.res} that still has no .res file,
+       generate a minimal .res directly (no external tool needed).
+    """
+    # Step 1: Compile any .rc files with brcc32 if available
+    rc_files = [f for f in os.listdir(work_dir) if f.lower().endswith(".rc")]
+    if rc_files:
+        brcc = _find_brcc32(compiler)
+        if brcc:
+            for rc_file in rc_files:
+                rc_path = os.path.join(work_dir, rc_file)
+                try:
+                    subprocess.run(
+                        [brcc, rc_path],
+                        capture_output=True,
+                        text=True,
+                        timeout=10,
+                        cwd=work_dir,
+                    )
+                except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+                    pass
+
+    # Step 2: Generate minimal .res for any DPR that still needs one
+    for fname in os.listdir(work_dir):
+        if not fname.lower().endswith(".dpr"):
+            continue
+        dpr_path = os.path.join(work_dir, fname)
+        try:
+            with open(dpr_path, "r", encoding="utf-8", errors="ignore") as f:
+                content = f.read()
+        except OSError:
+            continue
+
+        if "{$R *.res}" not in content:
+            continue
+
+        res_name = os.path.splitext(fname)[0] + ".res"
+        res_path = os.path.join(work_dir, res_name)
+        if os.path.exists(res_path):
+            continue
+
+        # Generate minimal .res as fallback
+        with open(res_path, "wb") as f:
+            f.write(_generate_minimal_res())
+
+
 def compile_project(
     files: dict[str, str],
     compiler_type: str | None = None,
@@ -588,6 +682,9 @@ def compile_project(
             os.makedirs(os.path.dirname(fpath) if os.path.dirname(fname) else work_dir, exist_ok=True)
             with open(fpath, "w", encoding="utf-8") as f:
                 f.write(content)
+
+        # Generate .res if needed (FMX requires {$R *.res})
+        _ensure_res_files(work_dir, compiler)
 
         # Build compiler command
         source_path = os.path.join(work_dir, dpr_file)

@@ -39,8 +39,23 @@ KNOWN_FPC_LOCATIONS = [
 ]
 
 KNOWN_DCC_LOCATIONS = [
+    # Embarcadero modern (XE6+ / BDS 14.0+) — Studio folder
     r"C:\Program Files (x86)\Embarcadero\Studio\*\bin\dcc64.exe",
-    r"C:\Program Files (x86)\Embarcadero\Studio\*\bin\dcc32.EXE",
+    r"C:\Program Files (x86)\Embarcadero\Studio\*\bin\dcc32.exe",
+    r"C:\Program Files (x86)\Embarcadero\Studio\*\bin64\dcc64.exe",
+    r"C:\Program Files (x86)\Embarcadero\Studio\*\bin64\dcc32.exe",
+    # Embarcadero early (2010-XE5 / BDS 7.0-12.0) — RAD Studio folder
+    r"C:\Program Files (x86)\Embarcadero\RAD Studio\*\bin\dcc64.exe",
+    r"C:\Program Files (x86)\Embarcadero\RAD Studio\*\bin\dcc32.exe",
+    # CodeGear (Delphi 2007-2009 / BDS 5.0-6.0)
+    r"C:\Program Files\CodeGear\RAD Studio\*\bin\dcc32.exe",
+    r"C:\Program Files (x86)\CodeGear\RAD Studio\*\bin\dcc32.exe",
+    # Borland BDS (Delphi 8, 2005, 2006 / BDS 2.0-4.0)
+    r"C:\Program Files\Borland\BDS\*\bin\dcc32.exe",
+    r"C:\Program Files (x86)\Borland\BDS\*\bin\dcc32.exe",
+    # Borland Delphi (Delphi 2-7)
+    r"C:\Program Files\Borland\Delphi*\bin\dcc32.exe",
+    r"C:\Program Files (x86)\Borland\Delphi*\bin\dcc32.exe",
 ]
 
 
@@ -273,6 +288,39 @@ def _find_dcc_lib_paths(compiler: CompilerInfo) -> list[str]:
     return lib_paths
 
 
+def _detect_framework(source_path: str) -> str:
+    """Detect if a project uses FMX or VCL by scanning the source files.
+
+    Returns 'fmx', 'vcl', or 'console'.
+    """
+    project_dir = os.path.dirname(source_path)
+    for fname in os.listdir(project_dir):
+        fpath = os.path.join(project_dir, fname)
+        if not os.path.isfile(fpath):
+            continue
+        if fname.lower().endswith((".fmx",)):
+            return "fmx"
+        if fname.lower().endswith((".dfm",)):
+            return "vcl"
+        if fname.lower().endswith((".pas", ".dpr")):
+            try:
+                with open(fpath, "r", encoding="utf-8", errors="ignore") as f:
+                    content = f.read(4096)
+                if "FMX.Forms" in content or "FMX.Types" in content:
+                    return "fmx"
+                if "Vcl.Forms" in content or "Forms," in content:
+                    return "vcl"
+            except OSError:
+                pass
+    return "console"
+
+
+# Namespace search paths per framework
+_NS_VCL = "Winapi;System.Win;Data.Win;Datasnap.Win;Web.Win;Soap.Win;Xml.Win;System;Xml;Data;Datasnap;Web;Soap;Vcl;Vcl.Imaging;Vcl.Touch;Vcl.Samples;Vcl.Shell"
+_NS_FMX = "System;Xml;Data;Datasnap;Web;Soap;FMX;FMX.ASE;FMX.Bind;FMX.Canvas;FMX.DAE;FMX.Filter;FMX.Platform;FMX.Printer"
+_NS_CONSOLE = "System;System.Win;Winapi"
+
+
 def _build_compile_args(
     compiler: CompilerInfo,
     source_path: str,
@@ -294,15 +342,24 @@ def _build_compile_args(
         if syntax_only:
             args.append("-Q")
 
-        # Add RTL/VCL unit search paths
+        # Add RTL/VCL/FMX unit search paths
         lib_paths = _find_dcc_lib_paths(compiler)
         for lib_path in lib_paths:
             args.append(f"-U{lib_path}")
 
+        # Detect framework and set namespace search
+        framework = _detect_framework(source_path)
+        if framework == "fmx":
+            ns = _NS_FMX
+        elif framework == "vcl":
+            ns = _NS_VCL
+        else:
+            ns = _NS_CONSOLE
+
         args.extend([
             f"-E{output_dir}",  # exe output directory
             f"-N{output_dir}",  # unit output directory
-            "-NSSystem;System.Win;Winapi",  # namespace search
+            f"-NS{ns}",  # namespace search
             source_path,
         ])
 

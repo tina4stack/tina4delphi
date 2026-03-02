@@ -19,6 +19,7 @@ from pascal_mcp.compiler import (
 )
 from pascal_mcp.templates import (
     generate_console_project,
+    generate_fmx_project,
     generate_fpc_project,
     generate_vcl_project,
 )
@@ -37,10 +38,12 @@ mcp = FastMCP(
         "Pascal/Delphi development tools. Use get_compiler_info to check "
         "available compilers. Use compile_pascal to compile single-file code. "
         "Use compile_delphi_project to compile proper multi-file Delphi "
-        "projects (DPR + PAS + DFM). Use run_pascal to compile and execute "
-        "console programs. Use launch_app for GUI applications that need to "
-        "stay running. If no compiler is found, use setup_fpc to install "
-        "Free Pascal. Use parse_form to read DFM/FMX/LFM form files."
+        "projects — supports project_type 'vcl' (DPR + PAS + DFM), 'fmx' "
+        "(DPR + PAS + FMX), 'console', and 'fpc'. Use run_pascal to compile "
+        "and execute console programs (supports stdin_input for ReadLn). "
+        "Use launch_app for GUI applications that need to stay running. "
+        "If no compiler is found, use setup_fpc to install Free Pascal. "
+        "Use parse_form to read DFM/FMX/LFM form files."
     ),
 )
 
@@ -348,7 +351,8 @@ async def compile_delphi_project(
         compiler: Which compiler to use ('fpc', 'dcc32', 'dcc64', or full path).
         output_dir: Optional directory for output files. If not specified,
             uses a temp directory.
-        project_type: 'vcl' for GUI app, 'console' for console app, 'fpc' for FPC.
+        project_type: 'vcl' for VCL GUI app, 'fmx' for FireMonkey GUI app,
+            'console' for console app, 'fpc' for FPC.
         program_body: For console/fpc projects, the main program code.
     """
     import json
@@ -372,6 +376,14 @@ async def compile_delphi_project(
             events=evt_list,
             compiler_type=compiler,
         )
+    elif project_type == "fmx":
+        files = generate_fmx_project(
+            project_name=project_name,
+            form_caption=form_caption,
+            components=comp_list,
+            events=evt_list,
+            compiler_type=compiler,
+        )
     elif project_type == "console":
         body = program_body or "    Writeln('Hello, World!');"
         files = generate_console_project(
@@ -386,7 +398,7 @@ async def compile_delphi_project(
             program_body=body,
         )
     else:
-        return f"Unknown project_type: {project_type}. Use 'vcl', 'console', or 'fpc'."
+        return f"Unknown project_type: {project_type}. Use 'vcl', 'fmx', 'console', or 'fpc'."
 
     # Show what was generated
     parts = [f"Generated {len(files)} file(s):"]

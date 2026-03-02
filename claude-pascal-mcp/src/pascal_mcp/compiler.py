@@ -166,6 +166,48 @@ def detect_compilers() -> list[CompilerInfo]:
     return compilers
 
 
+def _infer_compiler_type(path: str) -> str:
+    """Infer the compiler type from an executable path."""
+    basename = os.path.basename(path).lower()
+    if "dcc64" in basename:
+        return "dcc64"
+    elif "dcc32" in basename:
+        return "dcc32"
+    else:
+        return "fpc"
+
+
+def _compiler_from_path(path: str) -> CompilerInfo | None:
+    """Build a CompilerInfo from a direct path to a compiler executable.
+
+    Validates the path exists and queries its version.
+    Returns None if the path is not a valid executable.
+    """
+    if not os.path.isfile(path):
+        return None
+
+    compiler_type = _infer_compiler_type(path)
+
+    if compiler_type == "fpc":
+        version = _get_fpc_version(path)
+        name = "Free Pascal Compiler"
+    else:
+        version = _get_dcc_version(path)
+        name = "Delphi 64-bit Compiler" if compiler_type == "dcc64" else "Delphi 32-bit Compiler"
+
+    return CompilerInfo(
+        name=name,
+        path=os.path.abspath(path),
+        version=version,
+        compiler_type=compiler_type,
+    )
+
+
+def _is_path(value: str) -> bool:
+    """Check if a string looks like a file path rather than a type name."""
+    return os.sep in value or "/" in value or "\\" in value or ":" in value
+
+
 def _select_compiler(
     compilers: list[CompilerInfo],
     preferred: str | None = None,
@@ -174,18 +216,28 @@ def _select_compiler(
 
     Args:
         compilers: List of detected compilers.
-        preferred: Optional preferred compiler type (fpc, dcc32, dcc64).
+        preferred: Optional compiler selection. Can be:
+            - A type name: 'fpc', 'dcc32', 'dcc64'
+            - A full path: 'C:\\Program Files (x86)\\Embarcadero\\Studio\\37.0\\bin\\dcc64.exe'
 
     Returns:
         The selected CompilerInfo, or None if no compiler is available.
     """
-    if not compilers:
-        return None
-
     if preferred:
+        # If it looks like a path, use it directly
+        if _is_path(preferred):
+            compiler = _compiler_from_path(preferred)
+            if compiler:
+                return compiler
+            # Path didn't resolve — fall through to auto-detect
+
+        # Match by type name
         for c in compilers:
             if c.compiler_type == preferred:
                 return c
+
+    if not compilers:
+        return None
 
     # Default priority: fpc > dcc64 > dcc32
     priority = {"fpc": 0, "dcc64": 1, "dcc32": 2}

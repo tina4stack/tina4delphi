@@ -24,6 +24,7 @@ This is not another framework for Delphi
 | `TTina4HTMLRender` | Tina4HTMLRender | FMX control that renders HTML to canvas |
 | `TTina4HTMLPages` | Tina4HTMLPages | Design-time page navigation for TTina4HTMLRender |
 | `TTina4Twig` | Tina4Twig | Twig-style template engine |
+| `TFMXStyleSheet` | FMXStyle.StyleSheet | CSS/SCSS to FMX StyleBook converter with live reload |
 
 ## Tina4Core Reference
 
@@ -955,6 +956,96 @@ end;
 ```
 
 Template syntax supports: `{{ variable }}`, `{% if %}`, `{% for %}`, `{% include %}`, `{% extends %}`, `{% block %}`, `{% macro %}`, filters (`|upper`, `|lower`, `|length`, `|default`, etc.), and functions (`range()`, `dump()`, etc.).
+
+## TFMXStyleSheet -- CSS/SCSS to FMX StyleBook
+
+A separate companion component that converts CSS and SCSS files into FMX StyleBook resources. CSS class names map directly to FMX `StyleLookup` values.
+
+```delphi
+// Drop TFMXStyleSheet on a form, link to a TStyleBook
+FMXStyleSheet1.StyleBook := StyleBook1;
+FMXStyleSheet1.StylePath := 'C:\MyApp\styles';
+FMXStyleSheet1.WatchEnabled := True;  // live reload on file changes
+```
+
+Or use inline SCSS directly in the Object Inspector:
+
+```scss
+// SCSS property (design-time editable)
+$primary: #0d6efd;
+
+.btn-primary {
+  background-color: $primary;
+  color: #ffffff;
+  font-size: 14px;
+  border-radius: 6px;
+  padding: 8px 20px;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.25);
+}
+```
+
+Then assign `StyleLookup` on your FMX controls:
+
+```delphi
+Button1.StyleLookup := 'btn-primary';
+```
+
+### CSS Property Mapping
+
+| CSS Property | FMX Equivalent |
+|---|---|
+| `background-color` | `TRectangle.Fill.Color` |
+| `color` | `TText.TextSettings.FontColor` |
+| `font-size` | `TText.TextSettings.Font.Size` |
+| `font-family` | `TText.TextSettings.Font.Family` |
+| `font-weight: bold` | `TText.TextSettings.Font.Style = [fsBold]` |
+| `border-radius` | `TRectangle.XRadius` / `YRadius` |
+| `border-color` / `border-width` | `TRectangle.Stroke.Color` / `Thickness` |
+| `padding` | `TLayout.Padding` |
+| `margin` | `TLayout.Margins` |
+| `box-shadow` | `TShadowEffect` (distance, direction, softness, opacity) |
+| `opacity` | `TLayout.Opacity` |
+
+See the [FMXStyle project](https://github.com/niclasborgworx/FMXStyle) for full documentation and the sample application.
+
+## Claude Pascal MCP Server
+
+The Tina4Delphi ecosystem includes an MCP (Model Context Protocol) server that gives Claude direct access to Pascal/Delphi development tools. Once registered, Claude can compile code, run programs, parse form files, and take screenshots of running applications.
+
+### Tools
+
+| Tool | Description |
+|---|---|
+| `get_compiler_info` | Detect available Pascal compilers (fpc, dcc32, dcc64) |
+| `compile_pascal` | Compile Pascal source code and return errors/warnings |
+| `run_pascal` | Compile and execute code, return program output |
+| `check_syntax` | Fast syntax-only check without linking |
+| `parse_form` | Parse .dfm/.fmx/.lfm form files into component trees |
+| `screenshot_app` | Capture a screenshot of a running application window |
+| `list_app_windows` | List visible windows on the desktop |
+| `setup_fpc` | Download and install Free Pascal Compiler |
+
+### Installation
+
+```bash
+# Register with Claude Code
+claude mcp add --transport stdio pascal-dev -- uv run --directory /path/to/claude-pascal-mcp pascal-mcp
+```
+
+Or add to your project's `.mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "pascal-dev": {
+      "command": "uv",
+      "args": ["run", "--directory", "/path/to/claude-pascal-mcp", "pascal-mcp"]
+    }
+  }
+}
+```
+
+See the [claude-pascal-mcp](https://github.com/niclasborgworx/claude-pascal-mcp) repository for full documentation.
 
 ## Change Log
 

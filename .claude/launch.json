@@ -3,10 +3,16 @@
   "configurations": [
     {
       "name": "pascal-preview",
-      "runtimeExecutable": "D:/projects/tina4delphi/.claude/worktrees/great-chebyshev/claude-pascal-mcp/.venv/Scripts/pythonw.exe",
-      "runtimeArgs": ["-m", "pascal_mcp.preview_bridge"],
-      "port": 18080,
-      "autoPort": true
+      "runtimeExecutable": "uv",
+      "runtimeArgs": [
+        "run",
+        "--directory",
+        "D:/projects/tina4delphi/.claude/worktrees/great-chebyshev/claude-pascal-mcp",
+        "python",
+        "-m",
+        "pascal_mcp.preview_bridge"
+      ],
+      "port": 18080
     }
   ]
 }

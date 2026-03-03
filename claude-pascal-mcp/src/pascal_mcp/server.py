@@ -30,7 +30,12 @@ from pascal_mcp.form_parser import (
     parse_form_file,
 )
 from pascal_mcp.installer import download_and_install_fpc
-from pascal_mcp.screenshot import capture_window, list_windows
+from pascal_mcp.screenshot import (
+    capture_window,
+    click_window,
+    list_windows,
+    type_in_window,
+)
 from pascal_mcp.ide_watcher import (
     compile_project_in_temp,
     get_changes,
@@ -295,6 +300,55 @@ async def list_app_windows(
         lines.append(f"  {w['title']}")
 
     return "\n".join(lines)
+
+
+@mcp.tool()
+async def click_app(
+    window_title: str,
+    x: int,
+    y: int,
+    double_click: bool = False,
+) -> str:
+    """Click at a position within a running application window.
+
+    Uses screenshot pixel coordinates — the x,y values correspond directly
+    to pixel positions in screenshots from screenshot_app. DPI scaling is
+    handled automatically.
+
+    Args:
+        window_title: Full or partial window title (case-insensitive).
+        x: X coordinate in screenshot pixels (from left edge of window).
+        y: Y coordinate in screenshot pixels (from top edge of window).
+        double_click: If True, perform a double-click instead of single click.
+    """
+    result = click_window(window_title, x, y, double_click=double_click)
+    if result is None:
+        return f"No window found matching '{window_title}'."
+    return result
+
+
+@mcp.tool()
+async def type_in_app(
+    window_title: str,
+    text: str,
+    clear_first: bool = False,
+) -> str:
+    """Type text into a running application window.
+
+    Brings the window to the foreground and types using Unicode input
+    events. Works with any control that accepts keyboard input.
+    Click a text field first using click_app to focus it.
+
+    Args:
+        window_title: Full or partial window title (case-insensitive).
+        text: The text to type.
+        clear_first: If True, sends Ctrl+A first to select all existing
+            text so the new text replaces it.
+    """
+    result = type_in_window(window_title, text, clear_first=clear_first)
+    if result is None:
+        return f"No window found matching '{window_title}'."
+    return result
 
 
 @mcp.tool()

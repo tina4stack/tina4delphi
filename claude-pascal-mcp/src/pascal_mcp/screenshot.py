@@ -74,12 +74,37 @@ def _get_window_title(hwnd: int) -> str:
 
 
 def _bring_window_to_front(hwnd: int) -> None:
-    """Bring a window to the foreground so it can be captured cleanly."""
-    SW_RESTORE = 9
-    if ctypes.windll.user32.IsIconic(hwnd):
-        ctypes.windll.user32.ShowWindow(hwnd, SW_RESTORE)
+    """Bring a window to the foreground reliably.
 
-    ctypes.windll.user32.SetForegroundWindow(hwnd)
+    Uses AttachThreadInput to temporarily connect our thread to the
+    target window's thread, which allows SetForegroundWindow to work
+    even when our process is not the current foreground process.
+    """
+    user32 = ctypes.windll.user32
+    kernel32 = ctypes.windll.kernel32
+
+    SW_RESTORE = 9
+    if user32.IsIconic(hwnd):
+        user32.ShowWindow(hwnd, SW_RESTORE)
+
+    # Get thread IDs
+    our_thread = kernel32.GetCurrentThreadId()
+    target_thread = user32.GetWindowThreadProcessId(hwnd, None)
+
+    # Attach our thread input to the target's thread
+    attached = False
+    if our_thread != target_thread:
+        attached = bool(user32.AttachThreadInput(our_thread, target_thread, True))
+
+    try:
+        user32.BringWindowToTop(hwnd)
+        user32.SetForegroundWindow(hwnd)
+        # Also set focus at the Win32 level
+        user32.SetFocus(hwnd)
+    finally:
+        if attached:
+            user32.AttachThreadInput(our_thread, target_thread, False)
+
     time.sleep(0.3)
 
 
@@ -172,6 +197,240 @@ def _capture_with_printwindow(hwnd: int) -> Image.Image | None:
             ctypes.windll.gdi32.DeleteDC(mem_dc)
     finally:
         ctypes.windll.user32.ReleaseDC(hwnd, hwnd_dc)
+
+
+def get_window_rect(hwnd: int) -> tuple[int, int, int, int]:
+    """Get the window rectangle in physical pixels (DPI-aware).
+
+    Returns:
+        Tuple of (left, top, right, bottom) in screen coordinates.
+    """
+    rect = ctypes.wintypes.RECT()
+    ctypes.windll.user32.GetWindowRect(hwnd, ctypes.byref(rect))
+    return (rect.left, rect.top, rect.right, rect.bottom)
+
+
+def get_dpi_scale(hwnd: int) -> float:
+    """Get the DPI scale factor for a window.
+
+    Returns:
+        Scale factor (e.g. 1.5 for 150% scaling). Falls back to 1.0.
+    """
+    if sys.platform != "win32":
+        return 1.0
+    try:
+        # GetDpiForWindow (Windows 10 1607+)
+        dpi = ctypes.windll.user32.GetDpiForWindow(hwnd)
+        if dpi > 0:
+            return dpi / 96.0
+    except Exception:
+        pass
+    try:
+        # Fallback: monitor DPI
+        monitor = ctypes.windll.user32.MonitorFromWindow(hwnd, 1)
+        dpi_x = ctypes.c_uint()
+        ctypes.windll.shcore.GetDpiForMonitor(
+            monitor, 0, ctypes.byref(dpi_x), ctypes.byref(ctypes.c_uint())
+        )
+        if dpi_x.value > 0:
+            return dpi_x.value / 96.0
+    except Exception:
+        pass
+    return 1.0
+
+
+def _find_child_at_point(hwnd: int, x: int, y: int) -> int:
+    """Find the deepest child window at a client-area point.
+
+    Args:
+        hwnd: Parent window handle.
+        x, y: Coordinates in the parent's client area.
+
+    Returns:
+        Handle of the deepest child window at that point, or hwnd if none.
+    """
+    user32 = ctypes.windll.user32
+
+    # Convert client coords to screen coords
+    point = ctypes.wintypes.POINT(x, y)
+    user32.ClientToScreen(hwnd, ctypes.byref(point))
+
+    # Find the deepest child at this screen point
+    child = user32.WindowFromPoint(point)
+    if child and child != hwnd:
+        return child
+    return hwnd
+
+
+def _make_lparam(x: int, y: int) -> int:
+    """Pack x,y into an LPARAM (low word = x, high word = y)."""
+    return (y << 16) | (x & 0xFFFF)
+
+
+def click_window(
+    title: str,
+    x: int,
+    y: int,
+    double_click: bool = False,
+) -> str | None:
+    """Click at a position within a window, using screenshot pixel coordinates.
+
+    The x,y coordinates are in screenshot pixel space (what you see in the
+    screenshot image). Sends WM_LBUTTONDOWN/UP messages directly to the
+    target child control — does NOT require foreground focus.
+
+    Args:
+        title: Window title to find (case-insensitive partial match).
+        x: X coordinate in screenshot pixels (from left edge of window).
+        y: Y coordinate in screenshot pixels (from top edge of window).
+        double_click: If True, perform a double-click.
+
+    Returns:
+        Success message, or error string.
+    """
+    if sys.platform != "win32":
+        return "click_window is only supported on Windows"
+
+    hwnd = _find_window_by_title(title)
+    if hwnd is None:
+        return None
+
+    user32 = ctypes.windll.user32
+    actual_title = _get_window_title(hwnd)
+    dpi_scale = get_dpi_scale(hwnd)
+
+    # Screenshot pixels -> client area pixels (account for DPI)
+    client_x = int(x / dpi_scale)
+    client_y = int(y / dpi_scale)
+
+    # Find the child control at this position
+    child = _find_child_at_point(hwnd, client_x, client_y)
+
+    # Convert parent client coords to child client coords
+    parent_point = ctypes.wintypes.POINT(client_x, client_y)
+    user32.ClientToScreen(hwnd, ctypes.byref(parent_point))
+    child_point = ctypes.wintypes.POINT(parent_point.x, parent_point.y)
+    user32.ScreenToClient(child, ctypes.byref(child_point))
+
+    lparam = _make_lparam(child_point.x, child_point.y)
+
+    # Send mouse messages directly to the child control
+    WM_LBUTTONDOWN = 0x0201
+    WM_LBUTTONUP = 0x0202
+    WM_LBUTTONDBLCLK = 0x0203
+    MK_LBUTTON = 0x0001
+
+    if double_click:
+        user32.PostMessageW(child, WM_LBUTTONDOWN, MK_LBUTTON, lparam)
+        time.sleep(0.02)
+        user32.PostMessageW(child, WM_LBUTTONUP, 0, lparam)
+        time.sleep(0.02)
+        user32.PostMessageW(child, WM_LBUTTONDBLCLK, MK_LBUTTON, lparam)
+        time.sleep(0.02)
+        user32.PostMessageW(child, WM_LBUTTONUP, 0, lparam)
+    else:
+        user32.PostMessageW(child, WM_LBUTTONDOWN, MK_LBUTTON, lparam)
+        time.sleep(0.02)
+        user32.PostMessageW(child, WM_LBUTTONUP, 0, lparam)
+
+    # Also set focus to the child (for keyboard input)
+    # Use WM_SETFOCUS via the parent, and SetFocus via AttachThreadInput
+    kernel32 = ctypes.windll.kernel32
+    our_thread = kernel32.GetCurrentThreadId()
+    target_thread = user32.GetWindowThreadProcessId(child, None)
+    attached = False
+    if our_thread != target_thread:
+        attached = bool(user32.AttachThreadInput(our_thread, target_thread, True))
+    try:
+        user32.SetFocus(child)
+    finally:
+        if attached:
+            user32.AttachThreadInput(our_thread, target_thread, False)
+
+    time.sleep(0.3)
+
+    child_class = ctypes.create_unicode_buffer(256)
+    user32.GetClassNameW(child, child_class, 256)
+
+    return (
+        f"Clicked '{actual_title}' at screenshot ({x},{y}) -> "
+        f"child 0x{child:X} ({child_class.value}) at ({child_point.x},{child_point.y}) "
+        f"[DPI: {dpi_scale}]"
+    )
+
+
+def type_in_window(
+    title: str,
+    text: str,
+    clear_first: bool = False,
+) -> str | None:
+    """Type text into the focused control of a window.
+
+    Sends WM_CHAR messages directly to the window — does NOT require
+    foreground focus. Use click_window first to focus a specific control.
+
+    Args:
+        title: Window title to find (case-insensitive partial match).
+        text: The text to type.
+        clear_first: If True, send Ctrl+A + Delete first to clear existing text.
+
+    Returns:
+        Success message, or None if window not found.
+    """
+    if sys.platform != "win32":
+        return "type_in_window is only supported on Windows"
+
+    hwnd = _find_window_by_title(title)
+    if hwnd is None:
+        return None
+
+    user32 = ctypes.windll.user32
+    actual_title = _get_window_title(hwnd)
+
+    # Find the currently focused child within this window
+    # Use AttachThreadInput to query focus from the target thread
+    kernel32 = ctypes.windll.kernel32
+    our_thread = kernel32.GetCurrentThreadId()
+    target_thread = user32.GetWindowThreadProcessId(hwnd, None)
+
+    target_control = hwnd
+    attached = False
+    if our_thread != target_thread:
+        attached = bool(user32.AttachThreadInput(our_thread, target_thread, True))
+    try:
+        focused = user32.GetFocus()
+        if focused:
+            target_control = focused
+    finally:
+        if attached:
+            user32.AttachThreadInput(our_thread, target_thread, False)
+
+    WM_CHAR = 0x0102
+    WM_KEYDOWN = 0x0100
+    WM_KEYUP = 0x0101
+
+    if clear_first:
+        # Use EM_SETSEL to select all text, then delete it
+        EM_SETSEL = 0x00B1
+        VK_DELETE = 0x2E
+        user32.SendMessageW(target_control, EM_SETSEL, 0, -1)  # Select all
+        time.sleep(0.02)
+        user32.PostMessageW(target_control, WM_KEYDOWN, VK_DELETE, 0)
+        user32.PostMessageW(target_control, WM_KEYUP, VK_DELETE, 0)
+        time.sleep(0.05)
+
+    # Send each character via WM_CHAR
+    for ch in text:
+        user32.PostMessageW(target_control, WM_CHAR, ord(ch), 0)
+        time.sleep(0.01)
+
+    target_class = ctypes.create_unicode_buffer(256)
+    user32.GetClassNameW(target_control, target_class, 256)
+
+    return (
+        f"Typed {len(text)} char(s) into '{actual_title}' "
+        f"control 0x{target_control:X} ({target_class.value})"
+    )
 
 
 def list_windows(filter_text: str = "") -> list[dict[str, str]]:

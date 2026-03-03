@@ -1293,6 +1293,45 @@ async def api_launch(request: Request) -> JSONResponse:
     return JSONResponse(result)
 
 
+async def api_ide_status(request: Request) -> JSONResponse:
+    """Get current IDE status (project, file, state)."""
+    from pascal_mcp.ide_watcher import get_ide_context as _get_ide_ctx
+
+    ctx = _get_ide_ctx()
+    if ctx is None:
+        return JSONResponse({"status": "not_found", "message": "No IDE window detected"})
+
+    return JSONResponse({
+        "status": "ok",
+        "ide_version": ctx.ide_version,
+        "project_name": ctx.project_name,
+        "active_file": ctx.active_file,
+        "state": ctx.state,
+        "modified": ctx.modified,
+        "window_title": ctx.window_title,
+    })
+
+
+async def api_ide_changes(request: Request) -> JSONResponse:
+    """Get file changes in the tracked project since last check."""
+    from pascal_mcp.ide_watcher import get_changes as _get_changes
+
+    changes = _get_changes()
+    if changes is None:
+        return JSONResponse({
+            "status": "not_watching",
+            "message": "No project being tracked. Use watch_project MCP tool first.",
+        })
+
+    return JSONResponse({
+        "status": "ok",
+        "has_changes": changes.has_changes,
+        "modified": changes.modified,
+        "added": changes.added,
+        "deleted": changes.deleted,
+    })
+
+
 # ---------------------------------------------------------------------------
 # HTML Page
 # ---------------------------------------------------------------------------
@@ -1550,6 +1589,8 @@ app = Starlette(
         Route("/api/console", api_console),
         Route("/api/console/write", api_console_write, methods=["POST"]),
         Route("/api/launch", api_launch, methods=["POST"]),
+        Route("/api/ide-status", api_ide_status),
+        Route("/api/ide-changes", api_ide_changes),
     ],
 )
 

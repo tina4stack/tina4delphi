@@ -31,6 +31,15 @@ from pascal_mcp.form_parser import (
 )
 from pascal_mcp.installer import download_and_install_fpc
 from pascal_mcp.screenshot import capture_window, list_windows
+from pascal_mcp.ide_watcher import (
+    compile_project_in_temp,
+    get_changes,
+    get_ide_context,
+    get_project_overview,
+    read_project_file,
+    start_watching,
+    write_project_file,
+)
 
 mcp = FastMCP(
     "pascal-dev",
@@ -43,7 +52,13 @@ mcp = FastMCP(
         "and execute console programs (supports stdin_input for ReadLn). "
         "Use launch_app for GUI applications that need to stay running. "
         "If no compiler is found, use setup_fpc to install Free Pascal. "
-        "Use parse_form to read DFM/FMX/LFM form files."
+        "Use parse_form to read DFM/FMX/LFM form files. "
+        "For follow-along coding: use ide_context to detect the IDE and "
+        "active project/file. Use watch_project to start tracking a project. "
+        "Use project_changes to see what files changed. Use read_project_file "
+        "and write_project_file to read/edit code. Use compile_project_check "
+        "to verify changes compile (in a temp folder). Use project_overview "
+        "to see the project structure."
     ),
 )
 
@@ -427,6 +442,191 @@ async def compile_delphi_project(
         parts.append("\nNote: Files are in a temp directory. Use output_dir to save permanently.")
 
     return "\n".join(parts)
+
+
+@mcp.tool()
+async def ide_context() -> list | str:
+    """Detect the Delphi/RAD Studio IDE and show what's currently open.
+
+    Finds a running IDE window, parses the title bar to extract the
+    project name, active file, and state (editing/running/debugging).
+    Also takes a screenshot of the IDE.
+
+    Use this as the first step when helping a user with their Delphi project.
+    """
+    ctx = get_ide_context()
+
+    if ctx is None:
+        return (
+            "No Delphi/RAD Studio IDE window found.\n"
+            "Make sure the IDE is running and visible."
+        )
+
+    parts = [f"IDE: {ctx.ide_version}"]
+    if ctx.project_name:
+        parts.append(f"Project: {ctx.project_name}")
+    if ctx.active_file:
+        parts.append(f"Active file: {ctx.active_file}")
+    parts.append(f"State: {ctx.state}")
+    if ctx.modified:
+        parts.append("Modified: yes")
+
+    # Take a screenshot of the IDE
+    result = capture_window(ctx.window_title)
+    if result:
+        b64_data, actual_title, width, height = result
+        return [
+            Image(data=base64.b64decode(b64_data), format="png"),
+            "\n".join(parts),
+        ]
+
+    return "\n".join(parts)
+
+
+@mcp.tool()
+async def watch_project(
+    project_name: str = "",
+    project_dir: str = "",
+) -> str:
+    """Start tracking file changes in a Delphi project.
+
+    Finds the project directory, scans all source files, and takes a
+    baseline snapshot. After this, use project_changes to see what
+    the user has modified.
+
+    Args:
+        project_name: Name of the project to find (searches common locations).
+            If ide_context detected a project, you can use that name.
+        project_dir: Direct path to the project directory. Use this if you
+            know exactly where the project is.
+    """
+    if not project_name and not project_dir:
+        return "Provide either project_name or project_dir."
+
+    result = start_watching(
+        project_name=project_name or None,
+        project_dir=project_dir or None,
+    )
+
+    if result is None:
+        msg = f"Project '{project_name or project_dir}' not found."
+        if not project_dir:
+            msg += "\nTry providing the project_dir path directly."
+        return msg
+
+    project, file_count = result
+
+    parts = [f"Watching: {project.project_dir}"]
+    if project.dpr_path:
+        import os
+        parts.append(f"Main file: {os.path.basename(project.dpr_path)}")
+    parts.append(f"Tracking {file_count} source file(s)")
+    parts.append(f"\nFiles: {', '.join(project.source_files[:20])}")
+    if len(project.source_files) > 20:
+        parts.append(f"  ... and {len(project.source_files) - 20} more")
+
+    return "\n".join(parts)
+
+
+@mcp.tool()
+async def project_changes() -> str:
+    """Check what files have changed since the last check.
+
+    Returns a list of modified, added, and deleted files.
+    Each call resets the baseline — only new changes appear next time.
+
+    Call watch_project first to start tracking.
+    """
+    changes = get_changes()
+
+    if changes is None:
+        return "No project is being watched. Call watch_project first."
+
+    if not changes.has_changes:
+        return "No changes detected."
+
+    parts = []
+    if changes.modified:
+        parts.append(f"Modified ({len(changes.modified)}):")
+        for f in changes.modified:
+            parts.append(f"  {f}")
+    if changes.added:
+        parts.append(f"Added ({len(changes.added)}):")
+        for f in changes.added:
+            parts.append(f"  {f}")
+    if changes.deleted:
+        parts.append(f"Deleted ({len(changes.deleted)}):")
+        for f in changes.deleted:
+            parts.append(f"  {f}")
+
+    return "\n".join(parts)
+
+
+@mcp.tool()
+async def read_project_file_tool(
+    file_path: str,
+) -> str:
+    """Read a source file from the tracked project.
+
+    Args:
+        file_path: Relative path from the project root (e.g., 'uMain.pas')
+            or an absolute path.
+    """
+    content = read_project_file(file_path)
+
+    if content is None:
+        return (
+            f"Could not read '{file_path}'. "
+            "Make sure watch_project has been called and the file exists."
+        )
+
+    line_count = content.count("\n") + 1
+    return f"--- {file_path} ({line_count} lines) ---\n{content}"
+
+
+@mcp.tool()
+async def write_project_file_tool(
+    file_path: str,
+    content: str,
+) -> str:
+    """Write or update a source file in the tracked project.
+
+    Creates a .bak backup before overwriting. The Delphi IDE will
+    detect the change and prompt the user to reload.
+
+    Args:
+        file_path: Relative path from the project root (e.g., 'uMain.pas')
+            or an absolute path.
+        content: The complete new file content.
+    """
+    return write_project_file(file_path, content)
+
+
+@mcp.tool()
+async def compile_project_check() -> str:
+    """Compile the tracked project in a temporary folder.
+
+    Copies all project source files to a temp directory and compiles there.
+    This verifies that the code compiles without touching the user's
+    build output or interfering with the IDE.
+
+    Does NOT run the executable. Ask the user before running.
+
+    Call watch_project first to set up the project.
+    """
+    return compile_project_in_temp()
+
+
+@mcp.tool()
+async def project_overview() -> str:
+    """Show a summary of the tracked project's structure.
+
+    Returns the file tree, form summaries with component counts,
+    and unit dependencies parsed from uses clauses.
+
+    Call watch_project first to set up the project.
+    """
+    return get_project_overview()
 
 
 @mcp.tool()

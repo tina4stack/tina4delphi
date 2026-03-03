@@ -14,8 +14,11 @@ An MCP (Model Context Protocol) server that lets Claude compile, run, and intera
 - **Preview Bridge** — live preview of running Pascal apps through Claude's preview system
 - **Control Interaction** — click buttons, type text, send keys, move/resize windows
 - **FPC Installer** — download and install Free Pascal if no compiler is available
+- **Follow-Along Coding** — detect the Delphi IDE, track file changes, read/write project files, and compile in isolation
 
 ## Tools
+
+### Build & Run
 
 | Tool | Description |
 |------|-------------|
@@ -29,6 +32,18 @@ An MCP (Model Context Protocol) server that lets Claude compile, run, and intera
 | `screenshot_app` | Capture screenshot of a running app window |
 | `list_app_windows` | List visible windows on the desktop |
 | `setup_fpc` | Download and install Free Pascal (fallback) |
+
+### Follow-Along Coding
+
+| Tool | Description |
+|------|-------------|
+| `ide_context` | Detect Delphi IDE, parse title bar (project/file/state), take screenshot |
+| `watch_project` | Start tracking file changes in a project directory |
+| `project_changes` | List files modified/added/deleted since last check |
+| `read_project_file` | Read a source file from the tracked project |
+| `write_project_file` | Write/update a source file (creates .bak backup, IDE auto-reloads) |
+| `compile_project_check` | Compile project in temp folder — verify without touching user's build |
+| `project_overview` | Summarize project structure: file tree, forms, unit dependencies |
 
 ## Project Templates
 
@@ -109,6 +124,42 @@ FMX and console projects include `{$R *.res}` which requires a `.res` file at co
 
 This means FMX projects compile out of the box without requiring `brcc32` or any manual resource setup.
 
+## Follow-Along Coding
+
+The follow-along tools let Claude see what you're doing in your Delphi IDE and help in real time. Claude can detect your IDE, track which files you've changed, read your code, suggest fixes, and verify they compile — all without interfering with your IDE's build.
+
+### Typical Workflow
+
+1. **User**: "Help me with my Delphi project"
+2. Claude calls `ide_context` — detects IDE, gets project name and active file
+3. Claude calls `watch_project` — snapshots all source files
+4. Claude calls `project_overview` — shows file tree, forms, dependencies
+5. Claude calls `read_project_file("uMain.pas")` — reads the active file
+6. **User edits code in IDE and saves...**
+7. **User**: "Check my changes"
+8. Claude calls `project_changes` — shows which files changed
+9. Claude calls `read_project_file("uMain.pas")` — reads the updated code
+10. **User**: "Fix the bug on line 42"
+11. Claude calls `write_project_file("uMain.pas", fixed_content)` — writes fix
+12. Claude calls `compile_project_check` — compiles in temp folder, reports result
+13. Claude: "Fix compiles clean. Would you like me to run it?"
+
+### IDE Detection
+
+The `ide_context` tool finds running RAD Studio / Delphi windows and parses their title bars:
+
+```
+"Embarcadero RAD Studio 12.2 Athens - ProjectName - uMain.pas"
+"Embarcadero RAD Studio 12.2 Athens - ProjectName [Running]"
+"Delphi 12.2 - ProjectName - uMain.pas [Modified]"
+```
+
+Extracts: IDE version, project name, active file, state (editing/running/debugging), and modified flag.
+
+### Safe Compilation
+
+`compile_project_check` copies your project to a temporary folder and compiles there. It never touches your IDE's build output (`Win32/`, `Win64/`, `Debug/`, `Release/` directories are excluded from tracking and untouched during compilation).
+
 ## Preview Bridge
 
 The preview bridge lets Claude see and interact with running Pascal desktop applications through its web-based preview system. It serves live screenshots of desktop app windows as a web page.
@@ -149,6 +200,8 @@ Running Pascal Desktop Application
 | `/api/window-info` | GET | Window position, size, and client area offset |
 | `/api/console` | GET | Console output from launched apps |
 | `/api/launch` | POST | Launch an executable |
+| `/api/ide-status` | GET | Current IDE status (project, file, state) |
+| `/api/ide-changes` | GET | File changes in the tracked project |
 
 ### Click Methods
 

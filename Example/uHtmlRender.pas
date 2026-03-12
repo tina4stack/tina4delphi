@@ -6,13 +6,14 @@ uses
   System.SysUtils, System.Types, System.UITypes, System.Classes, System.Variants,
   System.IOUtils,
   FMX.Types, FMX.Controls, FMX.Forms, FMX.Graphics, FMX.Dialogs, Tina4HtmlRender,
-  FMX.Controls.Presentation, FMX.StdCtrls, Tina4HTMLPages;
+  FMX.Controls.Presentation, FMX.StdCtrls, Tina4HTMLPages, Tina4JSONAdapter;
 
 type
   TForm3 = class(TForm)
     Tina4HTMLRender1: TTina4HTMLRender;
     Button1: TButton;
     Tina4HTMLPages1: TTina4HTMLPages;
+    Tina4JSONAdapter1: TTina4JSONAdapter;
     procedure FormCreate(Sender: TObject);
     procedure Tina4HTMLRender1FormControlClick(Sender: TObject; const Name,
       Value: string);

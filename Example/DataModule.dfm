@@ -216,4 +216,11 @@ object frmDataModule: TfrmDataModule
     Top = 653
     Headers = ()
   end
+  object Tina4HTMLPages1: TTina4HTMLPages
+    Pages = <
+      item
+      end>
+    Left = 696
+    Top = 728
+  end
 end

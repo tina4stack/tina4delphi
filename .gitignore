@@ -71,3 +71,8 @@ Example/Test/Tina4Twig.dcu
 /Example/Test/Tina4RESTRequest.dcu
 /Example/Test/Tina4Route.dcu
 /Example/Test/Tina4WebServer.dcu
+/.claude/worktrees/funny-edison/
+/.claude/worktrees/great-chebyshev/
+/Example/Test/TestTina4WebSocket.dcu
+/Example/Test/Tina4OpenSSL.dcu
+/Example/Test/Tina4WebSocketClient.dcu

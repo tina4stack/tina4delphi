@@ -152,7 +152,7 @@ begin
   Result := GetProcAddress(ALib, PChar(AName));
   {$ENDIF}
   {$IFDEF POSIX}
-  Result := dlsym(Pointer(ALib), MarshaledAString(UTF8String(AName)));
+  Result := dlsym(ALib, MarshaledAString(UTF8String(AName)));
   {$ENDIF}
 end;
 
@@ -164,7 +164,7 @@ begin
     FreeLibrary(ALib);
     {$ENDIF}
     {$IFDEF POSIX}
-    dlclose(Pointer(ALib));
+    dlclose(ALib);
     {$ENDIF}
     ALib := 0;
   end;

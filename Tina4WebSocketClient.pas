@@ -5,6 +5,7 @@ interface
 uses
   System.SysUtils, System.Classes, System.SyncObjs, System.Net.Socket,
   System.Types, System.NetEncoding, System.Hash, System.DateUtils,
+  {$IFDEF POSIX}Posix.NetDB, Posix.SysSocket, Posix.ArpaInet,{$ENDIF}
   Tina4OpenSSL;
 
 type
@@ -270,11 +271,34 @@ begin
   end;
 end;
 {$ELSE}
+var
+  AddrStr: MarshaledAString;
+  Hints: Posix.NetDB.addrinfo;
+  Res: Paddrinfo;
+  Ret: Integer;
+  Addr: Cardinal;
+  AddrPtr: Pointer;
 begin
-  // On POSIX, TIPAddress.LookupAddress may work
-  Result := TIPAddress.LookupAddress(AHost).Address;
-  if Result = '255.255.255.255' then
-    Result := '';
+  Result := '';
+  FillChar(Hints, SizeOf(Hints), 0);
+  Hints.ai_family := AF_INET;
+  Hints.ai_socktype := SOCK_STREAM;
+  Res := nil;
+  AddrStr := MarshaledAString(UTF8String(AHost));
+  Ret := Posix.NetDB.getaddrinfo(AddrStr, nil, Hints, Res);
+  if (Ret = 0) and (Res <> nil) then
+  begin
+    try
+      // sin_addr is at offset 4 in sockaddr_in (after sin_family + sin_port)
+      AddrPtr := Res^.ai_addr;
+      Move(PByte(AddrPtr)[4], Addr, 4);
+      Result := Format('%d.%d.%d.%d', [
+        Byte(Addr), Byte(Addr shr 8),
+        Byte(Addr shr 16), Byte(Addr shr 24)]);
+    finally
+      Posix.NetDB.freeaddrinfo(Res^);
+    end;
+  end;
 end;
 {$ENDIF}
 

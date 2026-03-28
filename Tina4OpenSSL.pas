@@ -3,7 +3,7 @@ unit Tina4OpenSSL;
 interface
 
 uses
-  System.SysUtils, System.SyncObjs
+  System.SysUtils, System.SyncObjs, System.IOUtils
   {$IFDEF MSWINDOWS}, Winapi.Windows{$ENDIF}
   {$IFDEF POSIX}, Posix.Dlfcn{$ENDIF};
 
@@ -73,10 +73,12 @@ const
     'libcrypto.so.3', 'libcrypto.so.1.1');
   {$ENDIF}
   {$IFDEF ANDROID}
-  SSL_LIB_NAMES: array[0..2] of string = (
-    'libssl.so', '/system/lib/libssl.so', '/system/lib64/libssl.so');
-  CRYPTO_LIB_NAMES: array[0..2] of string = (
-    'libcrypto.so', '/system/lib/libcrypto.so', '/system/lib64/libcrypto.so');
+  SSL_LIB_NAMES: array[0..0] of string = ('libssl.so');
+  CRYPTO_LIB_NAMES: array[0..0] of string = ('libcrypto.so');
+  // Android native libs extracted from APK go to nativeLibraryDir
+  // which is typically /data/app/<package>/lib/arm/
+  // dlopen searches this path automatically for libs bundled in the APK.
+  // The APK must include them as lib/armeabi-v7a/libXXX.so entries.
   {$ENDIF}
 
   SSL_ERROR_NONE = 0;
@@ -172,12 +174,35 @@ begin
   end;
 end;
 
+{ ---- Logging ---- }
+
+procedure SSLLog(const Msg: String);
+var
+  LogPath: String;
+  F: TextFile;
+begin
+  try
+    {$IFDEF ANDROID}
+    LogPath := TPath.Combine(TPath.GetHomePath, 'ssl_debug.log');
+    {$ELSE}
+    LogPath := 'ssl_debug.log';
+    {$ENDIF}
+    AssignFile(F, LogPath);
+    if FileExists(LogPath) then begin Reset(F); Append(F); end
+    else Rewrite(F);
+    WriteLn(F, FormatDateTime('hh:nn:ss', Now) + ': ' + Msg);
+    CloseFile(F);
+  except
+  end;
+end;
+
 { ---- Public functions ---- }
 
 function LoadOpenSSL: Boolean;
 var
   I: Integer;
 begin
+  SSLLog('LoadOpenSSL called');
   if FLoaded then
     Exit(True);
 
@@ -186,25 +211,62 @@ begin
     if FLoaded then
       Exit(True);
 
-    // Load crypto library first
+    // Load crypto library first — try names, then app native lib path
     for I := 0 to High(CRYPTO_LIB_NAMES) do
     begin
+      SSLLog('Trying crypto: ' + CRYPTO_LIB_NAMES[I]);
       FCryptoLib := InternalLoadLib(CRYPTO_LIB_NAMES[I]);
       if FCryptoLib <> 0 then
+      begin
+        SSLLog('Loaded crypto: ' + CRYPTO_LIB_NAMES[I]);
         Break;
+      end;
+      SSLLog('Failed crypto: ' + CRYPTO_LIB_NAMES[I]);
+      {$IFDEF ANDROID}
+      // Try app's native lib directory
+      var CryptoPath := TPath.Combine(TPath.GetLibraryPath, CRYPTO_LIB_NAMES[I]);
+      SSLLog('Trying crypto: ' + CryptoPath);
+      FCryptoLib := InternalLoadLib(CryptoPath);
+      if FCryptoLib <> 0 then
+      begin
+        SSLLog('Loaded crypto: ' + CryptoPath);
+        Break;
+      end;
+      SSLLog('Failed crypto: ' + CryptoPath);
+      {$ENDIF}
     end;
     if FCryptoLib = 0 then
+    begin
+      SSLLog('All crypto libs failed');
       Exit(False);
+    end;
 
     // Load SSL library
     for I := 0 to High(SSL_LIB_NAMES) do
     begin
+      SSLLog('Trying ssl: ' + SSL_LIB_NAMES[I]);
       FSSLLib := InternalLoadLib(SSL_LIB_NAMES[I]);
       if FSSLLib <> 0 then
+      begin
+        SSLLog('Loaded ssl: ' + SSL_LIB_NAMES[I]);
         Break;
+      end;
+      SSLLog('Failed ssl: ' + SSL_LIB_NAMES[I]);
+      {$IFDEF ANDROID}
+      var SSLPath := TPath.Combine(TPath.GetLibraryPath, SSL_LIB_NAMES[I]);
+      SSLLog('Trying ssl: ' + SSLPath);
+      FSSLLib := InternalLoadLib(SSLPath);
+      if FSSLLib <> 0 then
+      begin
+        SSLLog('Loaded ssl: ' + SSLPath);
+        Break;
+      end;
+      SSLLog('Failed ssl: ' + SSLPath);
+      {$ENDIF}
     end;
     if FSSLLib = 0 then
     begin
+      SSLLog('All ssl libs failed');
       InternalFreeLib(FCryptoLib);
       Exit(False);
     end;
@@ -235,6 +297,17 @@ begin
     @_ERR_get_error := InternalGetProc(FCryptoLib, 'ERR_get_error');
 
     // Validate critical function pointers
+    SSLLog('TLS_client_method=' + BoolToStr(Assigned(_TLS_client_method), True));
+    SSLLog('SSL_CTX_new=' + BoolToStr(Assigned(_SSL_CTX_new), True));
+    SSLLog('SSL_new=' + BoolToStr(Assigned(_SSL_new), True));
+    SSLLog('SSL_set_fd=' + BoolToStr(Assigned(_SSL_set_fd), True));
+    SSLLog('SSL_connect=' + BoolToStr(Assigned(_SSL_connect), True));
+    SSLLog('SSL_read=' + BoolToStr(Assigned(_SSL_read), True));
+    SSLLog('SSL_write=' + BoolToStr(Assigned(_SSL_write), True));
+    SSLLog('SSL_shutdown=' + BoolToStr(Assigned(_SSL_shutdown), True));
+    SSLLog('SSL_free=' + BoolToStr(Assigned(_SSL_free), True));
+    SSLLog('SSL_CTX_free=' + BoolToStr(Assigned(_SSL_CTX_free), True));
+
     if not Assigned(_TLS_client_method) or
        not Assigned(_SSL_CTX_new) or not Assigned(_SSL_new) or
        not Assigned(_SSL_set_fd) or not Assigned(_SSL_connect) or
@@ -242,10 +315,12 @@ begin
        not Assigned(_SSL_shutdown) or not Assigned(_SSL_free) or
        not Assigned(_SSL_CTX_free) then
     begin
+      SSLLog('FAILED: Missing critical functions');
       InternalFreeLib(FSSLLib);
       InternalFreeLib(FCryptoLib);
       Exit(False);
     end;
+    SSLLog('OpenSSL loaded successfully');
 
     // Initialise OpenSSL
     if Assigned(_OpenSSL_init_ssl) then

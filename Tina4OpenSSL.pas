@@ -73,8 +73,10 @@ const
     'libcrypto.so.3', 'libcrypto.so.1.1');
   {$ENDIF}
   {$IFDEF ANDROID}
-  SSL_LIB_NAMES: array[0..0] of string = ('libssl.so');
-  CRYPTO_LIB_NAMES: array[0..0] of string = ('libcrypto.so');
+  SSL_LIB_NAMES: array[0..2] of string = (
+    'libssl.so', '/system/lib/libssl.so', '/system/lib64/libssl.so');
+  CRYPTO_LIB_NAMES: array[0..2] of string = (
+    'libcrypto.so', '/system/lib/libcrypto.so', '/system/lib64/libcrypto.so');
   {$ENDIF}
 
   SSL_ERROR_NONE = 0;

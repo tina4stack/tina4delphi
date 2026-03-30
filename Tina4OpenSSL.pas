@@ -21,6 +21,7 @@ type
     FCtx: PSSL_CTX;
     FSSL: PSSL;
     FConnected: Boolean;
+    FHostName: string;
   public
     constructor Create;
     destructor Destroy; override;
@@ -37,6 +38,7 @@ type
     /// <summary>Get last SSL error as string</summary>
     function GetLastError: string;
     property Connected: Boolean read FConnected;
+    property HostName: string read FHostName write FHostName;
   end;
 
 /// <summary>Load OpenSSL libraries. Returns True if already loaded or loads OK.</summary>
@@ -109,6 +111,7 @@ type
   TERR_error_string = function(e: Cardinal; buf: PAnsiChar): PAnsiChar; cdecl;
   TERR_get_error = function: Cardinal; cdecl;
   TSSL_CTX_set_verify = procedure(ctx: PSSL_CTX; mode: Integer; callback: Pointer); cdecl;
+  TSSL_ctrl = function(ssl: PSSL; cmd: Integer; larg: NativeInt; parg: Pointer): NativeInt; cdecl;
 
 { ---- Global function pointers ---- }
 
@@ -131,6 +134,7 @@ var
   _ERR_error_string: TERR_error_string = nil;
   _ERR_get_error: TERR_get_error = nil;
   _SSL_CTX_set_verify: TSSL_CTX_set_verify = nil;
+  _SSL_ctrl: TSSL_ctrl = nil;
 
   FSSLLib: {$IFDEF MSWINDOWS}HMODULE{$ELSE}NativeUInt{$ENDIF} = 0;
   FCryptoLib: {$IFDEF MSWINDOWS}HMODULE{$ELSE}NativeUInt{$ENDIF} = 0;
@@ -293,6 +297,7 @@ begin
     @_SSL_write := InternalGetProc(FSSLLib, 'SSL_write');
     @_SSL_shutdown := InternalGetProc(FSSLLib, 'SSL_shutdown');
     @_SSL_get_error := InternalGetProc(FSSLLib, 'SSL_get_error');
+    @_SSL_ctrl := InternalGetProc(FSSLLib, 'SSL_ctrl');
     @_ERR_error_string := InternalGetProc(FCryptoLib, 'ERR_error_string');
     @_ERR_get_error := InternalGetProc(FCryptoLib, 'ERR_get_error');
 
@@ -404,6 +409,13 @@ begin
 
   if _SSL_set_fd(FSSL, Integer(ASocketHandle)) <> 1 then
     Exit;
+
+  // Set SNI hostname for virtual-hosted TLS servers
+  if (FHostName <> '') and Assigned(_SSL_ctrl) then
+  begin
+    var HostBytes := TEncoding.UTF8.GetBytes(FHostName + #0);
+    _SSL_ctrl(FSSL, 55 {SSL_CTRL_SET_TLSEXT_HOSTNAME}, 0 {TLSEXT_NAMETYPE_host_name}, @HostBytes[0]);
+  end;
 
   Result := True;
 end;

@@ -592,6 +592,7 @@ var
   Err: string;
 begin
   FSSL := TTina4SSLContext.Create;
+  FSSL.HostName := FHost;
   if not FSSL.Init(FSocket.Handle) then
   begin
     Err := FSSL.GetLastError;

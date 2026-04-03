@@ -1192,9 +1192,11 @@ else
 
 
 
-## Claude Pascal MCP Server
+## Pascal MCP Server
 
-An MCP (Model Context Protocol) server that lets Claude compile, run, and interact with Pascal/Delphi desktop applications. Supports Free Pascal (fpc), Delphi 32-bit (dcc32), and Delphi 64-bit (dcc64) compilers.
+An MCP (Model Context Protocol) server that lets AI assistants compile, run, and interact with Pascal/Delphi desktop applications. Works with any MCP-compatible tool (Claude Code, Cursor, Copilot, etc.). Supports Free Pascal (fpc), Delphi 32-bit (dcc32), and Delphi 64-bit (dcc64) compilers.
+
+**Repository:** [github.com/tina4stack/claude-pascal-mcp](https://github.com/tina4stack/claude-pascal-mcp)
 
 ### Features
 
@@ -1301,9 +1303,9 @@ This generates:
 **Prerequisites:** Python 3.11+, [uv](https://docs.astral.sh/uv/) package manager, a Pascal compiler
 
 ```bash
-# Clone the repository
-git clone https://github.com/tina4stack/tina4delphi.git
-cd tina4delphi/claude-pascal-mcp
+# Clone the MCP server repository
+git clone https://github.com/tina4stack/claude-pascal-mcp.git
+cd claude-pascal-mcp
 
 # Install dependencies
 uv sync
@@ -1315,13 +1317,14 @@ uv run pascal-mcp
 uv run pascal-preview
 ```
 
-**Register with Claude Code:**
+**Register with your AI tool:**
 
 ```bash
+# Claude Code
 claude mcp add --transport stdio pascal-dev -- uv run --directory /path/to/claude-pascal-mcp pascal-mcp
 ```
 
-Or add to your project's `.mcp.json`:
+Or add to your project's `.mcp.json` (works with Claude Code, Cursor, and other MCP clients):
 
 ```json
 {

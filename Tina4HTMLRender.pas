@@ -345,6 +345,7 @@ type
     FContentWidth: Single;
     FContentHeight: Single;
     FNeedRelayout: Boolean;
+    FParserDirty: Boolean;
     FScrollBarWidth: Single;
     FOnScroll: TTina4ScrollEvent;
     FIsLayoutting: Boolean;
@@ -372,6 +373,7 @@ type
     procedure SetTwig(const Value: TStringList);
     function GetTwig: TStringList;
     procedure FTwigChange(Sender: TObject);
+    procedure RenderTwig;
     procedure SetTwigTemplatePath(const Value: string);
     procedure OnImageLoaded(Sender: TObject);
     procedure DoLayout;
@@ -406,6 +408,7 @@ type
     function FindLayoutBoxByTag(Box: TLayoutBox; Target: THTMLTag): TLayoutBox;
     function GetBoxAbsolutePosition(Target: TLayoutBox; out AX, AY: Single): Boolean;
     procedure DoScrollChanged;
+    procedure InsertHTMLFragment(Target: THTMLTag; const Html: string; AtFront: Boolean);
   protected
     procedure Paint; override;
     procedure Resize; override;
@@ -508,6 +511,35 @@ type
     /// <param name="Id">The HTML id attribute of the element to scroll into view.</param>
     /// <returns>True if the element was found and scrolled to, False otherwise.</returns>
     function ScrollToElement(const Id: string): Boolean;
+    /// <summary>
+    /// Parses an HTML fragment and prepends it as the first children of the
+    /// element with the given id. Triggers a synchronous re-layout. When
+    /// PreserveScrollPosition is True, the visible content stays anchored —
+    /// the scroll offset is shifted by the height added above, so the user's
+    /// view does not jump. Use this for "load older items at the top" patterns.
+    /// </summary>
+    /// <param name="Id">The HTML id of the container element.</param>
+    /// <param name="Html">The HTML fragment to parse and insert.</param>
+    /// <param name="PreserveScrollPosition">True (default) to keep the visible content anchored.</param>
+    /// <returns>True if the element was found and the fragment inserted, False otherwise.</returns>
+    function PrependHTML(const Id, Html: string;
+      PreserveScrollPosition: Boolean = True): Boolean;
+    /// <summary>
+    /// Parses an HTML fragment and appends it as the last children of the
+    /// element with the given id. Triggers a re-layout.
+    /// </summary>
+    /// <param name="Id">The HTML id of the container element.</param>
+    /// <param name="Html">The HTML fragment to parse and insert.</param>
+    /// <returns>True if the element was found and the fragment inserted, False otherwise.</returns>
+    function AppendHTML(const Id, Html: string): Boolean;
+    /// <summary>
+    /// Replaces all children of the element with the given id by parsing
+    /// the HTML fragment and inserting the result. Triggers a re-layout.
+    /// </summary>
+    /// <param name="Id">The HTML id of the container element.</param>
+    /// <param name="Html">The HTML fragment to parse and use as the new content.</param>
+    /// <returns>True if the element was found and replaced, False otherwise.</returns>
+    function SetInnerHTML(const Id, Html: string): Boolean;
   published
     /// <summary>HTML content to render. Changes trigger automatic relayout and repaint.</summary>
     property HTML: TStringList read GetHTML write SetHTML;
@@ -4051,6 +4083,7 @@ begin
   FContentWidth := 0;
   FContentHeight := 0;
   FNeedRelayout := True;
+  FParserDirty := True;
   FScrollBarWidth := 12;
   FIsLayoutting := False;
   FMouseDownOnScroll := False;
@@ -4113,28 +4146,38 @@ begin
   end;
 end;
 
-procedure TTina4HTMLRender.FTwigChange(Sender: TObject);
+procedure TTina4HTMLRender.RenderTwig;
 var
   RenderedHTML: string;
 begin
   if FTwig.Text.Trim = '' then Exit;
   // Render Twig template to HTML
   RenderedHTML := TTina4Twig(FTwigEngine).Render(FTwig.Text);
-  // Set HTML without triggering FTwigChange again (avoid recursion)
+  // Set HTML without triggering FHTMLChange (which would recurse into Twig).
+  // We must still mark the parser dirty manually since we're bypassing the
+  // normal change-notification path.
   FHTML.OnChange := nil;
   try
     FHTML.Text := RenderedHTML;
   finally
     FHTML.OnChange := FHTMLChange;
   end;
-  // Trigger relayout and repaint
+  // Trigger reparse + relayout and repaint
+  FParserDirty := True;
   FNeedRelayout := True;
   Repaint;
+end;
+
+procedure TTina4HTMLRender.FTwigChange(Sender: TObject);
+begin
+  RenderTwig;
 end;
 
 procedure TTina4HTMLRender.SetTwigVariable(const AName: string; const AValue: string);
 begin
   TTina4Twig(FTwigEngine).SetVariable(AName, AValue);
+  // Re-render the Twig template so the new variable value takes effect
+  RenderTwig;
 end;
 
 procedure TTina4HTMLRender.SetCacheEnabled(Value: Boolean);
@@ -4368,6 +4411,7 @@ end;
 
 procedure TTina4HTMLRender.FHTMLChange(Sender: TObject);
 begin
+  FParserDirty := True;
   FNeedRelayout := True;
   Repaint;
 end;
@@ -4383,14 +4427,23 @@ begin
   if FIsLayoutting then Exit;
   FIsLayoutting := True;
   try
-    FParser.Parse(FHTML.Text);
+    // Only re-parse the source HTML when the text has actually changed.
+    // Direct DOM mutations (PrependHTML, SetElementText, SetElementStyle, etc.)
+    // operate on the in-memory tree and only need a re-layout — re-parsing
+    // would wipe their changes by rebuilding from the stale FHTML.Text.
+    if FParserDirty then
+    begin
+      FParser.Parse(FHTML.Text);
 
-    // Build stylesheet from <style> blocks and <link rel="stylesheet"> hrefs
-    FStyleSheet.Clear;
-    for var I := 0 to FParser.StyleBlocks.Count - 1 do
-      FStyleSheet.AddCSS(FParser.StyleBlocks[I]);
-    for var I := 0 to FParser.LinkHrefs.Count - 1 do
-      FStyleSheet.LoadFromURL(FParser.LinkHrefs[I]);
+      // Build stylesheet from <style> blocks and <link rel="stylesheet"> hrefs
+      FStyleSheet.Clear;
+      for var I := 0 to FParser.StyleBlocks.Count - 1 do
+        FStyleSheet.AddCSS(FParser.StyleBlocks[I]);
+      for var I := 0 to FParser.LinkHrefs.Count - 1 do
+        FStyleSheet.LoadFromURL(FParser.LinkHrefs[I]);
+
+      FParserDirty := False;
+    end;
 
     var AvailW := Width;
     if ScrollBarVisible then
@@ -4587,6 +4640,104 @@ begin
     NewX := (AX + Box.MarginBoxWidth) - VW;
 
   ScrollTo(NewX, NewY);
+  Result := True;
+end;
+
+procedure TTina4HTMLRender.InsertHTMLFragment(Target: THTMLTag;
+  const Html: string; AtFront: Boolean);
+var
+  TempParser: THTMLParser;
+  Child: THTMLTag;
+  InsertIdx: Integer;
+begin
+  if not Assigned(Target) or (Html = '') then Exit;
+  TempParser := THTMLParser.Create;
+  try
+    TempParser.Parse(Html);
+    InsertIdx := 0;
+    for Child in TempParser.Root.Children do
+    begin
+      Child.Parent := Target;
+      if AtFront then
+      begin
+        Target.Children.Insert(InsertIdx, Child);
+        Inc(InsertIdx);
+      end
+      else
+        Target.Children.Add(Child);
+    end;
+    // Detach moved children from the temp root so its destructor doesn't
+    // free them — they now live under Target.
+    TempParser.Root.Children.Clear;
+  finally
+    TempParser.Free;
+  end;
+end;
+
+function TTina4HTMLRender.PrependHTML(const Id, Html: string;
+  PreserveScrollPosition: Boolean): Boolean;
+var
+  Tag: THTMLTag;
+  OldHeight, NewY: Single;
+begin
+  Result := False;
+  Tag := GetElementById(Id);
+  if not Assigned(Tag) then Exit;
+
+  OldHeight := FContentHeight;
+  InsertHTMLFragment(Tag, Html, True);
+
+  // Force synchronous relayout so FContentHeight is fresh before we
+  // adjust the scroll anchor.
+  FNeedRelayout := True;
+  DoLayout;
+
+  if PreserveScrollPosition and (OldHeight > 0) then
+  begin
+    NewY := FScrollY + (FContentHeight - OldHeight);
+    FScrollY := NewY;
+    ClampScroll;
+    PositionFormControls;
+    // Intentionally do NOT fire OnScroll: from the user's perspective the
+    // visible content has not moved, only the coordinate space has shifted.
+    // Firing here would re-trigger lazy-load handlers and cause recursion.
+  end;
+
+  Repaint;
+  Result := True;
+end;
+
+function TTina4HTMLRender.AppendHTML(const Id, Html: string): Boolean;
+var
+  Tag: THTMLTag;
+begin
+  Result := False;
+  Tag := GetElementById(Id);
+  if not Assigned(Tag) then Exit;
+
+  InsertHTMLFragment(Tag, Html, False);
+  FNeedRelayout := True;
+  Repaint;
+  Result := True;
+end;
+
+function TTina4HTMLRender.SetInnerHTML(const Id, Html: string): Boolean;
+var
+  Tag: THTMLTag;
+  I: Integer;
+begin
+  Result := False;
+  Tag := GetElementById(Id);
+  if not Assigned(Tag) then Exit;
+
+  // Free existing children
+  for I := Tag.Children.Count - 1 downto 0 do
+    Tag.Children[I].Free;
+  Tag.Children.Clear;
+
+  InsertHTMLFragment(Tag, Html, False);
+  FNeedRelayout := True;
+  Repaint;
   Result := True;
 end;
 

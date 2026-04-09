@@ -8,6 +8,7 @@ uses
   System.UITypes, System.UIConsts,
   System.NetEncoding, System.Net.HttpClient,
   System.Hash, System.Rtti, System.Character,
+  System.Math.Vectors,
   FMX.Types, FMX.Controls, FMX.Graphics, FMX.TextLayout,
   FMX.Edit, FMX.StdCtrls, FMX.Memo, FMX.ListBox, FMX.Layouts, FMX.Objects,
   FMX.DialogService, FMX.Dialogs,
@@ -187,6 +188,7 @@ type
     BorderColors: array[0..3] of TAlphaColor;  // Top, Right, Bottom, Left
     BorderWidths: TEdgeValues;
     BorderRadius: Single;
+    BorderRadii: array[0..3] of Single;  // TL, TR, BR, BL — -1 means inherit from BorderRadius
     ExplicitWidth: Single;
     ExplicitHeight: Single;
     Display: string;
@@ -211,6 +213,9 @@ type
     procedure SetBorderWidth(W: Single);
     procedure SetBorderColor(C: TAlphaColor);
     function BorderColor: TAlphaColor;  // returns Top color (legacy compat)
+    function CornerRadius(Index: Integer): Single;  // 0=TL, 1=TR, 2=BR, 3=BL
+    function HasUniformRadius: Boolean;
+    function MaxCornerRadius: Single;
     class function Default: TComputedStyle; static;
     class function ForTag(Tag: THTMLTag; const ParentStyle: TComputedStyle; StyleSheet: TCSSStyleSheet = nil): TComputedStyle; static;
     class procedure ApplyDeclarations(Decls: TCSSDeclarations; var Style: TComputedStyle; const ParentStyle: TComputedStyle); static;
@@ -393,6 +398,12 @@ type
     procedure PaintBoxShadow(Canvas: TCanvas; Box: TLayoutBox; X, Y: Single);
     procedure PaintBackground(Canvas: TCanvas; Box: TLayoutBox; X, Y: Single);
     procedure PaintBorder(Canvas: TCanvas; Box: TLayoutBox; X, Y: Single);
+    procedure BuildRoundedRectPath(Path: TPathData; const R: TRectF;
+      RTL, RTR, RBR, RBL: Single);
+    procedure FillRoundedRect(Canvas: TCanvas; const R: TRectF;
+      RTL, RTR, RBR, RBL: Single; AOpacity: Single);
+    procedure StrokeRoundedRect(Canvas: TCanvas; const R: TRectF;
+      RTL, RTR, RBR, RBL: Single; AOpacity: Single);
     procedure PaintText(Canvas: TCanvas; Box: TLayoutBox; X, Y: Single);
     procedure PaintImage(Canvas: TCanvas; Box: TLayoutBox; X, Y: Single);
     procedure PaintHR(Canvas: TCanvas; Box: TLayoutBox; X, Y: Single);
@@ -1820,6 +1831,40 @@ begin
   Result := BorderColors[0];  // return top color as default
 end;
 
+function TComputedStyle.CornerRadius(Index: Integer): Single;
+begin
+  if (Index < 0) or (Index > 3) then Exit(0);
+  if BorderRadii[Index] >= 0 then
+    Result := BorderRadii[Index]
+  else if BorderRadius > 0 then
+    Result := BorderRadius
+  else
+    Result := 0;
+end;
+
+function TComputedStyle.HasUniformRadius: Boolean;
+var
+  R0: Single;
+begin
+  R0 := CornerRadius(0);
+  Result := SameValue(R0, CornerRadius(1)) and
+            SameValue(R0, CornerRadius(2)) and
+            SameValue(R0, CornerRadius(3));
+end;
+
+function TComputedStyle.MaxCornerRadius: Single;
+var
+  I: Integer;
+  V: Single;
+begin
+  Result := 0;
+  for I := 0 to 3 do
+  begin
+    V := CornerRadius(I);
+    if V > Result then Result := V;
+  end;
+end;
+
 // ═══════════════════════════════════════════════════════════════════════════
 // TComputedStyle
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1841,6 +1886,10 @@ begin
   Result.SetBorderColor(TAlphaColors.Black);
   Result.BorderWidths.Clear;
   Result.BorderRadius := -1;
+  Result.BorderRadii[0] := -1;
+  Result.BorderRadii[1] := -1;
+  Result.BorderRadii[2] := -1;
+  Result.BorderRadii[3] := -1;
   Result.ExplicitWidth := -1;
   Result.ExplicitHeight := -1;
   Result.Display := 'block';
@@ -2077,6 +2126,10 @@ begin
   Result.SetBorderColor(TAlphaColors.Black);
   Result.BorderWidths.Clear;
   Result.BorderRadius := -1;
+  Result.BorderRadii[0] := -1;
+  Result.BorderRadii[1] := -1;
+  Result.BorderRadii[2] := -1;
+  Result.BorderRadii[3] := -1;
   Result.ExplicitWidth := -1;
   Result.ExplicitHeight := -1;
   Result.Display := 'inline';
@@ -2512,7 +2565,58 @@ begin
   if Decls.TryGetValue('border-width', Temp) and not ShouldSkip(Temp) then
     Style.SetBorderWidth(ParseLength(Temp, Style.FontSize));
   if Decls.TryGetValue('border-radius', Temp) and not ShouldSkip(Temp) then
-    Style.BorderRadius := ParseLength(Temp, Style.FontSize);
+  begin
+    var RParts := Temp.Trim.Split([' '], TStringSplitOptions.ExcludeEmpty);
+    case Length(RParts) of
+      1: begin
+           var R0 := ParseLength(RParts[0], Style.FontSize);
+           Style.BorderRadius := R0;
+           Style.BorderRadii[0] := R0;
+           Style.BorderRadii[1] := R0;
+           Style.BorderRadii[2] := R0;
+           Style.BorderRadii[3] := R0;
+         end;
+      2: begin
+           // TL+BR | TR+BL
+           var Ra := ParseLength(RParts[0], Style.FontSize);
+           var Rb := ParseLength(RParts[1], Style.FontSize);
+           Style.BorderRadii[0] := Ra;
+           Style.BorderRadii[2] := Ra;
+           Style.BorderRadii[1] := Rb;
+           Style.BorderRadii[3] := Rb;
+           Style.BorderRadius := Ra;
+         end;
+      3: begin
+           // TL | TR+BL | BR
+           var Ra := ParseLength(RParts[0], Style.FontSize);
+           var Rb := ParseLength(RParts[1], Style.FontSize);
+           var Rc := ParseLength(RParts[2], Style.FontSize);
+           Style.BorderRadii[0] := Ra;
+           Style.BorderRadii[1] := Rb;
+           Style.BorderRadii[3] := Rb;
+           Style.BorderRadii[2] := Rc;
+           Style.BorderRadius := Ra;
+         end;
+    else
+      if Length(RParts) >= 4 then
+      begin
+        // TL | TR | BR | BL
+        Style.BorderRadii[0] := ParseLength(RParts[0], Style.FontSize);
+        Style.BorderRadii[1] := ParseLength(RParts[1], Style.FontSize);
+        Style.BorderRadii[2] := ParseLength(RParts[2], Style.FontSize);
+        Style.BorderRadii[3] := ParseLength(RParts[3], Style.FontSize);
+        Style.BorderRadius := Style.BorderRadii[0];
+      end;
+    end;
+  end;
+  if Decls.TryGetValue('border-top-left-radius', Temp) and not ShouldSkip(Temp) then
+    Style.BorderRadii[0] := ParseLength(Temp, Style.FontSize);
+  if Decls.TryGetValue('border-top-right-radius', Temp) and not ShouldSkip(Temp) then
+    Style.BorderRadii[1] := ParseLength(Temp, Style.FontSize);
+  if Decls.TryGetValue('border-bottom-right-radius', Temp) and not ShouldSkip(Temp) then
+    Style.BorderRadii[2] := ParseLength(Temp, Style.FontSize);
+  if Decls.TryGetValue('border-bottom-left-radius', Temp) and not ShouldSkip(Temp) then
+    Style.BorderRadii[3] := ParseLength(Temp, Style.FontSize);
   if Decls.TryGetValue('width', Temp) and not ShouldSkip(Temp) then
     Style.ExplicitWidth := ParseLength(Temp, Style.FontSize);
   if Decls.TryGetValue('height', Temp) and not ShouldSkip(Temp) then
@@ -5526,6 +5630,95 @@ begin
   end;
 end;
 
+procedure TTina4HTMLRender.BuildRoundedRectPath(Path: TPathData; const R: TRectF;
+  RTL, RTR, RBR, RBL: Single);
+var
+  W, H, MaxR: Single;
+begin
+  Path.Clear;
+  W := R.Width;
+  H := R.Height;
+  // Clamp each radius to half of the smaller side
+  MaxR := Min(W, H) / 2;
+  if RTL < 0 then RTL := 0;
+  if RTR < 0 then RTR := 0;
+  if RBR < 0 then RBR := 0;
+  if RBL < 0 then RBL := 0;
+  if RTL > MaxR then RTL := MaxR;
+  if RTR > MaxR then RTR := MaxR;
+  if RBR > MaxR then RBR := MaxR;
+  if RBL > MaxR then RBL := MaxR;
+
+  // Start at top of left edge (after top-left corner)
+  Path.MoveTo(PointF(R.Left, R.Top + RTL));
+
+  // Top-left corner arc
+  if RTL > 0 then
+    Path.AddArc(PointF(R.Left + RTL, R.Top + RTL), PointF(RTL, RTL), 180, 90)
+  else
+    Path.LineTo(PointF(R.Left, R.Top));
+
+  // Top edge
+  Path.LineTo(PointF(R.Right - RTR, R.Top));
+
+  // Top-right corner arc
+  if RTR > 0 then
+    Path.AddArc(PointF(R.Right - RTR, R.Top + RTR), PointF(RTR, RTR), 270, 90)
+  else
+    Path.LineTo(PointF(R.Right, R.Top));
+
+  // Right edge
+  Path.LineTo(PointF(R.Right, R.Bottom - RBR));
+
+  // Bottom-right corner arc
+  if RBR > 0 then
+    Path.AddArc(PointF(R.Right - RBR, R.Bottom - RBR), PointF(RBR, RBR), 0, 90)
+  else
+    Path.LineTo(PointF(R.Right, R.Bottom));
+
+  // Bottom edge
+  Path.LineTo(PointF(R.Left + RBL, R.Bottom));
+
+  // Bottom-left corner arc
+  if RBL > 0 then
+    Path.AddArc(PointF(R.Left + RBL, R.Bottom - RBL), PointF(RBL, RBL), 90, 90)
+  else
+    Path.LineTo(PointF(R.Left, R.Bottom));
+
+  // Left edge
+  Path.LineTo(PointF(R.Left, R.Top + RTL));
+
+  Path.ClosePath;
+end;
+
+procedure TTina4HTMLRender.FillRoundedRect(Canvas: TCanvas; const R: TRectF;
+  RTL, RTR, RBR, RBL: Single; AOpacity: Single);
+var
+  Path: TPathData;
+begin
+  Path := TPathData.Create;
+  try
+    BuildRoundedRectPath(Path, R, RTL, RTR, RBR, RBL);
+    Canvas.FillPath(Path, AOpacity);
+  finally
+    Path.Free;
+  end;
+end;
+
+procedure TTina4HTMLRender.StrokeRoundedRect(Canvas: TCanvas; const R: TRectF;
+  RTL, RTR, RBR, RBL: Single; AOpacity: Single);
+var
+  Path: TPathData;
+begin
+  Path := TPathData.Create;
+  try
+    BuildRoundedRectPath(Path, R, RTL, RTR, RBR, RBL);
+    Canvas.DrawPath(Path, AOpacity);
+  finally
+    Path.Free;
+  end;
+end;
+
 procedure TTina4HTMLRender.PaintBoxShadow(Canvas: TCanvas; Box: TLayoutBox; X, Y: Single);
 var
   R: TRectF;
@@ -5563,8 +5756,15 @@ begin
   begin
     // No blur — paint a single solid rect
     Canvas.Fill.Color := Shadow.Color;
-    if Box.Style.BorderRadius > 0 then
-      Canvas.FillRect(R, Box.Style.BorderRadius, Box.Style.BorderRadius, AllCorners, 1.0)
+    if Box.Style.MaxCornerRadius > 0 then
+    begin
+      if Box.Style.HasUniformRadius then
+        Canvas.FillRect(R, Box.Style.CornerRadius(0), Box.Style.CornerRadius(0), AllCorners, 1.0)
+      else
+        FillRoundedRect(Canvas, R,
+          Box.Style.CornerRadius(0), Box.Style.CornerRadius(1),
+          Box.Style.CornerRadius(2), Box.Style.CornerRadius(3), 1.0);
+    end
     else
       Canvas.FillRect(R, 1.0);
   end
@@ -5589,11 +5789,18 @@ begin
       C.B := ShadowColor.B;
       C.A := LayerAlpha;
       Canvas.Fill.Color := C.Color;
-      var Rad := Box.Style.BorderRadius;
-      if Rad > 0 then
-        Rad := Rad + Expand;
-      if Rad > 0 then
-        Canvas.FillRect(LayerRect, Rad, Rad, AllCorners, 1.0)
+      if Box.Style.MaxCornerRadius > 0 then
+      begin
+        if Box.Style.HasUniformRadius then
+        begin
+          var Rad := Box.Style.CornerRadius(0) + Expand;
+          Canvas.FillRect(LayerRect, Rad, Rad, AllCorners, 1.0);
+        end
+        else
+          FillRoundedRect(Canvas, LayerRect,
+            Box.Style.CornerRadius(0) + Expand, Box.Style.CornerRadius(1) + Expand,
+            Box.Style.CornerRadius(2) + Expand, Box.Style.CornerRadius(3) + Expand, 1.0);
+      end
       else
         Canvas.FillRect(LayerRect, 1.0);
     end;
@@ -5627,9 +5834,16 @@ begin
 
   Canvas.Fill.Kind := TBrushKind.Solid;
   Canvas.Fill.Color := Box.Style.BackgroundColor;
-  if Box.Style.BorderRadius > 0 then
-    Canvas.FillRect(R, Box.Style.BorderRadius, Box.Style.BorderRadius,
-      AllCorners, 1.0)
+  if Box.Style.MaxCornerRadius > 0 then
+  begin
+    if Box.Style.HasUniformRadius then
+      Canvas.FillRect(R, Box.Style.CornerRadius(0), Box.Style.CornerRadius(0),
+        AllCorners, 1.0)
+    else
+      FillRoundedRect(Canvas, R,
+        Box.Style.CornerRadius(0), Box.Style.CornerRadius(1),
+        Box.Style.CornerRadius(2), Box.Style.CornerRadius(3), 1.0);
+  end
   else
     Canvas.FillRect(R, 1.0);
 end;
@@ -5672,7 +5886,7 @@ begin
   var BW := Box.Style.BorderWidths;
   var AllSame := (BW.Top = BW.Right) and (BW.Right = BW.Bottom) and (BW.Bottom = BW.Left);
 
-  if AllSame and (BW.Top > 0) and (Box.Style.BorderRadius > 0) then
+  if AllSame and (BW.Top > 0) and (Box.Style.MaxCornerRadius > 0) then
   begin
     // Uniform border with radius — use DrawRect for rounded corners
     R := RectF(
@@ -5684,7 +5898,12 @@ begin
     Canvas.Stroke.Kind := TBrushKind.Solid;
     Canvas.Stroke.Color := Box.Style.BorderColors[0];
     Canvas.Stroke.Thickness := BW.Top;
-    Canvas.DrawRect(R, Box.Style.BorderRadius, Box.Style.BorderRadius, AllCorners, 1.0);
+    if Box.Style.HasUniformRadius then
+      Canvas.DrawRect(R, Box.Style.CornerRadius(0), Box.Style.CornerRadius(0), AllCorners, 1.0)
+    else
+      StrokeRoundedRect(Canvas, R,
+        Box.Style.CornerRadius(0), Box.Style.CornerRadius(1),
+        Box.Style.CornerRadius(2), Box.Style.CornerRadius(3), 1.0);
   end
   else
   begin

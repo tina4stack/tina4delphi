@@ -393,6 +393,25 @@ type
     // to an inner container rather than the viewport when the cursor is over it.
     FHoverScrollBox: TLayoutBox;
     FHoverScrollBoxCX, FHoverScrollBoxCY: Single;
+    // Touch/mouse pan-to-scroll state. Lets the user drag the *content* of a
+    // scrollable container (including the viewport) to scroll it — the primary
+    // scroll gesture on mobile. FPanBox = nil when inactive, = Self-as-marker
+    // (using a sentinel) when panning the viewport, or = the inner scrollable
+    // box otherwise. FPanActive flips true once the cursor moves past a small
+    // threshold, which both activates scrolling and suppresses the click on
+    // mouse-up.
+    FPanBox: TLayoutBox;
+    FPanIsViewport: Boolean;
+    FPanActive: Boolean;
+    FPanStartX, FPanStartY: Single;
+    FPanStartScrollX, FPanStartScrollY: Single;
+    // Scrollbar fade — scrollbars are fully visible for a short window after
+    // any scroll activity, then fade out. Mobile-friendly default so bars
+    // don't clutter the content when idle. FScrollbarLastActivity is a tick
+    // count; FScrollbarFadeTimer runs while a fade is in progress to drive
+    // repaints.
+    FScrollbarLastActivity: Cardinal;
+    FScrollbarFadeTimer: TTimer;
     // Preserves per-box ScrollX/ScrollY across relayouts. The layout tree is
     // rebuilt from scratch each pass, so without this the user's scroll
     // position in inner divs would reset every relayout. Keyed by DOM tag.
@@ -410,6 +429,9 @@ type
     FTwig: TStringList;
     FTwigEngine: TObject;        // TTina4Twig (declared in implementation uses)
     FTwigTemplatePath: string;
+    procedure ScrollbarFadeTimerTick(Sender: TObject);
+    procedure BumpScrollbarVisibility;
+    function GetScrollbarOpacity: Single;
     procedure SetHTML(const Value: TStringList);
     function GetHTML: TStringList;
     procedure SetCacheEnabled(Value: Boolean);
@@ -4373,12 +4395,64 @@ begin
   FDragScrollBox := nil;
   FDragScrollAxis := 0;
   FHoverScrollBox := nil;
+  FPanBox := nil;
+  FPanIsViewport := False;
+  FPanActive := False;
+  FScrollbarLastActivity := 0;
+  FScrollbarFadeTimer := TTimer.Create(Self);
+  FScrollbarFadeTimer.Interval := 33;  // ~30 fps while fading
+  FScrollbarFadeTimer.Enabled := False;
+  FScrollbarFadeTimer.OnTimer := ScrollbarFadeTimerTick;
   ClipChildren := True;
   HitTest := True;
+  // Keep receiving mouse/touch events while a drag is in progress even when
+  // the cursor leaves the control's bounds. Without this, the scrollbar drag
+  // state gets "stuck" because MouseUp never fires when released outside.
+  AutoCapture := True;
+end;
+
+procedure TTina4HTMLRender.BumpScrollbarVisibility;
+begin
+  FScrollbarLastActivity := TThread.GetTickCount;
+  if Assigned(FScrollbarFadeTimer) and (not FScrollbarFadeTimer.Enabled) then
+    FScrollbarFadeTimer.Enabled := True;
+end;
+
+function TTina4HTMLRender.GetScrollbarOpacity: Single;
+const
+  VISIBLE_MS = 900;   // fully visible for this long after any activity
+  FADE_MS    = 500;   // fade out over this long
+var
+  Elapsed: Cardinal;
+begin
+  if FScrollbarLastActivity = 0 then
+    Exit(0.0);  // never been active -> hidden
+  Elapsed := TThread.GetTickCount - FScrollbarLastActivity;
+  if Elapsed < VISIBLE_MS then
+    Result := 1.0
+  else if Elapsed < VISIBLE_MS + FADE_MS then
+    Result := 1.0 - ((Elapsed - VISIBLE_MS) / FADE_MS)
+  else
+    Result := 0.0;
+  if Result < 0 then Result := 0;
+  if Result > 1 then Result := 1;
+end;
+
+procedure TTina4HTMLRender.ScrollbarFadeTimerTick(Sender: TObject);
+begin
+  if GetScrollbarOpacity <= 0 then
+  begin
+    FScrollbarFadeTimer.Enabled := False;
+    Repaint;
+    Exit;
+  end;
+  Repaint;
 end;
 
 destructor TTina4HTMLRender.Destroy;
 begin
+  if Assigned(FScrollbarFadeTimer) then
+    FScrollbarFadeTimer.Enabled := False;
   ClearFormControls;
   FFormControls.Free;
   FClickableRegions.Free;
@@ -4747,6 +4821,9 @@ begin
   FDragScrollBox := nil;
   FDragScrollAxis := 0;
   FHoverScrollBox := nil;
+  FPanBox := nil;
+  FPanIsViewport := False;
+  FPanActive := False;
   try
     // Only re-parse the source HTML when the text has actually changed.
     // Direct DOM mutations (PrependHTML, SetElementText, SetElementStyle, etc.)
@@ -4785,6 +4862,10 @@ begin
     ClearFormControls;
     if Assigned(FLayoutEngine.Root) then
       CreateFormControls(FLayoutEngine.Root, 0, 0);
+
+    // Flash scrollbars briefly on load so the user sees what's scrollable,
+    // then let them fade out.
+    BumpScrollbarVisibility;
 
   finally
     FIsLayoutting := False;
@@ -4840,6 +4921,7 @@ begin
   FScrollX := Value;
   ClampScroll;
   if SameValue(Old, FScrollX) then Exit;
+  BumpScrollbarVisibility;
   PositionFormControls;
   Repaint;
   DoScrollChanged;
@@ -4853,6 +4935,7 @@ begin
   FScrollY := Value;
   ClampScroll;
   if SameValue(Old, FScrollY) then Exit;
+  BumpScrollbarVisibility;
   PositionFormControls;
   Repaint;
   DoScrollChanged;
@@ -6015,24 +6098,26 @@ procedure TTina4HTMLRender.PaintBoxScrollBars(Canvas: TCanvas;
 var
   VTrack, VThumb, HTrack, HThumb: TRectF;
   HasV, HasH: Boolean;
-  SB: Single;
+  SB, Op: Single;
 begin
+  Op := GetScrollbarOpacity;
+  if Op <= 0.001 then Exit;
   GetBoxScrollBarRects(Box, CX, CY, VTrack, VThumb, HTrack, HThumb, HasV, HasH);
   Canvas.Fill.Kind := TBrushKind.Solid;
 
   if HasV then
   begin
     Canvas.Fill.Color := $FFF0F0F0;
-    Canvas.FillRect(VTrack, 1.0);
+    Canvas.FillRect(VTrack, Op);
     Canvas.Fill.Color := $FF999999;
-    Canvas.FillRect(VThumb, 4, 4, AllCorners, 1.0);
+    Canvas.FillRect(VThumb, 4, 4, AllCorners, Op);
   end;
   if HasH then
   begin
     Canvas.Fill.Color := $FFF0F0F0;
-    Canvas.FillRect(HTrack, 1.0);
+    Canvas.FillRect(HTrack, Op);
     Canvas.Fill.Color := $FF999999;
-    Canvas.FillRect(HThumb, 4, 4, AllCorners, 1.0);
+    Canvas.FillRect(HThumb, 4, 4, AllCorners, Op);
   end;
   // Fill the bottom-right corner square when both bars are showing
   if HasV and HasH then
@@ -6040,7 +6125,7 @@ begin
     SB := FScrollBarWidth;
     Canvas.Fill.Color := $FFF0F0F0;
     Canvas.FillRect(RectF(CX + Box.ContentWidth - SB, CY + Box.ContentHeight - SB,
-                          CX + Box.ContentWidth, CY + Box.ContentHeight), 1.0);
+                          CX + Box.ContentWidth, CY + Box.ContentHeight), Op);
   end;
 end;
 
@@ -6771,9 +6856,11 @@ end;
 procedure TTina4HTMLRender.PaintScrollBar(Canvas: TCanvas);
 var
   TrackRect, ThumbRect: TRectF;
-  Ratio, ThumbH, ThumbY: Single;
+  Ratio, ThumbH, ThumbY, Op: Single;
 begin
   if FContentHeight <= Height then Exit;
+  Op := GetScrollbarOpacity;
+  if Op <= 0.001 then Exit;
 
   Ratio := Height / FContentHeight;
   ThumbH := Max(20, Height * Ratio);
@@ -6785,10 +6872,10 @@ begin
 
   Canvas.Fill.Kind := TBrushKind.Solid;
   Canvas.Fill.Color := $FFF0F0F0;
-  Canvas.FillRect(TrackRect, 1.0);
+  Canvas.FillRect(TrackRect, Op);
 
   Canvas.Fill.Color := $FF999999;
-  Canvas.FillRect(ThumbRect, 4, 4, AllCorners, 1.0);
+  Canvas.FillRect(ThumbRect, 4, 4, AllCorners, Op);
 end;
 
 procedure TTina4HTMLRender.MouseWheel(Shift: TShiftState; WheelDelta: Integer;
@@ -7098,6 +7185,9 @@ var
   OnThumb: Boolean;
 begin
   inherited;
+  FPanBox := nil;
+  FPanIsViewport := False;
+  FPanActive := False;
   // First check viewport scrollbar (outer)
   if ScrollBarVisible and (X >= Width - FScrollBarWidth) then
   begin
@@ -7126,7 +7216,30 @@ begin
         FDragStartPos := X;
         FDragStartScroll := Target.ScrollX;
       end;
+      Exit;
     end;
+  end;
+  // Neither scrollbar was hit. Set up a pan candidate so a subsequent drag
+  // can scroll via touch/swipe (primary gesture on mobile) or mouse drag.
+  // Prefer the innermost scrollable ancestor; fall back to the viewport if
+  // no inner container is scrollable here and the outer page itself scrolls.
+  if Assigned(Target) then
+  begin
+    FPanBox := Target;
+    FPanIsViewport := False;
+    FPanStartX := X;
+    FPanStartY := Y;
+    FPanStartScrollX := Target.ScrollX;
+    FPanStartScrollY := Target.ScrollY;
+  end
+  else if (FContentHeight > Height) or (FContentWidth > Width) then
+  begin
+    FPanBox := nil;
+    FPanIsViewport := True;
+    FPanStartX := X;
+    FPanStartY := Y;
+    FPanStartScrollX := FScrollX;
+    FPanStartScrollY := FScrollY;
   end;
 end;
 
@@ -7176,6 +7289,7 @@ begin
         FDragScrollBox.ScrollY := FDragStartScroll +
           ((Y - FDragStartPos) / TrackRange) * ScrollRange;
         FDragScrollBox.ClampOwnScroll;
+        BumpScrollbarVisibility;
         Repaint;
       end;
     end
@@ -7191,6 +7305,41 @@ begin
         FDragScrollBox.ScrollX := FDragStartScroll +
           ((X - FDragStartPos) / TrackRange) * ScrollRange;
         FDragScrollBox.ClampOwnScroll;
+        BumpScrollbarVisibility;
+        Repaint;
+      end;
+    end;
+    Exit;
+  end;
+
+  // Pan-to-scroll (touch swipe or mouse drag on content). Applies deltas
+  // directly to the box's ScrollX/ScrollY. Natural scroll direction: drag
+  // content DOWN -> scroll UP (so scroll position decreases as Y increases).
+  if (FPanIsViewport or Assigned(FPanBox)) then
+  begin
+    var DX := X - FPanStartX;
+    var DY := Y - FPanStartY;
+    // Promote to active pan once threshold crossed.
+    if (not FPanActive) and (Abs(DX) + Abs(DY) > 6) then
+      FPanActive := True;
+    if FPanActive then
+    begin
+      if FPanIsViewport then
+      begin
+        if FContentHeight > Height then
+          SetScrollY(FPanStartScrollY - DY);
+        // (SetScrollX exists and clamps; keep horizontal viewport pan simple)
+        if FContentWidth > Width then
+          SetScrollX(FPanStartScrollX - DX);
+      end
+      else
+      begin
+        if FPanBox.IsScrollableY and (FPanBox.ScrollHeight > FPanBox.ContentHeight + 0.5) then
+          FPanBox.ScrollY := FPanStartScrollY - DY;
+        if FPanBox.IsScrollableX and (FPanBox.ScrollWidth > FPanBox.ContentWidth + 0.5) then
+          FPanBox.ScrollX := FPanStartScrollX - DX;
+        FPanBox.ClampOwnScroll;
+        BumpScrollbarVisibility;
         Repaint;
       end;
     end;
@@ -7277,6 +7426,8 @@ procedure TTina4HTMLRender.MouseUp(Button: TMouseButton; Shift: TShiftState;
     end;
   end;
 
+var
+  PanWasActive: Boolean;
 begin
   inherited;
   if FMouseDownOnScroll then
@@ -7291,6 +7442,15 @@ begin
     FDragScrollAxis := 0;
     Exit;
   end;
+
+  // If a pan was active, swallow the click so the underlying element
+  // (e.g. a nav button or link) doesn't fire at the end of a swipe.
+  PanWasActive := FPanActive;
+  FPanBox := nil;
+  FPanIsViewport := False;
+  FPanActive := False;
+  if PanWasActive then
+    Exit;
 
   if (Button = TMouseButton.mbLeft) and Assigned(FLayoutEngine) and
      Assigned(FLayoutEngine.Root) then

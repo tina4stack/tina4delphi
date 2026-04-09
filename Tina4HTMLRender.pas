@@ -206,6 +206,13 @@ type
     Visibility: string;
     ListStyleType: string;
     Overflow: string;
+    // overflow-x / overflow-y: per-axis scroll control. CSS allows each axis
+    // independent — e.g. `overflow-x: hidden; overflow-y: auto` makes a div
+    // that scrolls vertically but clips horizontally. The legacy `Overflow`
+    // field is kept as a parser landing point for the shorthand and text-
+    // overflow detection, but painting/scrolling uses OverflowX/OverflowY.
+    OverflowX: string;
+    OverflowY: string;
     WordBreak: string;
     OverflowWrap: string;
     TextOverflow: string;
@@ -243,6 +250,16 @@ type
     Kind: TLayoutBoxKind;
     X, Y: Single;
     ContentWidth, ContentHeight: Single;
+    // Intrinsic content size BEFORE clamping to ExplicitHeight/MaxHeight.
+    // ScrollWidth/ScrollHeight represent what the children actually need,
+    // used to compute scroll range and scrollbar thumb sizes when the box
+    // has `overflow: auto/scroll`. If the box is not scrollable these are
+    // simply == ContentWidth/ContentHeight.
+    ScrollWidth: Single;
+    ScrollHeight: Single;
+    // Current scroll offset within this box (independent of viewport scroll)
+    ScrollX: Single;
+    ScrollY: Single;
     Children: TObjectList<TLayoutBox>;
     Fragments: TList<TTextFragment>;
     ListIndex: Integer;
@@ -253,6 +270,14 @@ type
     function MarginBoxHeight: Single;
     function ContentLeft: Single;
     function ContentTop: Single;
+    // Is the box allowed to scroll on an axis (i.e. overflow is not 'visible')?
+    function IsScrollableX: Boolean;
+    function IsScrollableY: Boolean;
+    // Does it currently need a visible scrollbar (content bigger than viewport)?
+    function NeedsScrollBarX: Boolean;
+    function NeedsScrollBarY: Boolean;
+    // Clamp ScrollX/ScrollY to valid range based on content vs viewport.
+    procedure ClampOwnScroll;
   end;
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -357,6 +382,21 @@ type
     FMouseDownOnScroll: Boolean;
     FScrollDragStart: Single;
     FScrollDragThumbStart: Single;
+    // Per-box scrollbar drag state: which box's scrollbar is being dragged,
+    // which axis, and the content-rect origin of that box at drag start.
+    FDragScrollBox: TLayoutBox;
+    FDragScrollAxis: Integer;  // 0 = none, 1 = vertical, 2 = horizontal
+    FDragScrollBoxCX, FDragScrollBoxCY: Single;
+    FDragStartPos: Single;
+    FDragStartScroll: Single;
+    // Most recently hovered scrollable box — used to route mousewheel deltas
+    // to an inner container rather than the viewport when the cursor is over it.
+    FHoverScrollBox: TLayoutBox;
+    FHoverScrollBoxCX, FHoverScrollBoxCY: Single;
+    // Preserves per-box ScrollX/ScrollY across relayouts. The layout tree is
+    // rebuilt from scratch each pass, so without this the user's scroll
+    // position in inner divs would reset every relayout. Keyed by DOM tag.
+    FBoxScrollState: TDictionary<THTMLTag, TPointF>;
     FFormControls: TList<TNativeFormControl>;
     FClickableRegions: TList<TClickableRegion>;
     FRegisteredObjects: TDictionary<string, TObject>;
@@ -410,6 +450,25 @@ type
     procedure PaintListMarker(Canvas: TCanvas; Box: TLayoutBox; X, Y: Single);
     procedure PaintTableCellBorders(Canvas: TCanvas; Box: TLayoutBox; CX, CY: Single);
     procedure PaintScrollBar(Canvas: TCanvas);
+    // Per-box scrollbar helpers — used when a box has overflow: auto/scroll
+    // and its content exceeds its viewport on one or both axes.
+    procedure GetBoxScrollBarRects(Box: TLayoutBox; CX, CY: Single;
+      out VTrack, VThumb, HTrack, HThumb: TRectF;
+      out HasV, HasH: Boolean);
+    procedure PaintBoxScrollBars(Canvas: TCanvas; Box: TLayoutBox;
+      CX, CY: Single);
+    // Hit-test helper: HX/HY are in widget-local coords. Returns True if
+    // (HX,HY) lies on a scrollbar of Box (with content origin CX,CY) and
+    // sets Axis (1=vertical, 2=horizontal). OnThumb indicates thumb vs track.
+    function HitTestBoxScrollBar(Box: TLayoutBox; CX, CY: Single;
+      HX, HY: Single; out Axis: Integer; out OnThumb: Boolean): Boolean;
+    // Walk the layout tree from Root and return the innermost scrollable
+    // box whose padding-box contains (HX,HY). Used to route mousewheel
+    // and hover tracking to inner scrolled containers. OutCX/OutCY receive
+    // the absolute content origin of the returned box (so callers don't
+    // have to re-walk). Returns nil if no scrollable ancestor is found.
+    function FindScrollableAncestor(HX, HY: Single;
+      out OutCX, OutCY: Single): TLayoutBox;
     function ScrollBarVisible: Boolean;
     procedure ClampScroll;
     procedure SetScrollX(const Value: Single);
@@ -1907,6 +1966,8 @@ begin
   Result.Visibility := 'visible';
   Result.ListStyleType := '';
   Result.Overflow := 'visible';
+  Result.OverflowX := 'visible';
+  Result.OverflowY := 'visible';
   Result.WordBreak := 'normal';
   Result.OverflowWrap := 'normal';
   Result.TextOverflow := 'clip';
@@ -2141,6 +2202,8 @@ begin
   Result.MinHeight := -1;
   Result.MaxHeight := -1;
   Result.Overflow := 'visible';
+  Result.OverflowX := 'visible';
+  Result.OverflowY := 'visible';
   Result.TextOverflow := 'clip';
 
   if Tag = nil then Exit;
@@ -2662,11 +2725,26 @@ begin
     Style.ListStyleType := Temp.ToLower;
 
   if Decls.TryGetValue('overflow', Temp) and not ShouldSkip(Temp) then
-    Style.Overflow := Temp.ToLower;
+  begin
+    // overflow shorthand: `overflow: <x> <y>` or `overflow: <both>`
+    var OvParts := Temp.Trim.ToLower.Split([' '], TStringSplitOptions.ExcludeEmpty);
+    if Length(OvParts) >= 2 then
+    begin
+      Style.OverflowX := OvParts[0];
+      Style.OverflowY := OvParts[1];
+      Style.Overflow := OvParts[0];
+    end
+    else if Length(OvParts) = 1 then
+    begin
+      Style.Overflow := OvParts[0];
+      Style.OverflowX := OvParts[0];
+      Style.OverflowY := OvParts[0];
+    end;
+  end;
   if Decls.TryGetValue('overflow-x', Temp) and not ShouldSkip(Temp) then
-    Style.Overflow := Temp.ToLower;
+    Style.OverflowX := Temp.Trim.ToLower;
   if Decls.TryGetValue('overflow-y', Temp) and not ShouldSkip(Temp) then
-    Style.Overflow := Temp.ToLower;
+    Style.OverflowY := Temp.Trim.ToLower;
 
   if Decls.TryGetValue('word-break', Temp) and not ShouldSkip(Temp) then
     Style.WordBreak := Temp.ToLower;
@@ -2733,6 +2811,67 @@ begin
   Fragments := TList<TTextFragment>.Create;
   ListIndex := 0;
   IsOrdered := False;
+  ScrollWidth := 0;
+  ScrollHeight := 0;
+  ScrollX := 0;
+  ScrollY := 0;
+end;
+
+function TLayoutBox.IsScrollableX: Boolean;
+begin
+  Result := (Style.OverflowX = 'auto') or (Style.OverflowX = 'scroll') or
+            (Style.OverflowX = 'hidden');
+end;
+
+function TLayoutBox.IsScrollableY: Boolean;
+begin
+  Result := (Style.OverflowY = 'auto') or (Style.OverflowY = 'scroll') or
+            (Style.OverflowY = 'hidden');
+end;
+
+function TLayoutBox.NeedsScrollBarX: Boolean;
+begin
+  // hidden scrolls programmatically but never shows a bar
+  if (Style.OverflowX = 'visible') or (Style.OverflowX = 'hidden') then
+    Exit(False);
+  if Style.OverflowX = 'scroll' then
+    Exit(True);
+  // auto — show only when content exceeds viewport
+  Result := ScrollWidth > ContentWidth + 0.5;
+end;
+
+function TLayoutBox.NeedsScrollBarY: Boolean;
+begin
+  if (Style.OverflowY = 'visible') or (Style.OverflowY = 'hidden') then
+    Exit(False);
+  if Style.OverflowY = 'scroll' then
+    Exit(True);
+  Result := ScrollHeight > ContentHeight + 0.5;
+end;
+
+procedure TLayoutBox.ClampOwnScroll;
+var
+  MaxX, MaxY: Single;
+begin
+  if IsScrollableX then
+  begin
+    MaxX := ScrollWidth - ContentWidth;
+    if MaxX < 0 then MaxX := 0;
+    if ScrollX < 0 then ScrollX := 0;
+    if ScrollX > MaxX then ScrollX := MaxX;
+  end
+  else
+    ScrollX := 0;
+
+  if IsScrollableY then
+  begin
+    MaxY := ScrollHeight - ContentHeight;
+    if MaxY < 0 then MaxY := 0;
+    if ScrollY < 0 then ScrollY := 0;
+    if ScrollY > MaxY then ScrollY := MaxY;
+  end
+  else
+    ScrollY := 0;
 end;
 
 destructor TLayoutBox.Destroy;
@@ -3262,6 +3401,19 @@ begin
     Box.ContentHeight := CursorY;
   end;
 
+  // Capture intrinsic content size BEFORE clamping to explicit/min/max.
+  // This is what scrollbars measure against. For width, also find the
+  // furthest right edge any child reaches — children may explicitly
+  // overflow their parent horizontally.
+  Box.ScrollHeight := Box.ContentHeight;
+  Box.ScrollWidth := Box.ContentWidth;
+  for var Child in Box.Children do
+  begin
+    var Right := Child.X + Child.MarginBoxWidth;
+    if Right > Box.ScrollWidth then
+      Box.ScrollWidth := Right;
+  end;
+
   if Box.Style.ExplicitHeight > 0 then
   begin
     if SameText(Box.Style.BoxSizing, 'border-box') then
@@ -3276,6 +3428,14 @@ begin
     Box.ContentHeight := Box.Style.MinHeight;
   if (Box.Style.MaxHeight >= 0) and (Box.ContentHeight > Box.Style.MaxHeight) then
     Box.ContentHeight := Box.Style.MaxHeight;
+
+  // If the box is not scrollable, keep ScrollHeight/Width in lockstep with
+  // the clamped ContentHeight/Width so NeedsScrollBar* never fires for
+  // non-scroll containers. ClampOwnScroll relies on these values.
+  if not Box.IsScrollableY then
+    Box.ScrollHeight := Box.ContentHeight;
+  if not Box.IsScrollableX then
+    Box.ScrollWidth := Box.ContentWidth;
 end;
 
 procedure TLayoutEngine.LayoutInlineChildren(Box: TLayoutBox; AvailWidth: Single);
@@ -4196,6 +4356,12 @@ begin
   FFormControls := TList<TNativeFormControl>.Create;
   FClickableRegions := TList<TClickableRegion>.Create;
   FRegisteredObjects := TDictionary<string, TObject>.Create;
+  // Per-box scroll state — keyed by DOM tag so it survives relayouts that
+  // rebuild the TLayoutBox tree from scratch.
+  FBoxScrollState := TDictionary<THTMLTag, TPointF>.Create;
+  FDragScrollBox := nil;
+  FDragScrollAxis := 0;
+  FHoverScrollBox := nil;
   ClipChildren := True;
   HitTest := True;
 end;
@@ -4206,6 +4372,7 @@ begin
   FFormControls.Free;
   FClickableRegions.Free;
   FRegisteredObjects.Free;
+  FBoxScrollState.Free;
   FStyleSheet.Free;
   FLayoutEngine.Free;
   FParser.Free;
@@ -4527,9 +4694,48 @@ begin
 end;
 
 procedure TTina4HTMLRender.DoLayout;
+
+  // Save all current per-box scroll positions into FBoxScrollState before
+  // we throw away the old layout tree. Keyed by the DOM tag, which is
+  // persistent across relayouts (only the layout boxes get rebuilt).
+  procedure SaveScrollState(Box: TLayoutBox);
+  begin
+    if not Assigned(Box) then Exit;
+    if Assigned(Box.Tag) and (Box.IsScrollableX or Box.IsScrollableY) and
+       ((Box.ScrollX <> 0) or (Box.ScrollY <> 0)) then
+      FBoxScrollState.AddOrSetValue(Box.Tag, PointF(Box.ScrollX, Box.ScrollY));
+    for var Child in Box.Children do
+      SaveScrollState(Child);
+  end;
+
+  // After layout, copy scroll positions back into the rebuilt boxes.
+  // Clamp immediately so positions beyond the new content size are trimmed.
+  procedure RestoreScrollState(Box: TLayoutBox);
+  var
+    P: TPointF;
+  begin
+    if not Assigned(Box) then Exit;
+    if Assigned(Box.Tag) and (Box.IsScrollableX or Box.IsScrollableY) then
+      if FBoxScrollState.TryGetValue(Box.Tag, P) then
+      begin
+        Box.ScrollX := P.X;
+        Box.ScrollY := P.Y;
+        Box.ClampOwnScroll;
+      end;
+    for var Child in Box.Children do
+      RestoreScrollState(Child);
+  end;
+
 begin
   if FIsLayoutting then Exit;
   FIsLayoutting := True;
+  // Snapshot inner scroll state before the layout tree is rebuilt, then
+  // invalidate cached TLayoutBox pointers — the relayout replaces them.
+  if Assigned(FLayoutEngine) and Assigned(FLayoutEngine.Root) then
+    SaveScrollState(FLayoutEngine.Root);
+  FDragScrollBox := nil;
+  FDragScrollAxis := 0;
+  FHoverScrollBox := nil;
   try
     // Only re-parse the source HTML when the text has actually changed.
     // Direct DOM mutations (PrependHTML, SetElementText, SetElementStyle, etc.)
@@ -4558,6 +4764,9 @@ begin
       FContentWidth := FLayoutEngine.Root.MarginBoxWidth
     else
       FContentWidth := 0;
+    // Restore per-box scroll positions onto the rebuilt layout tree.
+    if Assigned(FLayoutEngine.Root) then
+      RestoreScrollState(FLayoutEngine.Root);
     ClampScroll;
     FNeedRelayout := False;
 
@@ -4713,38 +4922,113 @@ begin
 end;
 
 function TTina4HTMLRender.ScrollToElement(const Id: string): Boolean;
+
+  // Walk from Root, produce the path of boxes from root down to Target.
+  function FindPath(Box, Target: TLayoutBox; Path: TList<TLayoutBox>): Boolean;
+  begin
+    if not Assigned(Box) then Exit(False);
+    if Box = Target then
+    begin
+      Path.Add(Box);
+      Exit(True);
+    end;
+    for var C in Box.Children do
+      if FindPath(C, Target, Path) then
+      begin
+        Path.Insert(0, Box);
+        Exit(True);
+      end;
+    Result := False;
+  end;
+
 var
   Tag: THTMLTag;
-  Box: TLayoutBox;
+  Target: TLayoutBox;
+  Path: TList<TLayoutBox>;
+  I: Integer;
+  PX, PY: Single;
+  TargetW, TargetH: Single;
   AX, AY, NewX, NewY, VW, VH: Single;
 begin
   Result := False;
   Tag := GetElementById(Id);
   if not Assigned(Tag) then Exit;
   if not Assigned(FLayoutEngine) or not Assigned(FLayoutEngine.Root) then Exit;
-  Box := FindLayoutBoxByTag(FLayoutEngine.Root, Tag);
-  if not Assigned(Box) then Exit;
-  if not GetBoxAbsolutePosition(Box, AX, AY) then Exit;
+  Target := FindLayoutBoxByTag(FLayoutEngine.Root, Tag);
+  if not Assigned(Target) then Exit;
 
-  VW := GetViewportWidth;
-  VH := GetViewportHeight;
-  NewX := FScrollX;
-  NewY := FScrollY;
+  Path := TList<TLayoutBox>.Create;
+  try
+    if not FindPath(FLayoutEngine.Root, Target, Path) then Exit;
 
-  // Vertical: bring into view if outside
-  if AY < FScrollY then
-    NewY := AY
-  else if (AY + Box.MarginBoxHeight) > (FScrollY + VH) then
-    NewY := (AY + Box.MarginBoxHeight) - VH;
+    TargetW := Target.MarginBoxWidth;
+    TargetH := Target.MarginBoxHeight;
 
-  // Horizontal: bring into view if outside
-  if AX < FScrollX then
-    NewX := AX
-  else if (AX + Box.MarginBoxWidth) > (FScrollX + VW) then
-    NewX := (AX + Box.MarginBoxWidth) - VW;
+    // Walk from the target outward (inner scroll ancestors first). Track
+    // PX/PY as the target's position relative to the current ancestor's
+    // content box. At each scrollable ancestor, adjust ScrollX/Y so the
+    // target is inside its viewport, then translate PX/PY back into the
+    // ancestor's own parent-relative coordinates for the next iteration.
+    PX := 0;
+    PY := 0;
+    for I := Path.Count - 1 downto 1 do
+    begin
+      // Path[I] is the current box (target or an ancestor). Accumulate
+      // its position inside Path[I-1]'s content box into PX/PY. Path[I].X/Y
+      // are relative to the content box of their parent.
+      PX := PX + Path[I].X;
+      PY := PY + Path[I].Y;
+      // Now PX/PY is where the target lives inside Path[I-1]'s content box.
+      var Anc := Path[I - 1];
+      if Anc.IsScrollableY and (Anc.ScrollHeight > Anc.ContentHeight + 0.5) then
+      begin
+        if PY < Anc.ScrollY then
+          Anc.ScrollY := PY
+        else if (PY + TargetH) > (Anc.ScrollY + Anc.ContentHeight) then
+          Anc.ScrollY := (PY + TargetH) - Anc.ContentHeight;
+      end;
+      if Anc.IsScrollableX and (Anc.ScrollWidth > Anc.ContentWidth + 0.5) then
+      begin
+        if PX < Anc.ScrollX then
+          Anc.ScrollX := PX
+      else if (PX + TargetW) > (Anc.ScrollX + Anc.ContentWidth) then
+          Anc.ScrollX := (PX + TargetW) - Anc.ContentWidth;
+      end;
+      Anc.ClampOwnScroll;
+      // Now PX/PY changes perspective: the target's visible position inside
+      // Anc's content box is (PX - Anc.ScrollX, PY - Anc.ScrollY). For the
+      // NEXT outer iteration, we need PX/PY relative to Anc's position in
+      // its parent, so subtract the scroll we just applied.
+      PX := PX - Anc.ScrollX;
+      PY := PY - Anc.ScrollY;
+    end;
 
-  ScrollTo(NewX, NewY);
-  Result := True;
+    // Finally scroll the outer viewport. Use the full absolute position
+    // (ignoring inner scrolls) so the box's layout cell is visible — the
+    // inner scrolls above already made the target visible within each
+    // intermediate container.
+    if GetBoxAbsolutePosition(Target, AX, AY) then
+    begin
+      VW := GetViewportWidth;
+      VH := GetViewportHeight;
+      NewX := FScrollX;
+      NewY := FScrollY;
+      if AY < FScrollY then
+        NewY := AY
+      else if (AY + TargetH) > (FScrollY + VH) then
+        NewY := (AY + TargetH) - VH;
+      if AX < FScrollX then
+        NewX := AX
+      else if (AX + TargetW) > (FScrollX + VW) then
+        NewX := (AX + TargetW) - VW;
+      ScrollTo(NewX, NewY);
+    end
+    else
+      Repaint;
+    Result := True;
+  finally
+    Path.Free;
+  end;
 end;
 
 procedure TTina4HTMLRender.InsertHTMLFragment(Target: THTMLTag;
@@ -5567,14 +5851,22 @@ begin
   CX := AbsX + Box.ContentLeft;
   CY := AbsY + Box.ContentTop;
 
-  if (Box.Style.Overflow = 'hidden') or (Box.Style.Overflow = 'scroll') or
-     (Box.Style.Overflow = 'auto') then
+  var HasAnyOverflow := (Box.Style.OverflowX <> 'visible') or
+                        (Box.Style.OverflowY <> 'visible') or
+                        (Box.Style.Overflow = 'hidden') or
+                        (Box.Style.Overflow = 'scroll') or
+                        (Box.Style.Overflow = 'auto');
+  if HasAnyOverflow then
   begin
+    // If the box is scrollable (auto/scroll), apply its ScrollX/ScrollY
+    // offset to the painting of its children. ClampOwnScroll first, so a
+    // relayout that shrinks content doesn't leave the scroll past the end.
+    Box.ClampOwnScroll;
     var SaveState := Canvas.SaveState;
     try
       Canvas.IntersectClipRect(RectF(CX, CY, CX + Box.ContentWidth, CY + Box.ContentHeight));
       for var Child in Box.Children do
-        PaintBox(Canvas, Child, CX, CY);
+        PaintBox(Canvas, Child, CX - Box.ScrollX, CY - Box.ScrollY);
 
       // text-overflow: ellipsis — paint "..." at right edge when content overflows
       if (Box.Style.TextOverflow = 'ellipsis') and (Box.Style.WhiteSpace = 'nowrap') then
@@ -5622,12 +5914,211 @@ begin
     finally
       Canvas.RestoreState(SaveState);
     end;
+    // Paint scrollbars OUTSIDE the clip so they're always visible regardless
+    // of how far the content has been scrolled.
+    PaintBoxScrollBars(Canvas, Box, CX, CY);
   end
   else
   begin
     for var Child in Box.Children do
       PaintBox(Canvas, Child, CX, CY);
   end;
+end;
+
+procedure TTina4HTMLRender.GetBoxScrollBarRects(Box: TLayoutBox;
+  CX, CY: Single;
+  out VTrack, VThumb, HTrack, HThumb: TRectF;
+  out HasV, HasH: Boolean);
+var
+  SB: Single;
+  RX, RY: Single;
+  VisW, VisH: Single;
+  ThumbH, ThumbW, ThumbY, ThumbX: Single;
+  RangeY, RangeX: Single;
+begin
+  SB := FScrollBarWidth;
+  HasV := Box.NeedsScrollBarY;
+  HasH := Box.NeedsScrollBarX;
+  VTrack := TRectF.Empty;
+  VThumb := TRectF.Empty;
+  HTrack := TRectF.Empty;
+  HThumb := TRectF.Empty;
+
+  // Visible viewport reduces by the opposite scrollbar if that one is present.
+  VisW := Box.ContentWidth;
+  VisH := Box.ContentHeight;
+  if HasV then VisW := VisW - SB;
+  if HasH then VisH := VisH - SB;
+  if VisW < 0 then VisW := 0;
+  if VisH < 0 then VisH := 0;
+
+  if HasV then
+  begin
+    VTrack := RectF(CX + Box.ContentWidth - SB, CY,
+                    CX + Box.ContentWidth,
+                    CY + VisH);
+    RY := Box.ScrollHeight - VisH;
+    if RY <= 0 then
+    begin
+      VThumb := VTrack;
+    end
+    else
+    begin
+      ThumbH := Max(20, VisH * (VisH / Box.ScrollHeight));
+      if ThumbH > VisH then ThumbH := VisH;
+      ThumbY := 0;
+      RangeY := VisH - ThumbH;
+      if RangeY > 0 then
+        ThumbY := (Box.ScrollY / RY) * RangeY;
+      VThumb := RectF(VTrack.Left + 2, VTrack.Top + ThumbY,
+                      VTrack.Right - 2, VTrack.Top + ThumbY + ThumbH);
+    end;
+  end;
+
+  if HasH then
+  begin
+    HTrack := RectF(CX, CY + Box.ContentHeight - SB,
+                    CX + VisW,
+                    CY + Box.ContentHeight);
+    RX := Box.ScrollWidth - VisW;
+    if RX <= 0 then
+    begin
+      HThumb := HTrack;
+    end
+    else
+    begin
+      ThumbW := Max(20, VisW * (VisW / Box.ScrollWidth));
+      if ThumbW > VisW then ThumbW := VisW;
+      ThumbX := 0;
+      RangeX := VisW - ThumbW;
+      if RangeX > 0 then
+        ThumbX := (Box.ScrollX / RX) * RangeX;
+      HThumb := RectF(HTrack.Left + ThumbX, HTrack.Top + 2,
+                      HTrack.Left + ThumbX + ThumbW, HTrack.Bottom - 2);
+    end;
+  end;
+end;
+
+procedure TTina4HTMLRender.PaintBoxScrollBars(Canvas: TCanvas;
+  Box: TLayoutBox; CX, CY: Single);
+var
+  VTrack, VThumb, HTrack, HThumb: TRectF;
+  HasV, HasH: Boolean;
+  SB: Single;
+begin
+  GetBoxScrollBarRects(Box, CX, CY, VTrack, VThumb, HTrack, HThumb, HasV, HasH);
+  Canvas.Fill.Kind := TBrushKind.Solid;
+
+  if HasV then
+  begin
+    Canvas.Fill.Color := $FFF0F0F0;
+    Canvas.FillRect(VTrack, 1.0);
+    Canvas.Fill.Color := $FF999999;
+    Canvas.FillRect(VThumb, 4, 4, AllCorners, 1.0);
+  end;
+  if HasH then
+  begin
+    Canvas.Fill.Color := $FFF0F0F0;
+    Canvas.FillRect(HTrack, 1.0);
+    Canvas.Fill.Color := $FF999999;
+    Canvas.FillRect(HThumb, 4, 4, AllCorners, 1.0);
+  end;
+  // Fill the bottom-right corner square when both bars are showing
+  if HasV and HasH then
+  begin
+    SB := FScrollBarWidth;
+    Canvas.Fill.Color := $FFF0F0F0;
+    Canvas.FillRect(RectF(CX + Box.ContentWidth - SB, CY + Box.ContentHeight - SB,
+                          CX + Box.ContentWidth, CY + Box.ContentHeight), 1.0);
+  end;
+end;
+
+function TTina4HTMLRender.HitTestBoxScrollBar(Box: TLayoutBox; CX, CY: Single;
+  HX, HY: Single; out Axis: Integer; out OnThumb: Boolean): Boolean;
+var
+  VTrack, VThumb, HTrack, HThumb: TRectF;
+  HasV, HasH: Boolean;
+  P: TPointF;
+begin
+  Result := False;
+  Axis := 0;
+  OnThumb := False;
+  GetBoxScrollBarRects(Box, CX, CY, VTrack, VThumb, HTrack, HThumb, HasV, HasH);
+  P := PointF(HX, HY);
+  if HasV and VTrack.Contains(P) then
+  begin
+    Axis := 1;
+    OnThumb := VThumb.Contains(P);
+    Exit(True);
+  end;
+  if HasH and HTrack.Contains(P) then
+  begin
+    Axis := 2;
+    OnThumb := HThumb.Contains(P);
+    Exit(True);
+  end;
+end;
+
+function TTina4HTMLRender.FindScrollableAncestor(HX, HY: Single;
+  out OutCX, OutCY: Single): TLayoutBox;
+
+  // Recursive walk: pass in the absolute origin of the parent's content box.
+  // At each box we compute its own AbsX/AbsY and check whether the point
+  // is inside its padding box; if so, recurse into children (with its
+  // content origin) and remember this box as the latest scrollable seen.
+  function Walk(Box: TLayoutBox; POffX, POffY: Single;
+    ParentScrollX, ParentScrollY: Single): TLayoutBox;
+  var
+    AbsX, AbsY, CX, CY: Single;
+    Left, Top, Right, Bottom: Single;
+    Inside: Boolean;
+    Deeper: TLayoutBox;
+  begin
+    Result := nil;
+    if not Assigned(Box) then Exit;
+    if Box.Style.Display = 'none' then Exit;
+    // POffX/POffY already include the parent's scroll translation.
+    AbsX := POffX + Box.X - ParentScrollX;
+    AbsY := POffY + Box.Y - ParentScrollY;
+    Left := AbsX + Box.ContentLeft;
+    Top := AbsY + Box.ContentTop;
+    Right := Left + Box.ContentWidth;
+    Bottom := Top + Box.ContentHeight;
+    Inside := (HX >= Left) and (HX <= Right) and (HY >= Top) and (HY <= Bottom);
+    if not Inside then Exit;
+
+    // Remember this box if it's scrollable on either axis.
+    if Box.IsScrollableX or Box.IsScrollableY then
+    begin
+      Result := Box;
+      OutCX := Left;
+      OutCY := Top;
+    end;
+
+    // Recurse into children. When the current box is itself a scroll
+    // container we pass its own ScrollX/Y as the "parent" offset for
+    // its children (they're translated by the box's current scroll).
+    CX := Left;
+    CY := Top;
+    var UseScrollX: Single := 0;
+    var UseScrollY: Single := 0;
+    if Box.IsScrollableX then UseScrollX := Box.ScrollX;
+    if Box.IsScrollableY then UseScrollY := Box.ScrollY;
+    for var Child in Box.Children do
+    begin
+      Deeper := Walk(Child, CX, CY, UseScrollX, UseScrollY);
+      if Assigned(Deeper) then
+        Result := Deeper;
+    end;
+  end;
+
+begin
+  Result := nil;
+  OutCX := 0;
+  OutCY := 0;
+  if not Assigned(FLayoutEngine) or not Assigned(FLayoutEngine.Root) then Exit;
+  // The viewport's own scroll shifts the whole layout.
+  Result := Walk(FLayoutEngine.Root, -FScrollX, -FScrollY, 0, 0);
 end;
 
 procedure TTina4HTMLRender.BuildRoundedRectPath(Path: TPathData; const R: TRectF;
@@ -6291,8 +6782,46 @@ end;
 
 procedure TTina4HTMLRender.MouseWheel(Shift: TShiftState; WheelDelta: Integer;
   var Handled: Boolean);
+var
+  Target: TLayoutBox;
+  Horizontal: Boolean;
+  Delta: Single;
 begin
-  SetScrollY(FScrollY - WheelDelta);
+  Horizontal := ssShift in Shift;
+  Delta := -WheelDelta;
+  // Prefer the box currently under the mouse if it's scrollable on the
+  // requested axis — this is what browsers do. Fall back to the viewport.
+  Target := FHoverScrollBox;
+  if Assigned(Target) then
+  begin
+    if Horizontal then
+    begin
+      if Target.IsScrollableX and (Target.ScrollWidth > Target.ContentWidth + 0.5) then
+      begin
+        Target.ScrollX := Target.ScrollX + Delta;
+        Target.ClampOwnScroll;
+        Repaint;
+        Handled := True;
+        Exit;
+      end;
+    end
+    else
+    begin
+      if Target.IsScrollableY and (Target.ScrollHeight > Target.ContentHeight + 0.5) then
+      begin
+        Target.ScrollY := Target.ScrollY + Delta;
+        Target.ClampOwnScroll;
+        Repaint;
+        Handled := True;
+        Exit;
+      end;
+    end;
+  end;
+  // No inner scrollable consumed the wheel — scroll the viewport.
+  if Horizontal then
+    SetScrollX(FScrollX + Delta)
+  else
+    SetScrollY(FScrollY + Delta);
   Handled := True;
 end;
 
@@ -6551,19 +7080,52 @@ end;
 
 procedure TTina4HTMLRender.MouseDown(Button: TMouseButton; Shift: TShiftState;
   X, Y: Single);
+var
+  Target: TLayoutBox;
+  ACX, ACY: Single;
+  Axis: Integer;
+  OnThumb: Boolean;
 begin
   inherited;
+  // First check viewport scrollbar (outer)
   if ScrollBarVisible and (X >= Width - FScrollBarWidth) then
   begin
     FMouseDownOnScroll := True;
     FScrollDragStart := Y;
     FScrollDragThumbStart := FScrollY;
+    Exit;
+  end;
+  // Then check any inner scrollable box's scrollbars.
+  Target := FindScrollableAncestor(X, Y, ACX, ACY);
+  if Assigned(Target) then
+  begin
+    if HitTestBoxScrollBar(Target, ACX, ACY, X, Y, Axis, OnThumb) then
+    begin
+      FDragScrollBox := Target;
+      FDragScrollAxis := Axis;
+      FDragScrollBoxCX := ACX;
+      FDragScrollBoxCY := ACY;
+      if Axis = 1 then
+      begin
+        FDragStartPos := Y;
+        FDragStartScroll := Target.ScrollY;
+      end
+      else
+      begin
+        FDragStartPos := X;
+        FDragStartScroll := Target.ScrollX;
+      end;
+    end;
   end;
 end;
 
 procedure TTina4HTMLRender.MouseMove(Shift: TShiftState; X, Y: Single);
 var
   Ratio, ThumbH, Delta: Single;
+  Target: TLayoutBox;
+  ACX, ACY: Single;
+  VisW, VisH, TrackRange, ScrollRange: Single;
+  SB: Single;
 begin
   inherited;
   if FMouseDownOnScroll and ScrollBarVisible then
@@ -6571,12 +7133,72 @@ begin
     Ratio := Height / FContentHeight;
     ThumbH := Max(20, Height * Ratio);
     Delta := Y - FScrollDragStart;
-    var TrackRange := Height - ThumbH;
-    if TrackRange > 0 then
+    var TrackRange2 := Height - ThumbH;
+    if TrackRange2 > 0 then
     begin
-      var ScrollRange := FContentHeight - Height;
-      SetScrollY(FScrollDragThumbStart + (Delta / TrackRange) * ScrollRange);
+      var ScrollRange2 := FContentHeight - Height;
+      SetScrollY(FScrollDragThumbStart + (Delta / TrackRange2) * ScrollRange2);
     end;
+    Exit;
+  end;
+
+  // Inner-box scrollbar drag in progress
+  if Assigned(FDragScrollBox) and (FDragScrollAxis <> 0) then
+  begin
+    SB := FScrollBarWidth;
+    VisW := FDragScrollBox.ContentWidth;
+    VisH := FDragScrollBox.ContentHeight;
+    if FDragScrollBox.NeedsScrollBarY then VisW := VisW - SB;
+    if FDragScrollBox.NeedsScrollBarX then VisH := VisH - SB;
+    if VisW < 0 then VisW := 0;
+    if VisH < 0 then VisH := 0;
+
+    if FDragScrollAxis = 1 then
+    begin
+      if FDragScrollBox.ScrollHeight <= VisH then Exit;
+      ThumbH := Max(20, VisH * (VisH / FDragScrollBox.ScrollHeight));
+      if ThumbH > VisH then ThumbH := VisH;
+      TrackRange := VisH - ThumbH;
+      ScrollRange := FDragScrollBox.ScrollHeight - VisH;
+      if TrackRange > 0 then
+      begin
+        FDragScrollBox.ScrollY := FDragStartScroll +
+          ((Y - FDragStartPos) / TrackRange) * ScrollRange;
+        FDragScrollBox.ClampOwnScroll;
+        Repaint;
+      end;
+    end
+    else if FDragScrollAxis = 2 then
+    begin
+      if FDragScrollBox.ScrollWidth <= VisW then Exit;
+      var ThumbW := Max(20, VisW * (VisW / FDragScrollBox.ScrollWidth));
+      if ThumbW > VisW then ThumbW := VisW;
+      TrackRange := VisW - ThumbW;
+      ScrollRange := FDragScrollBox.ScrollWidth - VisW;
+      if TrackRange > 0 then
+      begin
+        FDragScrollBox.ScrollX := FDragStartScroll +
+          ((X - FDragStartPos) / TrackRange) * ScrollRange;
+        FDragScrollBox.ClampOwnScroll;
+        Repaint;
+      end;
+    end;
+    Exit;
+  end;
+
+  // Passive hover tracking: remember the innermost scrollable box under
+  // the mouse so mousewheel can be routed to it.
+  Target := FindScrollableAncestor(X, Y, ACX, ACY);
+  if Target <> FHoverScrollBox then
+  begin
+    FHoverScrollBox := Target;
+    FHoverScrollBoxCX := ACX;
+    FHoverScrollBoxCY := ACY;
+  end
+  else if Assigned(Target) then
+  begin
+    FHoverScrollBoxCX := ACX;
+    FHoverScrollBoxCY := ACY;
   end;
 end;
 
@@ -6584,7 +7206,10 @@ procedure TTina4HTMLRender.MouseUp(Button: TMouseButton; Shift: TShiftState;
   X, Y: Single);
 
   // General hit-test: find the deepest element at (HitX, HitY).
-  // Returns the THTMLTag of the innermost element hit.
+  // Returns the THTMLTag of the innermost element hit. HitX/HitY are in
+  // the coordinate system of Box's parent (so Box.X/Y are added). When
+  // recursing into a scrollable box we subtract its ScrollX/Y so the
+  // children are tested against their scrolled positions.
   function HitTestElement(Box: TLayoutBox; OffX, OffY: Single;
     HitX, HitY: Single): THTMLTag;
   var
@@ -6611,14 +7236,33 @@ procedure TTina4HTMLRender.MouseUp(Button: TMouseButton; Shift: TShiftState;
         Result := Box.Tag;  // Candidate — may be overridden by a deeper child
     end;
 
-    // Recurse children — deepest match wins
+    // Recurse children — deepest match wins. When Box is scrollable, its
+    // children were painted at (CX - ScrollX, CY - ScrollY), so we mirror
+    // that shift here when hit-testing. Also, only test children if the
+    // hit point is actually inside the box's padding box (prevents picking
+    // up children that are clipped out of view).
     CX := AbsX + Box.ContentLeft;
     CY := AbsY + Box.ContentTop;
-    for var Child in Box.Children do
+    if Box.IsScrollableX or Box.IsScrollableY then
     begin
-      ChildResult := HitTestElement(Child, CX, CY, HitX, HitY);
-      if ChildResult <> nil then
-        Result := ChildResult;
+      if (HitX < CX) or (HitX > CX + Box.ContentWidth) or
+         (HitY < CY) or (HitY > CY + Box.ContentHeight) then
+        Exit;
+      for var Child in Box.Children do
+      begin
+        ChildResult := HitTestElement(Child, CX - Box.ScrollX, CY - Box.ScrollY, HitX, HitY);
+        if ChildResult <> nil then
+          Result := ChildResult;
+      end;
+    end
+    else
+    begin
+      for var Child in Box.Children do
+      begin
+        ChildResult := HitTestElement(Child, CX, CY, HitX, HitY);
+        if ChildResult <> nil then
+          Result := ChildResult;
+      end;
     end;
   end;
 
@@ -6630,6 +7274,12 @@ begin
     Exit;
   end;
   FMouseDownOnScroll := False;
+  if Assigned(FDragScrollBox) and (FDragScrollAxis <> 0) then
+  begin
+    FDragScrollBox := nil;
+    FDragScrollAxis := 0;
+    Exit;
+  end;
 
   if (Button = TMouseButton.mbLeft) and Assigned(FLayoutEngine) and
      Assigned(FLayoutEngine.Root) then

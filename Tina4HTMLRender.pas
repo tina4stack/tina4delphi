@@ -3442,6 +3442,10 @@ procedure TLayoutEngine.LayoutInlineChildren(Box: TLayoutBox; AvailWidth: Single
 var
   CursorX, CursorY, LineH: Single;
   SpaceW: Single;
+  // When the container has `white-space: nowrap`, inline and inline-block
+  // children must stay on a single line regardless of whether they exceed
+  // the available width. The overflow clip (if any) hides the spill.
+  NoWrap: Boolean;
 
   procedure ProcessInlineBox(Child: TLayoutBox);
   var
@@ -3461,7 +3465,7 @@ var
     begin
       LayoutImage(Child, AvailWidth);
       var ImgW := Child.MarginBoxWidth;
-      if (CursorX > 0) and (CursorX + ImgW > AvailWidth) then
+      if (not NoWrap) and (CursorX > 0) and (CursorX + ImgW > AvailWidth) then
       begin
         CursorY := CursorY + LineH;
         CursorX := 0;
@@ -3478,7 +3482,7 @@ var
     begin
       LayoutFormControl(Child, AvailWidth);
       var CtlW := Child.MarginBoxWidth;
-      if (CursorX > 0) and (CursorX + CtlW > AvailWidth) then
+      if (not NoWrap) and (CursorX > 0) and (CursorX + CtlW > AvailWidth) then
       begin
         CursorY := CursorY + LineH;
         CursorX := 0;
@@ -3503,8 +3507,13 @@ var
       if Child.Style.ExplicitWidth < 0 then
         Child.Style.TextAlign := TTextAlign.Leading;
 
-      // Use shrink-to-fit width: lay out with available width, then shrink
-      LayoutBlock(Child, AvailWidth - CursorX);
+      // Use shrink-to-fit width: lay out with available width, then shrink.
+      // Under nowrap the child shouldn't be squeezed by the remaining row
+      // space — give it the full container width so its intrinsic size wins.
+      if NoWrap then
+        LayoutBlock(Child, AvailWidth)
+      else
+        LayoutBlock(Child, AvailWidth - CursorX);
       // If no explicit width, shrink content width to fit children
       if Child.Style.ExplicitWidth < 0 then
       begin
@@ -3519,7 +3528,7 @@ var
       Child.Style.TextAlign := SavedAlign;
 
       var BoxW := Child.MarginBoxWidth;
-      if (CursorX > 0) and (CursorX + BoxW > AvailWidth) then
+      if (not NoWrap) and (CursorX > 0) and (CursorX + BoxW > AvailWidth) then
       begin
         CursorY := CursorY + LineH;
         CursorX := 0;
@@ -3629,7 +3638,8 @@ var
         WordH := GetLineHeight(Child.Style);
 
         // overflow-wrap: break-word — break long words that overflow
-        if BreakWord and (not BreakAll) and (WordW > AvailWidth) and (W.Length > 1) then
+        // (nowrap containers never break — the word must stay on one line)
+        if (not NoWrap) and BreakWord and (not BreakAll) and (WordW > AvailWidth) and (W.Length > 1) then
         begin
           // Split the word character by character
           var Remaining := W;
@@ -3673,8 +3683,8 @@ var
           Continue;
         end;
 
-        // Wrap if needed
-        if (CursorX > 0) and (CursorX + WordW > AvailWidth) then
+        // Wrap if needed — but not if the parent has white-space: nowrap
+        if (not NoWrap) and (CursorX > 0) and (CursorX + WordW > AvailWidth) then
         begin
           CursorY := CursorY + LineH;
           CursorX := 0;
@@ -3789,6 +3799,7 @@ var
   end;
 
 begin
+  NoWrap := SameText(Box.Style.WhiteSpace, 'nowrap');
   CursorX := Box.Style.TextIndent;
   CursorY := 0;
   LineH := GetLineHeight(Box.Style);

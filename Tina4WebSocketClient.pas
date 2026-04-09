@@ -75,6 +75,7 @@ type
     FReconnectAttempt: Integer;
     FLastPingSent: TDateTime;
     FPingTimer: TThread;
+    FPingWake: TEvent;  // signaled to wake ping thread out of its wait early
 
     function GetHeaders: TStrings;
     procedure SetHeaders(const Value: TStrings);
@@ -425,6 +426,7 @@ begin
   inherited;
   FHeaders := TStringList.Create;
   FWriteLock := TCriticalSection.Create;
+  FPingWake := TEvent.Create(nil, True, False, '');  // manual-reset, initially non-signaled
   FAutoReconnect := True;
   FReconnectInterval := 3000;
   FReconnectMaxAttempts := 10;
@@ -438,6 +440,7 @@ destructor TTina4WebSocketClient.Destroy;
 begin
   FAutoReconnect := False; // prevent reconnect during teardown
   Disconnect;
+  FPingWake.Free;
   FWriteLock.Free;
   FHeaders.Free;
   inherited;
@@ -957,37 +960,64 @@ end;
 
 procedure TTina4WebSocketClient.DoDisconnectInternal(ACode: Integer;
   const AReason: string; AStartReconnect: Boolean);
+var
+  CalledFromReader: Boolean;
 begin
+  // If the read thread itself triggered this (e.g. server dropped the
+  // connection), we cannot WaitFor it from inside itself — that would
+  // deadlock. Detect and skip the join; the reader will free itself.
+  CalledFromReader := Assigned(FReadThread) and
+                      (TThread.CurrentThread.ThreadID = FReadThread.ThreadID);
+
   StopPingTimer;
 
-  // Stop read thread
+  // Signal the read thread to stop. We must close the socket BEFORE WaitFor —
+  // the read thread is blocked in a kernel recv() with no timeout and will not
+  // wake up until either data arrives or the socket is shut down. Closing
+  // here causes recv to return immediately with an error, the thread catches
+  // the exception and exits, and our WaitFor returns in milliseconds instead
+  // of waiting for the OS-level TCP timeout (which can be minutes).
   if Assigned(FReadThread) then
-  begin
     FReadThread.Terminate;
-    // Don't wait forever — the thread should exit on its own
-    FReadThread.WaitFor;
-    FreeAndNil(FReadThread);
-  end;
 
-  // Clean up TLS
+  // Shut down TLS first so any in-progress SSL_read returns immediately
   if Assigned(FSSL) then
   begin
     try
       FSSL.Shutdown;
     except
     end;
-    FreeAndNil(FSSL);
   end;
 
-  // Clean up socket
+  // Close the underlying socket — this is what unblocks the read thread
   if Assigned(FSocket) then
   begin
     try
       FSocket.Close(True);
     except
     end;
-    FreeAndNil(FSocket);
   end;
+
+  // Now safe to wait for the read thread — it will exit promptly
+  if Assigned(FReadThread) and not CalledFromReader then
+  begin
+    FReadThread.WaitFor;
+    FreeAndNil(FReadThread);
+  end
+  else if CalledFromReader then
+  begin
+    // Reader is unwinding itself — let it free on exit and just drop our ref
+    FReadThread.FreeOnTerminate := True;
+    FReadThread := nil;
+  end;
+
+  // Free TLS context after the reader has stopped touching it
+  if Assigned(FSSL) then
+    FreeAndNil(FSSL);
+
+  // Free the socket object
+  if Assigned(FSocket) then
+    FreeAndNil(FSocket);
 
   FState := wsClosed;
   FireDisconnected(ACode, AReason);
@@ -1037,6 +1067,8 @@ begin
   if FPingInterval <= 0 then
     Exit;
 
+  FPingWake.ResetEvent;
+
   FPingTimer := TThread.CreateAnonymousThread(
     procedure
     var
@@ -1044,16 +1076,17 @@ begin
     begin
       while not TThread.Current.CheckTerminated and (FState = wsOpen) do
       begin
-        Sleep(FPingInterval);
-        if FState = wsOpen then
-        begin
-          try
-            PingFrame := EncodeFrame(WS_OP_PING, nil);
-            RawSend(PingFrame);
-            FLastPingSent := Now;
-          except
-            Break;
-          end;
+        // Wait up to FPingInterval ms — wakes immediately if FPingWake is signaled
+        if FPingWake.WaitFor(FPingInterval) = wrSignaled then
+          Break;
+        if TThread.Current.CheckTerminated or (FState <> wsOpen) then
+          Break;
+        try
+          PingFrame := EncodeFrame(WS_OP_PING, nil);
+          RawSend(PingFrame);
+          FLastPingSent := Now;
+        except
+          Break;
         end;
       end;
     end
@@ -1067,6 +1100,7 @@ begin
   if Assigned(FPingTimer) then
   begin
     FPingTimer.Terminate;
+    FPingWake.SetEvent;  // wake the wait so the thread exits immediately
     FPingTimer.WaitFor;
     FreeAndNil(FPingTimer);
   end;

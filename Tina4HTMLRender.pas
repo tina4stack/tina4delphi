@@ -312,6 +312,8 @@ type
   THTMLElementClickEvent = procedure(Sender: TObject; const ObjectName, MethodName: string; Params: TStrings) of object;
   /// <summary>Event for anchor link clicks. Set Handled := True to prevent default processing.</summary>
   THTMLLinkClickEvent = procedure(Sender: TObject; const AURL: string; var Handled: Boolean) of object;
+  /// <summary>Event fired when the scroll position changes (wheel, drag, or programmatic).</summary>
+  TTina4ScrollEvent = procedure(Sender: TObject; ScrollX, ScrollY: Single) of object;
 
   TNativeFormControl = record
     Control: TControl;
@@ -338,10 +340,13 @@ type
     FFileCache: TFileCache;
     FCacheEnabled: Boolean;
     FCacheDir: string;
+    FScrollX: Single;
     FScrollY: Single;
+    FContentWidth: Single;
     FContentHeight: Single;
     FNeedRelayout: Boolean;
     FScrollBarWidth: Single;
+    FOnScroll: TTina4ScrollEvent;
     FIsLayoutting: Boolean;
     FMouseDownOnScroll: Boolean;
     FScrollDragStart: Single;
@@ -394,6 +399,13 @@ type
     procedure PaintScrollBar(Canvas: TCanvas);
     function ScrollBarVisible: Boolean;
     procedure ClampScroll;
+    procedure SetScrollX(const Value: Single);
+    procedure SetScrollY(const Value: Single);
+    function GetViewportWidth: Single;
+    function GetViewportHeight: Single;
+    function FindLayoutBoxByTag(Box: TLayoutBox; Target: THTMLTag): TLayoutBox;
+    function GetBoxAbsolutePosition(Target: TLayoutBox; out AX, AY: Single): Boolean;
+    procedure DoScrollChanged;
   protected
     procedure Paint; override;
     procedure Resize; override;
@@ -480,6 +492,22 @@ type
     /// <param name="AName">Variable name (used as {{ name }} in Twig templates).</param>
     /// <param name="AValue">Variable value.</param>
     procedure SetTwigVariable(const AName: string; const AValue: string);
+    /// <summary>Scrolls to an absolute position. Values are clamped to content bounds.</summary>
+    /// <param name="X">Absolute horizontal scroll offset in pixels.</param>
+    /// <param name="Y">Absolute vertical scroll offset in pixels.</param>
+    procedure ScrollTo(X, Y: Single);
+    /// <summary>Scrolls by a relative delta from the current scroll position.</summary>
+    /// <param name="DX">Horizontal pixels to scroll (positive = right).</param>
+    /// <param name="DY">Vertical pixels to scroll (positive = down).</param>
+    procedure ScrollBy(DX, DY: Single);
+    /// <summary>Scrolls to the top-left of the content (0, 0).</summary>
+    procedure ScrollToTop;
+    /// <summary>Scrolls to the bottom of the content. Useful for chat / log views.</summary>
+    procedure ScrollToBottom;
+    /// <summary>Scrolls so the element with the given id is visible in the viewport.</summary>
+    /// <param name="Id">The HTML id attribute of the element to scroll into view.</param>
+    /// <returns>True if the element was found and scrolled to, False otherwise.</returns>
+    function ScrollToElement(const Id: string): Boolean;
   published
     /// <summary>HTML content to render. Changes trigger automatic relayout and repaint.</summary>
     property HTML: TStringList read GetHTML write SetHTML;
@@ -510,6 +538,20 @@ type
     /// prevent default processing. Used by TTina4HTMLPages for page navigation.
     /// </summary>
     property OnLinkClick: THTMLLinkClickEvent read FOnLinkClick write FOnLinkClick;
+    /// <summary>Current horizontal scroll offset in pixels. Setting clamps to [0..ContentWidth - ViewportWidth].</summary>
+    property ScrollX: Single read FScrollX write SetScrollX;
+    /// <summary>Current vertical scroll offset in pixels. Setting clamps to [0..ContentHeight - ViewportHeight].</summary>
+    property ScrollY: Single read FScrollY write SetScrollY;
+    /// <summary>Total width of the laid-out content in pixels (read-only).</summary>
+    property ContentWidth: Single read FContentWidth;
+    /// <summary>Total height of the laid-out content in pixels (read-only).</summary>
+    property ContentHeight: Single read FContentHeight;
+    /// <summary>Width of the visible viewport (Width minus vertical scrollbar if visible).</summary>
+    property ViewportWidth: Single read GetViewportWidth;
+    /// <summary>Height of the visible viewport.</summary>
+    property ViewportHeight: Single read GetViewportHeight;
+    /// <summary>Fires when the scroll position changes from any source (wheel, drag, programmatic).</summary>
+    property OnScroll: TTina4ScrollEvent read FOnScroll write FOnScroll;
     property Align;
     property Anchors;
     property ClipChildren;
@@ -4004,7 +4046,9 @@ begin
   FTwig := TStringList.Create;
   FTwig.OnChange := FTwigChange;
   FTwigEngine := TTina4Twig.Create('');
+  FScrollX := 0;
   FScrollY := 0;
+  FContentWidth := 0;
   FContentHeight := 0;
   FNeedRelayout := True;
   FScrollBarWidth := 12;
@@ -4353,6 +4397,10 @@ begin
       AvailW := AvailW - FScrollBarWidth;
     FLayoutEngine.Layout(FParser.Root, AvailW, FStyleSheet);
     FContentHeight := FLayoutEngine.TotalHeight;
+    if Assigned(FLayoutEngine.Root) then
+      FContentWidth := FLayoutEngine.Root.MarginBoxWidth
+    else
+      FContentWidth := 0;
     ClampScroll;
     FNeedRelayout := False;
 
@@ -4372,11 +4420,174 @@ begin
 end;
 
 procedure TTina4HTMLRender.ClampScroll;
+var
+  VW, VH: Single;
 begin
-  if FContentHeight <= Height then
+  VW := GetViewportWidth;
+  VH := GetViewportHeight;
+  if FContentHeight <= VH then
     FScrollY := 0
   else
-    FScrollY := Max(0, Min(FScrollY, FContentHeight - Height));
+    FScrollY := Max(0, Min(FScrollY, FContentHeight - VH));
+  if FContentWidth <= VW then
+    FScrollX := 0
+  else
+    FScrollX := Max(0, Min(FScrollX, FContentWidth - VW));
+end;
+
+function TTina4HTMLRender.GetViewportWidth: Single;
+begin
+  Result := Width;
+  if ScrollBarVisible then
+    Result := Result - FScrollBarWidth;
+  if Result < 0 then Result := 0;
+end;
+
+function TTina4HTMLRender.GetViewportHeight: Single;
+begin
+  Result := Height;
+  if Result < 0 then Result := 0;
+end;
+
+procedure TTina4HTMLRender.DoScrollChanged;
+begin
+  if Assigned(FOnScroll) then
+    FOnScroll(Self, FScrollX, FScrollY);
+end;
+
+procedure TTina4HTMLRender.SetScrollX(const Value: Single);
+var
+  Old: Single;
+begin
+  Old := FScrollX;
+  FScrollX := Value;
+  ClampScroll;
+  if SameValue(Old, FScrollX) then Exit;
+  PositionFormControls;
+  Repaint;
+  DoScrollChanged;
+end;
+
+procedure TTina4HTMLRender.SetScrollY(const Value: Single);
+var
+  Old: Single;
+begin
+  Old := FScrollY;
+  FScrollY := Value;
+  ClampScroll;
+  if SameValue(Old, FScrollY) then Exit;
+  PositionFormControls;
+  Repaint;
+  DoScrollChanged;
+end;
+
+procedure TTina4HTMLRender.ScrollTo(X, Y: Single);
+var
+  OldX, OldY: Single;
+begin
+  OldX := FScrollX;
+  OldY := FScrollY;
+  FScrollX := X;
+  FScrollY := Y;
+  ClampScroll;
+  if SameValue(OldX, FScrollX) and SameValue(OldY, FScrollY) then Exit;
+  PositionFormControls;
+  Repaint;
+  DoScrollChanged;
+end;
+
+procedure TTina4HTMLRender.ScrollBy(DX, DY: Single);
+begin
+  ScrollTo(FScrollX + DX, FScrollY + DY);
+end;
+
+procedure TTina4HTMLRender.ScrollToTop;
+begin
+  ScrollTo(0, 0);
+end;
+
+procedure TTina4HTMLRender.ScrollToBottom;
+begin
+  ScrollTo(FScrollX, FContentHeight);
+end;
+
+function TTina4HTMLRender.FindLayoutBoxByTag(Box: TLayoutBox;
+  Target: THTMLTag): TLayoutBox;
+begin
+  Result := nil;
+  if not Assigned(Box) then Exit;
+  if Box.Tag = Target then Exit(Box);
+  for var Child in Box.Children do
+  begin
+    Result := FindLayoutBoxByTag(Child, Target);
+    if Assigned(Result) then Exit;
+  end;
+end;
+
+function TTina4HTMLRender.GetBoxAbsolutePosition(Target: TLayoutBox;
+  out AX, AY: Single): Boolean;
+
+  function Walk(Box: TLayoutBox; OffX, OffY: Single): Boolean;
+  var
+    AbsX, AbsY, CX, CY: Single;
+  begin
+    AbsX := OffX + Box.X;
+    AbsY := OffY + Box.Y;
+    if Box = Target then
+    begin
+      AX := AbsX;
+      AY := AbsY;
+      Exit(True);
+    end;
+    CX := AbsX + Box.ContentLeft;
+    CY := AbsY + Box.ContentTop;
+    for var C in Box.Children do
+      if Walk(C, CX, CY) then Exit(True);
+    Result := False;
+  end;
+
+begin
+  AX := 0;
+  AY := 0;
+  Result := False;
+  if not Assigned(FLayoutEngine) or not Assigned(FLayoutEngine.Root) or
+     not Assigned(Target) then Exit;
+  Result := Walk(FLayoutEngine.Root, 0, 0);
+end;
+
+function TTina4HTMLRender.ScrollToElement(const Id: string): Boolean;
+var
+  Tag: THTMLTag;
+  Box: TLayoutBox;
+  AX, AY, NewX, NewY, VW, VH: Single;
+begin
+  Result := False;
+  Tag := GetElementById(Id);
+  if not Assigned(Tag) then Exit;
+  if not Assigned(FLayoutEngine) or not Assigned(FLayoutEngine.Root) then Exit;
+  Box := FindLayoutBoxByTag(FLayoutEngine.Root, Tag);
+  if not Assigned(Box) then Exit;
+  if not GetBoxAbsolutePosition(Box, AX, AY) then Exit;
+
+  VW := GetViewportWidth;
+  VH := GetViewportHeight;
+  NewX := FScrollX;
+  NewY := FScrollY;
+
+  // Vertical: bring into view if outside
+  if AY < FScrollY then
+    NewY := AY
+  else if (AY + Box.MarginBoxHeight) > (FScrollY + VH) then
+    NewY := (AY + Box.MarginBoxHeight) - VH;
+
+  // Horizontal: bring into view if outside
+  if AX < FScrollX then
+    NewX := AX
+  else if (AX + Box.MarginBoxWidth) > (FScrollX + VW) then
+    NewX := (AX + Box.MarginBoxWidth) - VW;
+
+  ScrollTo(NewX, NewY);
+  Result := True;
 end;
 
 procedure TTina4HTMLRender.ClearFormControls;
@@ -4964,14 +5175,14 @@ begin
     // Checkbox/radio: position at content area (includes negative margin offset)
     if (Rec.Control is TCheckBox) or (Rec.Control is TRadioButton) then
     begin
-      Rec.Control.Position.X := AX + Rec.Box.ContentLeft;
+      Rec.Control.Position.X := AX + Rec.Box.ContentLeft - FScrollX;
       Rec.Control.Position.Y := AY + Rec.Box.ContentTop - FScrollY;
       Rec.Control.Width := Rec.Box.ContentWidth;
       Rec.Control.Height := Rec.Box.ContentHeight;
     end
     else
     begin
-      Rec.Control.Position.X := AX;
+      Rec.Control.Position.X := AX - FScrollX;
       Rec.Control.Position.Y := AY - FScrollY;
       Rec.Control.Width := Rec.Box.ContentWidth + Rec.Box.Style.Padding.Left + Rec.Box.Style.Padding.Right;
       Rec.Control.Height := Rec.Box.ContentHeight + Rec.Box.Style.Padding.Top + Rec.Box.Style.Padding.Bottom;
@@ -5000,7 +5211,7 @@ begin
 
     // Paint layout tree
     if Assigned(FLayoutEngine.Root) then
-      PaintBox(Canvas, FLayoutEngine.Root, 0, -FScrollY);
+      PaintBox(Canvas, FLayoutEngine.Root, -FScrollX, -FScrollY);
 
     // Scrollbar
     if ScrollBarVisible then
@@ -5711,9 +5922,7 @@ end;
 procedure TTina4HTMLRender.MouseWheel(Shift: TShiftState; WheelDelta: Integer;
   var Handled: Boolean);
 begin
-  FScrollY := FScrollY - WheelDelta;
-  ClampScroll;
-  Repaint;
+  SetScrollY(FScrollY - WheelDelta);
   Handled := True;
 end;
 
@@ -5996,9 +6205,7 @@ begin
     if TrackRange > 0 then
     begin
       var ScrollRange := FContentHeight - Height;
-      FScrollY := FScrollDragThumbStart + (Delta / TrackRange) * ScrollRange;
-      ClampScroll;
-      Repaint;
+      SetScrollY(FScrollDragThumbStart + (Delta / TrackRange) * ScrollRange);
     end;
   end;
 end;
@@ -6057,7 +6264,7 @@ begin
   if (Button = TMouseButton.mbLeft) and Assigned(FLayoutEngine) and
      Assigned(FLayoutEngine.Root) then
   begin
-    var HitTag := HitTestElement(FLayoutEngine.Root, 0, 0, X, Y + FScrollY);
+    var HitTag := HitTestElement(FLayoutEngine.Root, 0, 0, X + FScrollX, Y + FScrollY);
 
     // Check if a <label> was clicked — toggle associated checkbox/radio
     if Assigned(HitTag) then
@@ -6107,7 +6314,7 @@ begin
   if (Button = TMouseButton.mbLeft) and Assigned(FOnLinkClick) and
      Assigned(FLayoutEngine) and Assigned(FLayoutEngine.Root) then
   begin
-    var HitTag2 := HitTestElement(FLayoutEngine.Root, 0, 0, X, Y + FScrollY);
+    var HitTag2 := HitTestElement(FLayoutEngine.Root, 0, 0, X + FScrollX, Y + FScrollY);
     if Assigned(HitTag2) then
     begin
       var WalkTag := HitTag2;

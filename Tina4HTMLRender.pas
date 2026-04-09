@@ -2689,7 +2689,7 @@ begin
   if Decls.TryGetValue('vertical-align', Temp) and not ShouldSkip(Temp) then
     Style.VerticalAlign := Temp.ToLower;
   if Decls.TryGetValue('white-space', Temp) and not ShouldSkip(Temp) then
-    Style.WhiteSpace := Temp.ToLower;
+    Style.WhiteSpace := Temp.Trim.ToLower;
   if Decls.TryGetValue('box-sizing', Temp) and not ShouldSkip(Temp) then
     Style.BoxSizing := Temp.ToLower;
   if Decls.TryGetValue('cursor', Temp) and not ShouldSkip(Temp) then

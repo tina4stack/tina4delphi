@@ -7447,7 +7447,7 @@ begin
   begin
     var DX := X - FPanStartX;
     var DY := Y - FPanStartY;
-    if (not FPanActive) and (Abs(DX) + Abs(DY) > 8) then
+    if (not FPanActive) and (Abs(DX) + Abs(DY) > 3) then
     begin
       FPanActive := True;
       if Abs(DX) > Abs(DY) then
@@ -7716,7 +7716,7 @@ begin
       begin
         var DX := GX - FPanStartX;
         var DY := GY - FPanStartY;
-        if (not FPanActive) and (Abs(DX) + Abs(DY) > 8) then
+        if (not FPanActive) and (Abs(DX) + Abs(DY) > 3) then
         begin
           FPanActive := True;
           if Abs(DX) > Abs(DY) then

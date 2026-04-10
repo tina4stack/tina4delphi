@@ -409,6 +409,7 @@ type
     FPanViewportStartScrollX, FPanViewportStartScrollY: Single;
     FDebugLastMouseX, FDebugLastMouseY: Single;
     FDebugMouseHit: Boolean;
+    FDebugOverlay: Boolean;
     // Scrollbar fade — scrollbars are fully visible for a short window after
     // any scroll activity, then fade out. Mobile-friendly default so bars
     // don't clutter the content when idle. FScrollbarLastActivity is a tick
@@ -417,6 +418,7 @@ type
     FScrollbarLastActivity: Cardinal;
     FScrollbarFadeTimer: TTimer;
     FScrollBarsVisible: Boolean;
+    FScrollBarOverlay: Boolean;
     // Preserves per-box ScrollX/ScrollY across relayouts. The layout tree is
     // rebuilt from scratch each pass, so without this the user's scroll
     // position in inner divs would reset every relayout. Keyed by DOM tag.
@@ -437,6 +439,7 @@ type
     procedure ScrollbarFadeTimerTick(Sender: TObject);
     procedure BumpScrollbarVisibility;
     function GetScrollbarOpacity: Single;
+    procedure SetScrollBarOverlay(const Value: Boolean);
     procedure SetHTML(const Value: TStringList);
     function GetHTML: TStringList;
     procedure SetCacheEnabled(Value: Boolean);
@@ -686,6 +689,13 @@ type
     /// Set to False on mobile where scrollbars clutter the UI and swiping is the
     /// primary scroll gesture. Default is True.</summary>
     property ScrollBarsVisible: Boolean read FScrollBarsVisible write FScrollBarsVisible default True;
+    /// <summary>When True, scrollbars are thin overlay indicators that don't reserve
+    /// layout width and have no track background — iOS/Android style. When False
+    /// (default), scrollbars use a 12px track with background. Set True on mobile.</summary>
+    property ScrollBarOverlay: Boolean read FScrollBarOverlay write SetScrollBarOverlay default False;
+    /// <summary>When True, shows a red dot at the last MouseDown position and
+    /// debug info (Width, Height, ContentHeight, pan state). Off by default.</summary>
+    property DebugOverlay: Boolean read FDebugOverlay write FDebugOverlay default False;
     property Align;
     property Anchors;
     property ClipChildren;
@@ -4407,6 +4417,8 @@ begin
   FPanIsViewport := False;
   FPanActive := False;
   FScrollBarsVisible := True;
+  FScrollBarOverlay := False;
+  FDebugOverlay := False;
   FScrollbarLastActivity := 0;
   FScrollbarFadeTimer := TTimer.Create(Self);
   FScrollbarFadeTimer.Interval := 33;  // ~30 fps while fading
@@ -4458,6 +4470,18 @@ begin
     Repaint;
     Exit;
   end;
+  Repaint;
+end;
+
+procedure TTina4HTMLRender.SetScrollBarOverlay(const Value: Boolean);
+begin
+  if FScrollBarOverlay = Value then Exit;
+  FScrollBarOverlay := Value;
+  if Value then
+    FScrollBarWidth := 4   // thin overlay indicator
+  else
+    FScrollBarWidth := 12; // classic desktop scrollbar
+  FNeedRelayout := True;
   Repaint;
 end;
 
@@ -4856,7 +4880,7 @@ begin
     end;
 
     var AvailW := Width;
-    if ScrollBarVisible then
+    if ScrollBarVisible and (not FScrollBarOverlay) then
       AvailW := AvailW - FScrollBarWidth;
     FLayoutEngine.Layout(FParser.Root, AvailW, FStyleSheet);
     FContentHeight := FLayoutEngine.TotalHeight;
@@ -4908,7 +4932,8 @@ end;
 function TTina4HTMLRender.GetViewportWidth: Single;
 begin
   Result := Width;
-  if ScrollBarVisible then
+  // Overlay scrollbars don't reserve layout width
+  if ScrollBarVisible and (not FScrollBarOverlay) then
     Result := Result - FScrollBarWidth;
   if Result < 0 then Result := 0;
 end;
@@ -5858,8 +5883,8 @@ begin
     if ScrollBarVisible then
       PaintScrollBar(Canvas);
 
-    // DEBUG — red dot + info where MouseDown last fired
-    if FDebugMouseHit then
+    // Debug overlay — red dot + info where MouseDown last fired
+    if FDebugOverlay and FDebugMouseHit then
     begin
       Canvas.Fill.Kind := TBrushKind.Solid;
       Canvas.Fill.Color := TAlphaColors.Red;
@@ -6151,19 +6176,36 @@ begin
   GetBoxScrollBarRects(Box, CX, CY, VTrack, VThumb, HTrack, HThumb, HasV, HasH);
   Canvas.Fill.Kind := TBrushKind.Solid;
 
-  if HasV then
+  if FScrollBarOverlay then
   begin
-    Canvas.Fill.Color := $FFF0F0F0;
-    Canvas.FillRect(VTrack, Op);
-    Canvas.Fill.Color := $FF999999;
-    Canvas.FillRect(VThumb, 4, 4, AllCorners, Op);
-  end;
-  if HasH then
+    // Overlay style: thin thumb only, no track background
+    if HasV then
+    begin
+      Canvas.Fill.Color := $80000000;
+      Canvas.FillRect(VThumb, SB / 2, SB / 2, AllCorners, Op);
+    end;
+    if HasH then
+    begin
+      Canvas.Fill.Color := $80000000;
+      Canvas.FillRect(HThumb, SB / 2, SB / 2, AllCorners, Op);
+    end;
+  end
+  else
   begin
-    Canvas.Fill.Color := $FFF0F0F0;
-    Canvas.FillRect(HTrack, Op);
-    Canvas.Fill.Color := $FF999999;
-    Canvas.FillRect(HThumb, 4, 4, AllCorners, Op);
+    if HasV then
+    begin
+      Canvas.Fill.Color := $FFF0F0F0;
+      Canvas.FillRect(VTrack, Op);
+      Canvas.Fill.Color := $FF999999;
+      Canvas.FillRect(VThumb, 4, 4, AllCorners, Op);
+    end;
+    if HasH then
+    begin
+      Canvas.Fill.Color := $FFF0F0F0;
+      Canvas.FillRect(HTrack, Op);
+      Canvas.Fill.Color := $FF999999;
+      Canvas.FillRect(HThumb, 4, 4, AllCorners, Op);
+    end;
   end;
   // Fill the bottom-right corner square when both bars are showing
   if HasV and HasH then
@@ -6915,16 +6957,27 @@ begin
   ThumbH := Max(20, Height * Ratio);
   ThumbY := (FScrollY / (FContentHeight - Height)) * (Height - ThumbH);
 
-  TrackRect := RectF(Width - FScrollBarWidth, 0, Width, Height);
-  ThumbRect := RectF(Width - FScrollBarWidth + 2, ThumbY,
-    Width - 2, ThumbY + ThumbH);
-
   Canvas.Fill.Kind := TBrushKind.Solid;
-  Canvas.Fill.Color := $FFF0F0F0;
-  Canvas.FillRect(TrackRect, Op);
 
-  Canvas.Fill.Color := $FF999999;
-  Canvas.FillRect(ThumbRect, 4, 4, AllCorners, Op);
+  if FScrollBarOverlay then
+  begin
+    // Overlay style: thin rounded thumb, no track background
+    ThumbRect := RectF(Width - FScrollBarWidth, ThumbY,
+      Width, ThumbY + ThumbH);
+    Canvas.Fill.Color := $80000000;  // semi-transparent black
+    Canvas.FillRect(ThumbRect, FScrollBarWidth / 2, FScrollBarWidth / 2, AllCorners, Op);
+  end
+  else
+  begin
+    // Classic style: track background + thumb
+    TrackRect := RectF(Width - FScrollBarWidth, 0, Width, Height);
+    ThumbRect := RectF(Width - FScrollBarWidth + 2, ThumbY,
+      Width - 2, ThumbY + ThumbH);
+    Canvas.Fill.Color := $FFF0F0F0;
+    Canvas.FillRect(TrackRect, Op);
+    Canvas.Fill.Color := $FF999999;
+    Canvas.FillRect(ThumbRect, 4, 4, AllCorners, Op);
+  end;
 end;
 
 procedure TTina4HTMLRender.MouseWheel(Shift: TShiftState; WheelDelta: Integer;
@@ -7234,11 +7287,13 @@ var
   OnThumb: Boolean;
 begin
   inherited;
-  // DEBUG — visual proof that MouseDown fires
-  FDebugMouseHit := True;
-  FDebugLastMouseX := X;
-  FDebugLastMouseY := Y;
-  Repaint;
+  if FDebugOverlay then
+  begin
+    FDebugMouseHit := True;
+    FDebugLastMouseX := X;
+    FDebugLastMouseY := Y;
+    Repaint;
+  end;
 
   FPanBox := nil;
   FPanIsViewport := False;

@@ -405,6 +405,8 @@ type
     FPanActive: Boolean;
     FPanStartX, FPanStartY: Single;
     FPanStartScrollX, FPanStartScrollY: Single;
+    FDebugLastMouseX, FDebugLastMouseY: Single;
+    FDebugMouseHit: Boolean;
     // Scrollbar fade — scrollbars are fully visible for a short window after
     // any scroll activity, then fade out. Mobile-friendly default so bars
     // don't clutter the content when idle. FScrollbarLastActivity is a tick
@@ -2847,14 +2849,12 @@ end;
 
 function TLayoutBox.IsScrollableX: Boolean;
 begin
-  Result := (Style.OverflowX = 'auto') or (Style.OverflowX = 'scroll') or
-            (Style.OverflowX = 'hidden');
+  Result := (Style.OverflowX = 'auto') or (Style.OverflowX = 'scroll');
 end;
 
 function TLayoutBox.IsScrollableY: Boolean;
 begin
-  Result := (Style.OverflowY = 'auto') or (Style.OverflowY = 'scroll') or
-            (Style.OverflowY = 'hidden');
+  Result := (Style.OverflowY = 'auto') or (Style.OverflowY = 'scroll');
 end;
 
 function TLayoutBox.NeedsScrollBarX: Boolean;
@@ -5856,6 +5856,32 @@ begin
     // Scrollbar
     if ScrollBarVisible then
       PaintScrollBar(Canvas);
+
+    // DEBUG — red dot + info where MouseDown last fired
+    if FDebugMouseHit then
+    begin
+      Canvas.Fill.Kind := TBrushKind.Solid;
+      Canvas.Fill.Color := TAlphaColors.Red;
+      Canvas.FillEllipse(RectF(FDebugLastMouseX - 10, FDebugLastMouseY - 10,
+        FDebugLastMouseX + 10, FDebugLastMouseY + 10), 1.0);
+      // Show key values as text
+      var Info := Format('W=%.0f H=%.0f CH=%.0f VP=%s BOX=%s',
+        [Width, Height, FContentHeight,
+         BoolToStr(FPanIsViewport, True), BoolToStr(Assigned(FPanBox), True)]);
+      var TL := TTextLayoutManager.DefaultTextLayout.Create;
+      try
+        TL.BeginUpdate;
+        TL.Font.Size := 14;
+        TL.Font.Family := 'Arial';
+        TL.Color := TAlphaColors.Red;
+        TL.Text := Info;
+        TL.MaxSize := PointF(Width, 30);
+        TL.EndUpdate;
+        TL.RenderLayout(Canvas);
+      finally
+        TL.Free;
+      end;
+    end;
   finally
     Canvas.EndScene;
   end;
@@ -7207,6 +7233,12 @@ var
   OnThumb: Boolean;
 begin
   inherited;
+  // DEBUG — visual proof that MouseDown fires
+  FDebugMouseHit := True;
+  FDebugLastMouseX := X;
+  FDebugLastMouseY := Y;
+  Repaint;
+
   FPanBox := nil;
   FPanIsViewport := False;
   FPanActive := False;

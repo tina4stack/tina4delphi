@@ -408,6 +408,13 @@ type
     FPanStartX, FPanStartY: Single;
     FPanStartScrollX, FPanStartScrollY: Single;
     FPanViewportStartScrollX, FPanViewportStartScrollY: Single;
+    FPanLastX, FPanLastY: Single;       // previous move position for velocity
+    FPanLastTick: Cardinal;             // tick of previous move
+    FPanVelocityX, FPanVelocityY: Single; // pixels/ms at release
+    // Inertia timer — decays velocity after finger lifts
+    FInertiaTimer: TTimer;
+    FInertiaBox: TLayoutBox;            // nil = viewport inertia
+    FInertiaVX, FInertiaVY: Single;     // current velocity (decaying)
     FDebugLastMouseX, FDebugLastMouseY: Single;
     FDebugMouseHit: Boolean;
     FDebugOverlay: Boolean;
@@ -441,6 +448,7 @@ type
     procedure BumpScrollbarVisibility;
     function GetScrollbarOpacity: Single;
     procedure SetScrollBarOverlay(const Value: Boolean);
+    procedure InertiaTimerTick(Sender: TObject);
     procedure SetHTML(const Value: TStringList);
     function GetHTML: TStringList;
     procedure SetCacheEnabled(Value: Boolean);
@@ -4418,6 +4426,13 @@ begin
   FPanIsViewport := False;
   FPanActive := False;
   FPanViaGesture := False;
+  FPanVelocityX := 0;
+  FPanVelocityY := 0;
+  FInertiaTimer := TTimer.Create(Self);
+  FInertiaTimer.Interval := 16;  // ~60 fps
+  FInertiaTimer.Enabled := False;
+  FInertiaTimer.OnTimer := InertiaTimerTick;
+  FInertiaBox := nil;
   FScrollBarsVisible := True;
   FScrollBarOverlay := False;
   FDebugOverlay := False;
@@ -4473,6 +4488,42 @@ begin
     Exit;
   end;
   Repaint;
+end;
+
+procedure TTina4HTMLRender.InertiaTimerTick(Sender: TObject);
+const
+  FRICTION = 0.92;      // velocity multiplier per tick (~60fps)
+  MIN_VELOCITY = 0.5;   // stop when velocity drops below this
+begin
+  FInertiaVX := FInertiaVX * FRICTION;
+  FInertiaVY := FInertiaVY * FRICTION;
+
+  if (Abs(FInertiaVX) < MIN_VELOCITY) and (Abs(FInertiaVY) < MIN_VELOCITY) then
+  begin
+    FInertiaTimer.Enabled := False;
+    FInertiaBox := nil;
+    Exit;
+  end;
+
+  if Assigned(FInertiaBox) then
+  begin
+    // Inner box inertia
+    if FInertiaBox.IsScrollableX and (FInertiaBox.ScrollWidth > FInertiaBox.ContentWidth + 0.5) then
+      FInertiaBox.ScrollX := FInertiaBox.ScrollX + FInertiaVX;
+    if FInertiaBox.IsScrollableY and (FInertiaBox.ScrollHeight > FInertiaBox.ContentHeight + 0.5) then
+      FInertiaBox.ScrollY := FInertiaBox.ScrollY + FInertiaVY;
+    FInertiaBox.ClampOwnScroll;
+    BumpScrollbarVisibility;
+    Repaint;
+  end
+  else
+  begin
+    // Viewport inertia
+    if Abs(FInertiaVY) >= MIN_VELOCITY then
+      SetScrollY(FScrollY + FInertiaVY);
+    if Abs(FInertiaVX) >= MIN_VELOCITY then
+      SetScrollX(FScrollX + FInertiaVX);
+  end;
 end;
 
 procedure TTina4HTMLRender.SetScrollBarOverlay(const Value: Boolean);
@@ -7297,6 +7348,9 @@ begin
     Repaint;
   end;
 
+  // Stop any running inertia
+  FInertiaTimer.Enabled := False;
+  FInertiaBox := nil;
   // Don't reset pan state if gesture system is already driving
   if not FPanViaGesture then
   begin
@@ -7305,6 +7359,11 @@ begin
     FPanActive := False;
     FPanLockedAxis := 0;
   end;
+  FPanLastX := X;
+  FPanLastY := Y;
+  FPanLastTick := TThread.GetTickCount;
+  FPanVelocityX := 0;
+  FPanVelocityY := 0;
   // First check viewport scrollbar (outer)
   if ScrollBarVisible and (X >= Width - FScrollBarWidth) then
   begin
@@ -7447,7 +7506,7 @@ begin
   begin
     var DX := X - FPanStartX;
     var DY := Y - FPanStartY;
-    if (not FPanActive) and (Abs(DX) + Abs(DY) > 3) then
+    if (not FPanActive) and (Abs(DX) + Abs(DY) > 1) then
     begin
       FPanActive := True;
       if Abs(DX) > Abs(DY) then
@@ -7457,6 +7516,18 @@ begin
     end;
     if FPanActive then
     begin
+      // Track velocity for inertia
+      var Now := TThread.GetTickCount;
+      var Elapsed := Now - FPanLastTick;
+      if Elapsed > 0 then
+      begin
+        FPanVelocityX := -(X - FPanLastX) / Elapsed * 16; // normalize to ~16ms frame
+        FPanVelocityY := -(Y - FPanLastY) / Elapsed * 16;
+      end;
+      FPanLastX := X;
+      FPanLastY := Y;
+      FPanLastTick := Now;
+
       if FPanIsViewport then
       begin
         // Viewport pan: lock to dominant axis
@@ -7577,12 +7648,29 @@ begin
     Exit;
   end;
 
-  // If a pan was active, swallow the click so the underlying element
-  // (e.g. a nav button or link) doesn't fire at the end of a swipe.
+  // If a pan was active, start inertia and swallow the click.
   PanWasActive := FPanActive;
+  if PanWasActive then
+  begin
+    // Launch inertia if velocity is significant
+    if (Abs(FPanVelocityX) > 0.5) or (Abs(FPanVelocityY) > 0.5) then
+    begin
+      FInertiaBox := FPanBox;  // nil = viewport
+      FInertiaVX := FPanVelocityX;
+      FInertiaVY := FPanVelocityY;
+      // For viewport, only apply on the locked axis
+      if FPanIsViewport then
+      begin
+        if FPanLockedAxis = 1 then FInertiaVX := 0
+        else FInertiaVY := 0;
+      end;
+      FInertiaTimer.Enabled := True;
+    end;
+  end;
   FPanBox := nil;
   FPanIsViewport := False;
   FPanActive := False;
+  FPanLockedAxis := 0;
   if PanWasActive then
     Exit;
 
@@ -7700,9 +7788,29 @@ begin
         FPanStartScrollX := FScrollX;
         FPanStartScrollY := FScrollY;
       end;
+      FPanLastX := GX;
+      FPanLastY := GY;
+      FPanLastTick := TThread.GetTickCount;
+      FPanVelocityX := 0;
+      FPanVelocityY := 0;
+      FInertiaTimer.Enabled := False;
+      FInertiaBox := nil;
     end
     else if TInteractiveGestureFlag.gfEnd in EventInfo.Flags then
     begin
+      // Start inertia if velocity is significant
+      if FPanActive and ((Abs(FPanVelocityX) > 0.5) or (Abs(FPanVelocityY) > 0.5)) then
+      begin
+        FInertiaBox := FPanBox;
+        FInertiaVX := FPanVelocityX;
+        FInertiaVY := FPanVelocityY;
+        if FPanIsViewport then
+        begin
+          if FPanLockedAxis = 1 then FInertiaVX := 0
+          else FInertiaVY := 0;
+        end;
+        FInertiaTimer.Enabled := True;
+      end;
       FPanBox := nil;
       FPanIsViewport := False;
       FPanActive := False;
@@ -7711,12 +7819,11 @@ begin
     end
     else
     begin
-      // Same simplified pan logic as MouseMove
       if FPanIsViewport or Assigned(FPanBox) then
       begin
         var DX := GX - FPanStartX;
         var DY := GY - FPanStartY;
-        if (not FPanActive) and (Abs(DX) + Abs(DY) > 3) then
+        if (not FPanActive) and (Abs(DX) + Abs(DY) > 1) then
         begin
           FPanActive := True;
           if Abs(DX) > Abs(DY) then
@@ -7726,6 +7833,18 @@ begin
         end;
         if FPanActive then
         begin
+          // Track velocity
+          var Now := TThread.GetTickCount;
+          var Elapsed := Now - FPanLastTick;
+          if Elapsed > 0 then
+          begin
+            FPanVelocityX := -(GX - FPanLastX) / Elapsed * 16;
+            FPanVelocityY := -(GY - FPanLastY) / Elapsed * 16;
+          end;
+          FPanLastX := GX;
+          FPanLastY := GY;
+          FPanLastTick := Now;
+
           if FPanIsViewport then
           begin
             if FPanLockedAxis = 1 then

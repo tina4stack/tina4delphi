@@ -512,6 +512,7 @@ type
     procedure MouseMove(Shift: TShiftState; X, Y: Single); override;
     procedure MouseUp(Button: TMouseButton; Shift: TShiftState;
       X, Y: Single); override;
+    procedure CMGesture(var EventInfo: TGestureEventInfo); override;
   public
     /// <summary>Creates the HTML renderer and initialises internal caches, parser, and layout engine.</summary>
     constructor Create(AOwner: TComponent); override;
@@ -5576,9 +5577,11 @@ begin
   end;
   Rect.XRadius := Radius;
   Rect.YRadius := Radius;
-  Rect.HitTest := True;
+  // HitTest must be False so touches pass through to the renderer's
+  // MouseDown/Move/Up for pan-to-scroll. Clicks are handled via the
+  // canvas-based FClickableRegions system in MouseUp instead.
+  Rect.HitTest := False;
   Rect.Cursor := crHandPoint;
-  Rect.OnClick := HandleFormControlClick;
 
   var Lbl := TLabel.Create(Rect);
   Lbl.Parent := Rect;
@@ -5683,16 +5686,8 @@ begin
       end
       else if (InputType = 'submit') or (InputType = 'button') or (InputType = 'reset') then
       begin
-        var BtnText := '';
-        if Val <> '' then
-          BtnText := Val
-        else if InputType = 'submit' then
-          BtnText := 'Submit'
-        else if InputType = 'reset' then
-          BtnText := 'Reset'
-        else
-          BtnText := 'Button';
-        Ctl := CreateStyledButton(Box, BtnText);
+        // Do NOT create native FMX controls for button-type inputs.
+        // They are painted on canvas and clicks handled via FClickableRegions.
       end
       else
       begin
@@ -5730,11 +5725,11 @@ begin
     end
     else if TN = 'button' then
     begin
-      var BtnText := '';
-      for var C in Box.Tag.Children do
-        if C.TagName = '#text' then BtnText := BtnText + C.Text;
-      if BtnText = '' then BtnText := Box.Tag.GetAttribute('value', 'Button');
-      Ctl := CreateStyledButton(Box, BtnText.Trim);
+      // Do NOT create a native FMX control for <button> elements.
+      // They are painted on canvas via CSS styling and clicks are handled
+      // via FClickableRegions in MouseUp. Creating a native TRectangle
+      // with HitTest=True would intercept touch events and break
+      // pan-to-scroll inside scrollable containers.
     end;
 
     if Assigned(Ctl) then
@@ -5895,11 +5890,22 @@ begin
     end;
   end;
 
-  // Skip form control boxes — they are rendered as native FMX controls
-  if Assigned(Box.Tag) and
-     (SameText(Box.Tag.TagName, 'input') or SameText(Box.Tag.TagName, 'button') or
-      SameText(Box.Tag.TagName, 'textarea') or SameText(Box.Tag.TagName, 'select')) then
-    Exit;
+  // Skip form control boxes — they are rendered as native FMX controls.
+  // <button> and button-type <input> are NOT skipped: they're painted on
+  // canvas so they participate in clickable region recording and don't
+  // block pan-to-scroll with native HitTest interception.
+  if Assigned(Box.Tag) then
+  begin
+    var PaintTN := Box.Tag.TagName.ToLower;
+    if (PaintTN = 'textarea') or (PaintTN = 'select') then
+      Exit;
+    if PaintTN = 'input' then
+    begin
+      var PaintIT := Box.Tag.GetAttribute('type', 'text').ToLower;
+      if (PaintIT <> 'submit') and (PaintIT <> 'button') and (PaintIT <> 'reset') then
+        Exit;
+    end;
+  end;
 
   AbsX := OffX + Box.X;
   AbsY := OffY + Box.Y;
@@ -7533,6 +7539,85 @@ begin
       end;
     end;
   end;
+end;
+
+procedure TTina4HTMLRender.CMGesture(var EventInfo: TGestureEventInfo);
+var
+  Target: TLayoutBox;
+  ACX, ACY: Single;
+begin
+  // On mobile, pan gestures arrive here instead of MouseDown/Move/Up.
+  // Translate them into the same pan-scroll logic.
+  if EventInfo.GestureID = igiPan then
+  begin
+    var GX := EventInfo.Location.X - Position.X;
+    var GY := EventInfo.Location.Y - Position.Y;
+
+    if TInteractiveGestureFlag.gfBegin in EventInfo.Flags then
+    begin
+      // Equivalent to MouseDown — set up pan candidate
+      FPanBox := nil;
+      FPanIsViewport := False;
+      FPanActive := False;
+      Target := FindScrollableAncestor(GX, GY, ACX, ACY);
+      if Assigned(Target) then
+      begin
+        FPanBox := Target;
+        FPanIsViewport := False;
+        FPanStartX := GX;
+        FPanStartY := GY;
+        FPanStartScrollX := Target.ScrollX;
+        FPanStartScrollY := Target.ScrollY;
+      end
+      else
+      begin
+        FPanBox := nil;
+        FPanIsViewport := True;
+        FPanStartX := GX;
+        FPanStartY := GY;
+        FPanStartScrollX := FScrollX;
+        FPanStartScrollY := FScrollY;
+      end;
+    end
+    else if TInteractiveGestureFlag.gfEnd in EventInfo.Flags then
+    begin
+      // Equivalent to MouseUp — clear state, suppress click if panned
+      FPanBox := nil;
+      FPanIsViewport := False;
+      FPanActive := False;
+    end
+    else
+    begin
+      // Equivalent to MouseMove — apply pan delta
+      if FPanIsViewport or Assigned(FPanBox) then
+      begin
+        var DX := GX - FPanStartX;
+        var DY := GY - FPanStartY;
+        if (not FPanActive) and (Abs(DX) + Abs(DY) > 6) then
+          FPanActive := True;
+        if FPanActive then
+        begin
+          if FPanIsViewport then
+          begin
+            SetScrollY(FPanStartScrollY - DY);
+            SetScrollX(FPanStartScrollX - DX);
+          end
+          else
+          begin
+            if FPanBox.IsScrollableY and (FPanBox.ScrollHeight > FPanBox.ContentHeight + 0.5) then
+              FPanBox.ScrollY := FPanStartScrollY - DY;
+            if FPanBox.IsScrollableX and (FPanBox.ScrollWidth > FPanBox.ContentWidth + 0.5) then
+              FPanBox.ScrollX := FPanStartScrollX - DX;
+            FPanBox.ClampOwnScroll;
+            BumpScrollbarVisibility;
+            Repaint;
+          end;
+        end;
+      end;
+    end;
+  end
+  else
+    inherited;
 end;
 
 procedure TTina4HTMLRender.Resize;

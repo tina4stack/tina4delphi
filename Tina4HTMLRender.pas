@@ -4415,6 +4415,10 @@ begin
   // the cursor leaves the control's bounds. Without this, the scrollbar drag
   // state gets "stuck" because MouseUp never fires when released outside.
   AutoCapture := True;
+  // On mobile (Android/iOS), FMX routes touch events through its gesture
+  // system. Tell it we want raw pan gestures so touches arrive as
+  // MouseDown/Move/Up instead of being swallowed by the platform.
+  Touch.InteractiveGestures := [TInteractiveGesture.Pan];
 end;
 
 procedure TTina4HTMLRender.BumpScrollbarVisibility;

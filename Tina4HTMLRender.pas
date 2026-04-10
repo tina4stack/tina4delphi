@@ -412,6 +412,7 @@ type
     // repaints.
     FScrollbarLastActivity: Cardinal;
     FScrollbarFadeTimer: TTimer;
+    FScrollBarsVisible: Boolean;
     // Preserves per-box ScrollX/ScrollY across relayouts. The layout tree is
     // rebuilt from scratch each pass, so without this the user's scroll
     // position in inner divs would reset every relayout. Keyed by DOM tag.
@@ -676,6 +677,10 @@ type
     property ViewportHeight: Single read GetViewportHeight;
     /// <summary>Fires when the scroll position changes from any source (wheel, drag, programmatic).</summary>
     property OnScroll: TTina4ScrollEvent read FOnScroll write FOnScroll;
+    /// <summary>When False, scrollbars are never drawn but pan-to-scroll still works.
+    /// Set to False on mobile where scrollbars clutter the UI and swiping is the
+    /// primary scroll gesture. Default is True.</summary>
+    property ScrollBarsVisible: Boolean read FScrollBarsVisible write FScrollBarsVisible default True;
     property Align;
     property Anchors;
     property ClipChildren;
@@ -4398,6 +4403,7 @@ begin
   FPanBox := nil;
   FPanIsViewport := False;
   FPanActive := False;
+  FScrollBarsVisible := True;
   FScrollbarLastActivity := 0;
   FScrollbarFadeTimer := TTimer.Create(Self);
   FScrollbarFadeTimer.Interval := 33;  // ~30 fps while fading
@@ -4874,7 +4880,7 @@ end;
 
 function TTina4HTMLRender.ScrollBarVisible: Boolean;
 begin
-  Result := FContentHeight > Height;
+  Result := FScrollBarsVisible and (FContentHeight > Height);
 end;
 
 procedure TTina4HTMLRender.ClampScroll;
@@ -6100,6 +6106,7 @@ var
   HasV, HasH: Boolean;
   SB, Op: Single;
 begin
+  if not FScrollBarsVisible then Exit;
   Op := GetScrollbarOpacity;
   if Op <= 0.001 then Exit;
   GetBoxScrollBarRects(Box, CX, CY, VTrack, VThumb, HTrack, HThumb, HasV, HasH);
@@ -6858,6 +6865,7 @@ var
   TrackRect, ThumbRect: TRectF;
   Ratio, ThumbH, ThumbY, Op: Single;
 begin
+  if not FScrollBarsVisible then Exit;
   if FContentHeight <= Height then Exit;
   Op := GetScrollbarOpacity;
   if Op <= 0.001 then Exit;

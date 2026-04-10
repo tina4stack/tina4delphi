@@ -4419,9 +4419,8 @@ begin
   // state gets "stuck" because MouseUp never fires when released outside.
   AutoCapture := True;
   // On mobile (Android/iOS), FMX routes touch events through its gesture
-  // system. Tell it we want raw pan gestures so touches arrive as
-  // MouseDown/Move/Up instead of being swallowed by the platform.
-  Touch.InteractiveGestures := [TInteractiveGesture.Pan];
+  // system. We handle pan via CMGesture override — no need to set
+  // InteractiveGestures here as it can trigger unwanted keyboard overlays.
 end;
 
 procedure TTina4HTMLRender.BumpScrollbarVisibility;

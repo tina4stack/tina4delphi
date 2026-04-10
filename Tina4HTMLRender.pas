@@ -7351,14 +7351,13 @@ begin
   // Stop any running inertia
   FInertiaTimer.Enabled := False;
   FInertiaBox := nil;
-  // Don't reset pan state if gesture system is already driving
-  if not FPanViaGesture then
-  begin
-    FPanBox := nil;
-    FPanIsViewport := False;
-    FPanActive := False;
-    FPanLockedAxis := 0;
-  end;
+  // Always reset pan state on MouseDown — even if gesture was driving,
+  // a new touch should start fresh.
+  FPanBox := nil;
+  FPanIsViewport := False;
+  FPanActive := False;
+  FPanLockedAxis := 0;
+  FPanViaGesture := False;
   FPanLastX := X;
   FPanLastY := Y;
   FPanLastTick := TThread.GetTickCount;
@@ -7506,7 +7505,7 @@ begin
   begin
     var DX := X - FPanStartX;
     var DY := Y - FPanStartY;
-    if (not FPanActive) and (Abs(DX) + Abs(DY) > 1) then
+    if (not FPanActive) and (Abs(DX) + Abs(DY) > 5) then
     begin
       FPanActive := True;
       if Abs(DX) > Abs(DY) then
@@ -7823,7 +7822,7 @@ begin
       begin
         var DX := GX - FPanStartX;
         var DY := GY - FPanStartY;
-        if (not FPanActive) and (Abs(DX) + Abs(DY) > 1) then
+        if (not FPanActive) and (Abs(DX) + Abs(DY) > 5) then
         begin
           FPanActive := True;
           if Abs(DX) > Abs(DY) then

@@ -404,6 +404,7 @@ type
     FPanIsViewport: Boolean;
     FPanActive: Boolean;
     FPanLockedAxis: Integer;  // 0 = undecided, 1 = vertical, 2 = horizontal
+    FPanViaGesture: Boolean;  // True when CMGesture is driving the pan (skip MouseMove)
     FPanStartX, FPanStartY: Single;
     FPanStartScrollX, FPanStartScrollY: Single;
     FPanViewportStartScrollX, FPanViewportStartScrollY: Single;
@@ -4416,6 +4417,7 @@ begin
   FPanBox := nil;
   FPanIsViewport := False;
   FPanActive := False;
+  FPanViaGesture := False;
   FScrollBarsVisible := True;
   FScrollBarOverlay := False;
   FDebugOverlay := False;
@@ -7295,10 +7297,14 @@ begin
     Repaint;
   end;
 
-  FPanBox := nil;
-  FPanIsViewport := False;
-  FPanActive := False;
-  FPanLockedAxis := 0;
+  // Don't reset pan state if gesture system is already driving
+  if not FPanViaGesture then
+  begin
+    FPanBox := nil;
+    FPanIsViewport := False;
+    FPanActive := False;
+    FPanLockedAxis := 0;
+  end;
   // First check viewport scrollbar (outer)
   if ScrollBarVisible and (X >= Width - FScrollBarWidth) then
   begin
@@ -7429,6 +7435,10 @@ begin
     end;
     Exit;
   end;
+
+  // If the gesture system (CMGesture) is driving the pan, skip here to
+  // avoid double-handling the same touch on Android.
+  if FPanViaGesture then Exit;
 
   // Pan-to-scroll. When over an inner scrollable container, only scroll
   // that container on the axes it supports — never mix with viewport scroll.
@@ -7663,7 +7673,8 @@ begin
 
     if TInteractiveGestureFlag.gfBegin in EventInfo.Flags then
     begin
-      // Equivalent to MouseDown — set up pan candidate
+      // Mark that gesture system is driving the pan — MouseMove must skip
+      FPanViaGesture := True;
       FPanBox := nil;
       FPanIsViewport := False;
       FPanActive := False;
@@ -7696,6 +7707,7 @@ begin
       FPanIsViewport := False;
       FPanActive := False;
       FPanLockedAxis := 0;
+      FPanViaGesture := False;
     end
     else
     begin

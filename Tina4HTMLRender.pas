@@ -7221,8 +7221,9 @@ begin
   end;
   // Neither scrollbar was hit. Set up a pan candidate so a subsequent drag
   // can scroll via touch/swipe (primary gesture on mobile) or mouse drag.
-  // Prefer the innermost scrollable ancestor; fall back to the viewport if
-  // no inner container is scrollable here and the outer page itself scrolls.
+  // Prefer the innermost scrollable ancestor; always fall back to the
+  // viewport so the page can be scrolled by dragging anywhere — this is
+  // the primary scroll gesture on mobile where there is no mouse wheel.
   if Assigned(Target) then
   begin
     FPanBox := Target;
@@ -7232,7 +7233,7 @@ begin
     FPanStartScrollX := Target.ScrollX;
     FPanStartScrollY := Target.ScrollY;
   end
-  else if (FContentHeight > Height) or (FContentWidth > Width) then
+  else
   begin
     FPanBox := nil;
     FPanIsViewport := True;
@@ -7326,11 +7327,8 @@ begin
     begin
       if FPanIsViewport then
       begin
-        if FContentHeight > Height then
-          SetScrollY(FPanStartScrollY - DY);
-        // (SetScrollX exists and clamps; keep horizontal viewport pan simple)
-        if FContentWidth > Width then
-          SetScrollX(FPanStartScrollX - DX);
+        SetScrollY(FPanStartScrollY - DY);
+        SetScrollX(FPanStartScrollX - DX);
       end
       else
       begin

@@ -7351,13 +7351,12 @@ begin
   // Stop any running inertia
   FInertiaTimer.Enabled := False;
   FInertiaBox := nil;
-  // Always reset pan state on MouseDown — even if gesture was driving,
-  // a new touch should start fresh.
+  // Reset pan state. Don't clear FPanViaGesture — once gestures have been
+  // detected (Android/iOS), they remain the sole pan driver for the session.
   FPanBox := nil;
   FPanIsViewport := False;
   FPanActive := False;
   FPanLockedAxis := 0;
-  FPanViaGesture := False;
   FPanLastX := X;
   FPanLastY := Y;
   FPanLastTick := TThread.GetTickCount;
@@ -7494,8 +7493,9 @@ begin
     Exit;
   end;
 
-  // If the gesture system (CMGesture) is driving the pan, skip here to
-  // avoid double-handling the same touch on Android.
+  // If a gesture-driven pan has been seen this session, always defer to
+  // CMGesture for pan handling (Android/iOS). On desktop, CMGesture never
+  // fires so this stays False and MouseMove handles everything.
   if FPanViaGesture then Exit;
 
   // Pan-to-scroll. When over an inner scrollable container, only scroll
@@ -7760,7 +7760,10 @@ begin
 
     if TInteractiveGestureFlag.gfBegin in EventInfo.Flags then
     begin
-      // Mark that gesture system is driving the pan — MouseMove must skip
+      // Stop any running inertia from previous swipe
+      FInertiaTimer.Enabled := False;
+      FInertiaBox := nil;
+      // Mark that gesture system is driving the pan
       FPanViaGesture := True;
       FPanBox := nil;
       FPanIsViewport := False;

@@ -7390,14 +7390,42 @@ begin
     var DX := X - FPanStartX;
     var DY := Y - FPanStartY;
     // Promote to active pan once threshold crossed, and lock axis.
-    if (not FPanActive) and (Abs(DX) + Abs(DY) > 6) then
+    if (not FPanActive) and (Abs(DX) + Abs(DY) > 10) then
     begin
       FPanActive := True;
-      // Lock axis based on dominant direction of initial movement
-      if Abs(DX) > Abs(DY) then
-        FPanLockedAxis := 2  // horizontal
+      // Lock axis based on dominant direction. When over an inner box
+      // that can only scroll on one axis, bias towards that axis so
+      // imprecise mobile touches don't lock the wrong way.
+      if (not FPanIsViewport) and Assigned(FPanBox) then
+      begin
+        var CanH := FPanBox.IsScrollableX and (FPanBox.ScrollWidth > FPanBox.ContentWidth + 0.5);
+        var CanV := FPanBox.IsScrollableY and (FPanBox.ScrollHeight > FPanBox.ContentHeight + 0.5);
+        if CanH and (not CanV) then
+          // Horizontal-only container: lock horizontal unless clearly vertical
+          if Abs(DY) > Abs(DX) * 2 then
+            FPanLockedAxis := 1
+          else
+            FPanLockedAxis := 2
+        else if CanV and (not CanH) then
+          // Vertical-only container: lock vertical unless clearly horizontal
+          if Abs(DX) > Abs(DY) * 2 then
+            FPanLockedAxis := 2
+          else
+            FPanLockedAxis := 1
+        else
+          // Both or neither: use simple dominant direction
+          if Abs(DX) > Abs(DY) then
+            FPanLockedAxis := 2
+          else
+            FPanLockedAxis := 1;
+      end
       else
-        FPanLockedAxis := 1; // vertical
+      begin
+        if Abs(DX) > Abs(DY) then
+          FPanLockedAxis := 2
+        else
+          FPanLockedAxis := 1;
+      end;
     end;
     if FPanActive then
     begin
@@ -7674,13 +7702,24 @@ begin
       begin
         var DX := GX - FPanStartX;
         var DY := GY - FPanStartY;
-        if (not FPanActive) and (Abs(DX) + Abs(DY) > 6) then
+        if (not FPanActive) and (Abs(DX) + Abs(DY) > 10) then
         begin
           FPanActive := True;
-          if Abs(DX) > Abs(DY) then
-            FPanLockedAxis := 2
+          if (not FPanIsViewport) and Assigned(FPanBox) then
+          begin
+            var CanH := FPanBox.IsScrollableX and (FPanBox.ScrollWidth > FPanBox.ContentWidth + 0.5);
+            var CanV := FPanBox.IsScrollableY and (FPanBox.ScrollHeight > FPanBox.ContentHeight + 0.5);
+            if CanH and (not CanV) then
+              if Abs(DY) > Abs(DX) * 2 then FPanLockedAxis := 1 else FPanLockedAxis := 2
+            else if CanV and (not CanH) then
+              if Abs(DX) > Abs(DY) * 2 then FPanLockedAxis := 2 else FPanLockedAxis := 1
+            else
+              if Abs(DX) > Abs(DY) then FPanLockedAxis := 2 else FPanLockedAxis := 1;
+          end
           else
-            FPanLockedAxis := 1;
+          begin
+            if Abs(DX) > Abs(DY) then FPanLockedAxis := 2 else FPanLockedAxis := 1;
+          end;
         end;
         if FPanActive then
         begin

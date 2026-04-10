@@ -403,8 +403,10 @@ type
     FPanBox: TLayoutBox;
     FPanIsViewport: Boolean;
     FPanActive: Boolean;
+    FPanLockedAxis: Integer;  // 0 = undecided, 1 = vertical, 2 = horizontal
     FPanStartX, FPanStartY: Single;
     FPanStartScrollX, FPanStartScrollY: Single;
+    FPanViewportStartScrollX, FPanViewportStartScrollY: Single;
     FDebugLastMouseX, FDebugLastMouseY: Single;
     FDebugMouseHit: Boolean;
     // Scrollbar fade — scrollbars are fully visible for a short window after
@@ -7242,6 +7244,7 @@ begin
   FPanBox := nil;
   FPanIsViewport := False;
   FPanActive := False;
+  FPanLockedAxis := 0;
   // First check viewport scrollbar (outer)
   if ScrollBarVisible and (X >= Width - FScrollBarWidth) then
   begin
@@ -7278,6 +7281,12 @@ begin
   // Prefer the innermost scrollable ancestor; always fall back to the
   // viewport so the page can be scrolled by dragging anywhere — this is
   // the primary scroll gesture on mobile where there is no mouse wheel.
+  // Always capture viewport scroll start — if the swipe turns out to be
+  // vertical while over an inner horizontal-only scroller, we fall back
+  // to scrolling the viewport vertically.
+  FPanViewportStartScrollX := FScrollX;
+  FPanViewportStartScrollY := FScrollY;
+
   if Assigned(Target) then
   begin
     FPanBox := Target;
@@ -7370,27 +7379,61 @@ begin
   // Pan-to-scroll (touch swipe or mouse drag on content). Applies deltas
   // directly to the box's ScrollX/ScrollY. Natural scroll direction: drag
   // content DOWN -> scroll UP (so scroll position decreases as Y increases).
+  //
+  // Axis locking: when the swipe starts over an inner scrollable container,
+  // we lock to one axis once the dominant direction is clear. This prevents
+  // a horizontal nav swipe from also scrolling the page vertically (and
+  // vice versa). When horizontal is locked and the inner box can scroll
+  // horizontally, the inner box handles it; otherwise the viewport handles
+  // the dominant axis.
   if (FPanIsViewport or Assigned(FPanBox)) then
   begin
     var DX := X - FPanStartX;
     var DY := Y - FPanStartY;
-    // Promote to active pan once threshold crossed.
+    // Promote to active pan once threshold crossed, and lock axis.
     if (not FPanActive) and (Abs(DX) + Abs(DY) > 6) then
+    begin
       FPanActive := True;
+      // Lock axis based on dominant direction of initial movement
+      if Abs(DX) > Abs(DY) then
+        FPanLockedAxis := 2  // horizontal
+      else
+        FPanLockedAxis := 1; // vertical
+    end;
     if FPanActive then
     begin
       if FPanIsViewport then
       begin
-        SetScrollY(FPanStartScrollY - DY);
-        SetScrollX(FPanStartScrollX - DX);
+        // Viewport-only pan: apply on locked axis only
+        if FPanLockedAxis = 1 then
+          SetScrollY(FPanStartScrollY - DY)
+        else
+          SetScrollX(FPanStartScrollX - DX);
       end
       else
       begin
-        if FPanBox.IsScrollableY and (FPanBox.ScrollHeight > FPanBox.ContentHeight + 0.5) then
-          FPanBox.ScrollY := FPanStartScrollY - DY;
-        if FPanBox.IsScrollableX and (FPanBox.ScrollWidth > FPanBox.ContentWidth + 0.5) then
-          FPanBox.ScrollX := FPanStartScrollX - DX;
-        FPanBox.ClampOwnScroll;
+        // Inner box pan with axis locking.
+        // Horizontal lock + inner box can scroll horizontally → scroll inner box
+        // Vertical lock → scroll viewport vertically (inner box typically can't)
+        if FPanLockedAxis = 2 then
+        begin
+          if FPanBox.IsScrollableX and (FPanBox.ScrollWidth > FPanBox.ContentWidth + 0.5) then
+          begin
+            FPanBox.ScrollX := FPanStartScrollX - DX;
+            FPanBox.ClampOwnScroll;
+          end;
+        end
+        else
+        begin
+          // Vertical: try inner box first, fall back to viewport
+          if FPanBox.IsScrollableY and (FPanBox.ScrollHeight > FPanBox.ContentHeight + 0.5) then
+          begin
+            FPanBox.ScrollY := FPanStartScrollY - DY;
+            FPanBox.ClampOwnScroll;
+          end
+          else
+            SetScrollY(FPanViewportStartScrollY - DY);
+        end;
         BumpScrollbarVisibility;
         Repaint;
       end;
@@ -7595,6 +7638,9 @@ begin
       FPanBox := nil;
       FPanIsViewport := False;
       FPanActive := False;
+      FPanLockedAxis := 0;
+      FPanViewportStartScrollX := FScrollX;
+      FPanViewportStartScrollY := FScrollY;
       Target := FindScrollableAncestor(GX, GY, ACX, ACY);
       if Assigned(Target) then
       begin
@@ -7617,34 +7663,55 @@ begin
     end
     else if TInteractiveGestureFlag.gfEnd in EventInfo.Flags then
     begin
-      // Equivalent to MouseUp — clear state, suppress click if panned
       FPanBox := nil;
       FPanIsViewport := False;
       FPanActive := False;
+      FPanLockedAxis := 0;
     end
     else
     begin
-      // Equivalent to MouseMove — apply pan delta
+      // Equivalent to MouseMove — same axis-locked logic as MouseMove
       if FPanIsViewport or Assigned(FPanBox) then
       begin
         var DX := GX - FPanStartX;
         var DY := GY - FPanStartY;
         if (not FPanActive) and (Abs(DX) + Abs(DY) > 6) then
+        begin
           FPanActive := True;
+          if Abs(DX) > Abs(DY) then
+            FPanLockedAxis := 2
+          else
+            FPanLockedAxis := 1;
+        end;
         if FPanActive then
         begin
           if FPanIsViewport then
           begin
-            SetScrollY(FPanStartScrollY - DY);
-            SetScrollX(FPanStartScrollX - DX);
+            if FPanLockedAxis = 1 then
+              SetScrollY(FPanStartScrollY - DY)
+            else
+              SetScrollX(FPanStartScrollX - DX);
           end
           else
           begin
-            if FPanBox.IsScrollableY and (FPanBox.ScrollHeight > FPanBox.ContentHeight + 0.5) then
-              FPanBox.ScrollY := FPanStartScrollY - DY;
-            if FPanBox.IsScrollableX and (FPanBox.ScrollWidth > FPanBox.ContentWidth + 0.5) then
-              FPanBox.ScrollX := FPanStartScrollX - DX;
-            FPanBox.ClampOwnScroll;
+            if FPanLockedAxis = 2 then
+            begin
+              if FPanBox.IsScrollableX and (FPanBox.ScrollWidth > FPanBox.ContentWidth + 0.5) then
+              begin
+                FPanBox.ScrollX := FPanStartScrollX - DX;
+                FPanBox.ClampOwnScroll;
+              end;
+            end
+            else
+            begin
+              if FPanBox.IsScrollableY and (FPanBox.ScrollHeight > FPanBox.ContentHeight + 0.5) then
+              begin
+                FPanBox.ScrollY := FPanStartScrollY - DY;
+                FPanBox.ClampOwnScroll;
+              end
+              else
+                SetScrollY(FPanViewportStartScrollY - DY);
+            end;
             BumpScrollbarVisibility;
             Repaint;
           end;

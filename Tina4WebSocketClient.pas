@@ -439,7 +439,44 @@ end;
 destructor TTina4WebSocketClient.Destroy;
 begin
   FAutoReconnect := False; // prevent reconnect during teardown
-  Disconnect;
+
+  // Stop the read thread first — it may be blocked in recv/SSL_read.
+  // Terminate + socket close wakes it; then WaitFor to join cleanly.
+  if Assigned(FReadThread) then
+  begin
+    FReadThread.Terminate;
+    // Close socket to unblock recv. Only attempt if the socket is still
+    // connected — avoids Winsock errors during app finalization when the
+    // networking subsystem has already been torn down.
+    if Assigned(FSocket) and (FState in [wsOpen, wsConnecting, wsClosing]) then
+    begin
+      try
+        FSocket.Close(True);
+      except
+      end;
+    end;
+    try
+      FReadThread.WaitFor;
+    except
+    end;
+    FreeAndNil(FReadThread);
+  end;
+
+  // Shut down SSL after the reader has stopped
+  if Assigned(FSSL) then
+  begin
+    try
+      FSSL.Shutdown;
+    except
+    end;
+    FreeAndNil(FSSL);
+  end;
+
+  // Free socket object (already closed above)
+  FreeAndNil(FSocket);
+
+  StopPingTimer;
+  FState := wsClosed;
   FPingWake.Free;
   FWriteLock.Free;
   FHeaders.Free;

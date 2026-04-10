@@ -7445,7 +7445,7 @@ begin
     var DX := X - FPanStartX;
     var DY := Y - FPanStartY;
     // Promote to active pan once threshold crossed, and lock axis.
-    if (not FPanActive) and (Abs(DX) + Abs(DY) > 10) then
+    if (not FPanActive) and (Abs(DX) + Abs(DY) > 15) then
     begin
       FPanActive := True;
       // Lock axis based on dominant direction. When over an inner box
@@ -7457,13 +7457,13 @@ begin
         var CanV := FPanBox.IsScrollableY and (FPanBox.ScrollHeight > FPanBox.ContentHeight + 0.5);
         if CanH and (not CanV) then
           // Horizontal-only container: lock horizontal unless clearly vertical
-          if Abs(DY) > Abs(DX) * 2 then
+          if Abs(DY) > Abs(DX) * 3 then
             FPanLockedAxis := 1
           else
             FPanLockedAxis := 2
         else if CanV and (not CanH) then
           // Vertical-only container: lock vertical unless clearly horizontal
-          if Abs(DX) > Abs(DY) * 2 then
+          if Abs(DX) > Abs(DY) * 3 then
             FPanLockedAxis := 2
           else
             FPanLockedAxis := 1
@@ -7757,7 +7757,7 @@ begin
       begin
         var DX := GX - FPanStartX;
         var DY := GY - FPanStartY;
-        if (not FPanActive) and (Abs(DX) + Abs(DY) > 10) then
+        if (not FPanActive) and (Abs(DX) + Abs(DY) > 15) then
         begin
           FPanActive := True;
           if (not FPanIsViewport) and Assigned(FPanBox) then
@@ -7765,9 +7765,9 @@ begin
             var CanH := FPanBox.IsScrollableX and (FPanBox.ScrollWidth > FPanBox.ContentWidth + 0.5);
             var CanV := FPanBox.IsScrollableY and (FPanBox.ScrollHeight > FPanBox.ContentHeight + 0.5);
             if CanH and (not CanV) then
-              if Abs(DY) > Abs(DX) * 2 then FPanLockedAxis := 1 else FPanLockedAxis := 2
+              if Abs(DY) > Abs(DX) * 3 then FPanLockedAxis := 1 else FPanLockedAxis := 2
             else if CanV and (not CanH) then
-              if Abs(DX) > Abs(DY) * 2 then FPanLockedAxis := 2 else FPanLockedAxis := 1
+              if Abs(DX) > Abs(DY) * 3 then FPanLockedAxis := 2 else FPanLockedAxis := 1
             else
               if Abs(DX) > Abs(DY) then FPanLockedAxis := 2 else FPanLockedAxis := 1;
           end

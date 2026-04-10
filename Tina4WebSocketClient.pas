@@ -980,16 +980,10 @@ begin
   if Assigned(FReadThread) then
     FReadThread.Terminate;
 
-  // Shut down TLS first so any in-progress SSL_read returns immediately
-  if Assigned(FSSL) then
-  begin
-    try
-      FSSL.Shutdown;
-    except
-    end;
-  end;
-
-  // Close the underlying socket — this is what unblocks the read thread
+  // Close the underlying socket FIRST — this unblocks any in-progress
+  // SSL_read/recv in the read thread, causing it to return with an error.
+  // We must close the socket before touching FSSL, because the read thread
+  // may still be inside an SSL_read that holds a reference to FSSL.
   if Assigned(FSocket) then
   begin
     try
@@ -998,18 +992,26 @@ begin
     end;
   end;
 
-  // Now safe to wait for the read thread — it will exit promptly
+  // Wait for the read thread to exit before touching FSSL — otherwise
+  // we'd free/shutdown FSSL while the reader is still using it.
   if Assigned(FReadThread) and not CalledFromReader then
   begin
     FReadThread.WaitFor;
     FreeAndNil(FReadThread);
   end
   else if CalledFromReader then
-  begin
-    // Reader is unwinding itself — let it free on exit and just drop our ref
-    FReadThread.FreeOnTerminate := True;
     FReadThread := nil;
+
+  // Now safe to shut down TLS — no other thread is using it
+  if Assigned(FSSL) then
+  begin
+    try
+      FSSL.Shutdown;
+    except
+    end;
   end;
+
+  // (Read thread already waited-for and freed above)
 
   // Free TLS context after the reader has stopped touching it
   if Assigned(FSSL) then

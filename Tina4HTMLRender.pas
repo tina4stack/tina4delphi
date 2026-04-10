@@ -5834,6 +5834,8 @@ procedure TTina4HTMLRender.Paint;
 begin
   inherited;
   if Canvas = nil then Exit;
+  // Guard against zero-sized control (e.g. during design-time Align changes)
+  if (Width < 1) or (Height < 1) then Exit;
 
   if FNeedRelayout then
     DoLayout;
@@ -6335,6 +6337,8 @@ begin
   Shadow := Box.Style.BoxShadow;
   if not Shadow.Active then Exit;
   if Shadow.Inset then Exit;  // inset shadows not supported yet
+  // Guard against zero/negative dimensions (e.g. design-time with empty control)
+  if (Box.ContentWidth <= 0) or (Box.ContentHeight <= 0) then Exit;
 
   ML := ResolveAutoMargin(Box.Style.Margin.Left);
   MT := ResolveAutoMargin(Box.Style.Margin.Top);

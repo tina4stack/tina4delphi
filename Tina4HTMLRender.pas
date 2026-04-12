@@ -528,7 +528,9 @@ type
     procedure MouseMove(Shift: TShiftState; X, Y: Single); override;
     procedure MouseUp(Button: TMouseButton; Shift: TShiftState;
       X, Y: Single); override;
-    procedure CMGesture(var EventInfo: TGestureEventInfo); override;
+    // CMGesture override removed — MouseDown/Move/Up handle pan on all
+    // platforms including Android. CMGesture added latency and caused
+    // double-handling conflicts with MouseMove.
   public
     /// <summary>Creates the HTML renderer and initialises internal caches, parser, and layout engine.</summary>
     constructor Create(AOwner: TComponent); override;
@@ -7493,10 +7495,6 @@ begin
     Exit;
   end;
 
-  // If a gesture-driven pan has been seen this session, always defer to
-  // CMGesture for pan handling (Android/iOS). On desktop, CMGesture never
-  // fires so this stays False and MouseMove handles everything.
-  if FPanViaGesture then Exit;
 
   // Pan-to-scroll. When over an inner scrollable container, only scroll
   // that container on the axes it supports — never mix with viewport scroll.
@@ -7746,131 +7744,9 @@ begin
   end;
 end;
 
-procedure TTina4HTMLRender.CMGesture(var EventInfo: TGestureEventInfo);
-var
-  Target: TLayoutBox;
-  ACX, ACY: Single;
-begin
-  // On mobile, pan gestures arrive here instead of MouseDown/Move/Up.
-  // Translate them into the same pan-scroll logic.
-  if EventInfo.GestureID = igiPan then
-  begin
-    var GX := EventInfo.Location.X - Position.X;
-    var GY := EventInfo.Location.Y - Position.Y;
-
-    if TInteractiveGestureFlag.gfBegin in EventInfo.Flags then
-    begin
-      // Stop any running inertia from previous swipe
-      FInertiaTimer.Enabled := False;
-      FInertiaBox := nil;
-      // Mark that gesture system is driving the pan
-      FPanViaGesture := True;
-      FPanBox := nil;
-      FPanIsViewport := False;
-      FPanActive := False;
-      FPanLockedAxis := 0;
-      FPanViewportStartScrollX := FScrollX;
-      FPanViewportStartScrollY := FScrollY;
-      Target := FindScrollableAncestor(GX, GY, ACX, ACY);
-      if Assigned(Target) then
-      begin
-        FPanBox := Target;
-        FPanIsViewport := False;
-        FPanStartX := GX;
-        FPanStartY := GY;
-        FPanStartScrollX := Target.ScrollX;
-        FPanStartScrollY := Target.ScrollY;
-      end
-      else
-      begin
-        FPanBox := nil;
-        FPanIsViewport := True;
-        FPanStartX := GX;
-        FPanStartY := GY;
-        FPanStartScrollX := FScrollX;
-        FPanStartScrollY := FScrollY;
-      end;
-      FPanLastX := GX;
-      FPanLastY := GY;
-      FPanLastTick := TThread.GetTickCount;
-      FPanVelocityX := 0;
-      FPanVelocityY := 0;
-      FInertiaTimer.Enabled := False;
-      FInertiaBox := nil;
-    end
-    else if TInteractiveGestureFlag.gfEnd in EventInfo.Flags then
-    begin
-      // Start inertia if velocity is significant
-      if FPanActive and ((Abs(FPanVelocityX) > 0.5) or (Abs(FPanVelocityY) > 0.5)) then
-      begin
-        FInertiaBox := FPanBox;
-        FInertiaVX := FPanVelocityX;
-        FInertiaVY := FPanVelocityY;
-        if FPanIsViewport then
-        begin
-          if FPanLockedAxis = 1 then FInertiaVX := 0
-          else FInertiaVY := 0;
-        end;
-        FInertiaTimer.Enabled := True;
-      end;
-      FPanBox := nil;
-      FPanIsViewport := False;
-      FPanActive := False;
-      FPanLockedAxis := 0;
-      FPanViaGesture := False;
-    end
-    else
-    begin
-      if FPanIsViewport or Assigned(FPanBox) then
-      begin
-        var DX := GX - FPanStartX;
-        var DY := GY - FPanStartY;
-        if (not FPanActive) and (Abs(DX) + Abs(DY) > 5) then
-        begin
-          FPanActive := True;
-          if Abs(DX) > Abs(DY) then
-            FPanLockedAxis := 2
-          else
-            FPanLockedAxis := 1;
-        end;
-        if FPanActive then
-        begin
-          // Track velocity
-          var Now := TThread.GetTickCount;
-          var Elapsed := Now - FPanLastTick;
-          if Elapsed > 0 then
-          begin
-            FPanVelocityX := -(GX - FPanLastX) / Elapsed * 16;
-            FPanVelocityY := -(GY - FPanLastY) / Elapsed * 16;
-          end;
-          FPanLastX := GX;
-          FPanLastY := GY;
-          FPanLastTick := Now;
-
-          if FPanIsViewport then
-          begin
-            if FPanLockedAxis = 1 then
-              SetScrollY(FPanStartScrollY - DY)
-            else
-              SetScrollX(FPanStartScrollX - DX);
-          end
-          else
-          begin
-            if FPanBox.IsScrollableX and (FPanBox.ScrollWidth > FPanBox.ContentWidth + 0.5) then
-              FPanBox.ScrollX := FPanStartScrollX - DX;
-            if FPanBox.IsScrollableY and (FPanBox.ScrollHeight > FPanBox.ContentHeight + 0.5) then
-              FPanBox.ScrollY := FPanStartScrollY - DY;
-            FPanBox.ClampOwnScroll;
-            BumpScrollbarVisibility;
-            Repaint;
-          end;
-        end;
-      end;
-    end;
-  end
-  else
-    inherited;
-end;
+// CMGesture removed — MouseDown/Move/Up handle pan on all platforms.
+// Keeping the override stub so the class compiles if InteractiveGestures
+// were ever re-enabled, but it just calls inherited.
 
 procedure TTina4HTMLRender.Resize;
 begin

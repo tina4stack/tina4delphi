@@ -404,7 +404,6 @@ type
     FPanIsViewport: Boolean;
     FPanActive: Boolean;
     FPanLockedAxis: Integer;  // 0 = undecided, 1 = vertical, 2 = horizontal
-    FPanViaGesture: Boolean;  // True when CMGesture is driving the pan (skip MouseMove)
     FPanStartX, FPanStartY: Single;
     FPanStartScrollX, FPanStartScrollY: Single;
     FPanViewportStartScrollX, FPanViewportStartScrollY: Single;
@@ -4427,7 +4426,6 @@ begin
   FPanBox := nil;
   FPanIsViewport := False;
   FPanActive := False;
-  FPanViaGesture := False;
   FPanVelocityX := 0;
   FPanVelocityY := 0;
   FInertiaTimer := TTimer.Create(Self);
@@ -7353,8 +7351,7 @@ begin
   // Stop any running inertia
   FInertiaTimer.Enabled := False;
   FInertiaBox := nil;
-  // Reset pan state. Don't clear FPanViaGesture — once gestures have been
-  // detected (Android/iOS), they remain the sole pan driver for the session.
+  // Reset pan state for new touch.
   FPanBox := nil;
   FPanIsViewport := False;
   FPanActive := False;

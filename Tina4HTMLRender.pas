@@ -422,7 +422,6 @@ type
     FDebugLastMouseX, FDebugLastMouseY: Single;
     FDebugMouseHit: Boolean;
     FDebugOverlay: Boolean;
-    FStickyPass: Boolean;  // True during second paint pass for sticky elements
     // Scrollbar fade — scrollbars are fully visible for a short window after
     // any scroll activity, then fade out. Mobile-friendly default so bars
     // don't clutter the content when idle. FScrollbarLastActivity is a tick
@@ -5955,16 +5954,9 @@ begin
     Canvas.Fill.Color := TAlphaColors.White;
     Canvas.FillRect(LocalRect, 1.0);
 
-    // Paint layout tree — first pass: all non-sticky elements
-    FStickyPass := False;
+    // Paint layout tree
     if Assigned(FLayoutEngine.Root) then
       PaintBox(Canvas, FLayoutEngine.Root, -FScrollX, -FScrollY);
-
-    // Second pass: sticky elements paint on top of everything
-    FStickyPass := True;
-    if Assigned(FLayoutEngine.Root) then
-      PaintBox(Canvas, FLayoutEngine.Root, -FScrollX, -FScrollY);
-    FStickyPass := False;
 
     // Scrollbar
     if ScrollBarVisible then
@@ -6009,27 +6001,6 @@ var
 begin
   if Box.Style.Display = 'none' then Exit;
   if Box.Style.Visibility = 'hidden' then Exit;
-
-  // Two-pass rendering for sticky elements:
-  // Pass 1 (FStickyPass=False): paint everything EXCEPT sticky boxes
-  // Pass 2 (FStickyPass=True): paint ONLY sticky boxes (on top of all content)
-  var IsSticky := (Box.Style.CSSPosition = 'sticky');
-  if IsSticky and (not FStickyPass) then
-  begin
-    // Skip sticky box itself in pass 1, but still recurse siblings
-    Exit;
-  end;
-  if (not IsSticky) and FStickyPass then
-  begin
-    // In pass 2, skip non-sticky boxes but recurse children to find nested sticky
-    AbsX := OffX + Box.X;
-    AbsY := OffY + Box.Y;
-    CX := AbsX + Box.ContentLeft;
-    CY := AbsY + Box.ContentTop;
-    for var Child in Box.Children do
-      PaintBox(Canvas, Child, CX, CY);
-    Exit;
-  end;
 
   // Apply opacity by modifying alpha channels on background and border.
   // Text color keeps full alpha so it remains legible against the faded
@@ -6148,8 +6119,13 @@ begin
     var SaveState := Canvas.SaveState;
     try
       Canvas.IntersectClipRect(RectF(CX, CY, CX + Box.ContentWidth, CY + Box.ContentHeight));
+      // Paint non-sticky children first, then sticky on top
       for var Child in Box.Children do
-        PaintBox(Canvas, Child, CX - Box.ScrollX, CY - Box.ScrollY);
+        if Child.Style.CSSPosition <> 'sticky' then
+          PaintBox(Canvas, Child, CX - Box.ScrollX, CY - Box.ScrollY);
+      for var Child in Box.Children do
+        if Child.Style.CSSPosition = 'sticky' then
+          PaintBox(Canvas, Child, CX - Box.ScrollX, CY - Box.ScrollY);
 
       // text-overflow: ellipsis — paint "..." at right edge when content overflows
       if (Box.Style.TextOverflow = 'ellipsis') and (Box.Style.WhiteSpace = 'nowrap') then
@@ -6203,8 +6179,13 @@ begin
   end
   else
   begin
+    // Paint non-sticky children first, then sticky on top
     for var Child in Box.Children do
-      PaintBox(Canvas, Child, CX, CY);
+      if Child.Style.CSSPosition <> 'sticky' then
+        PaintBox(Canvas, Child, CX, CY);
+    for var Child in Box.Children do
+      if Child.Style.CSSPosition = 'sticky' then
+        PaintBox(Canvas, Child, CX, CY);
   end;
 end;
 

@@ -6364,6 +6364,10 @@ function TTina4HTMLRender.FindScrollableAncestor(HX, HY: Single;
     // POffX/POffY already include the parent's scroll translation.
     AbsX := POffX + Box.X - ParentScrollX;
     AbsY := POffY + Box.Y - ParentScrollY;
+    // Apply sticky pinning — same logic as PaintBox so hit-test matches paint
+    if (Box.Style.CSSPosition = 'sticky') and (Box.Style.CSSTop > -9990) then
+      if AbsY < Box.Style.CSSTop then
+        AbsY := Box.Style.CSSTop;
     Left := AbsX + Box.ContentLeft;
     Top := AbsY + Box.ContentTop;
     Right := Left + Box.ContentWidth;
@@ -7627,6 +7631,10 @@ procedure TTina4HTMLRender.MouseUp(Button: TMouseButton; Shift: TShiftState;
     if Box.Style.Display = 'none' then Exit;
     AbsX := OffX + Box.X;
     AbsY := OffY + Box.Y;
+    // Apply sticky pinning for hit-test
+    if (Box.Style.CSSPosition = 'sticky') and (Box.Style.CSSTop > -9990) then
+      if AbsY < Box.Style.CSSTop then
+        AbsY := Box.Style.CSSTop;
 
     // Check if click is inside this box
     if Assigned(Box.Tag) and (Box.Tag.TagName <> '#text') then

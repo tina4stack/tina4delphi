@@ -217,6 +217,11 @@ type
     OverflowWrap: string;
     TextOverflow: string;
     BoxShadow: TBoxShadow;
+    CSSPosition: string;   // 'static', 'relative', 'absolute', 'fixed', 'sticky'
+    CSSTop: Single;        // top offset for sticky/absolute positioning (-1 = not set)
+    CSSLeft: Single;
+    CSSRight: Single;
+    CSSBottom: Single;
     procedure SetBorderWidth(W: Single);
     procedure SetBorderColor(C: TAlphaColor);
     function BorderColor: TAlphaColor;  // returns Top color (legacy compat)
@@ -2024,6 +2029,11 @@ begin
   Result.OverflowWrap := 'normal';
   Result.TextOverflow := 'clip';
   Result.BoxShadow.Active := False;
+  Result.CSSPosition := 'static';
+  Result.CSSTop := -9999;
+  Result.CSSLeft := -9999;
+  Result.CSSRight := -9999;
+  Result.CSSBottom := -9999;
 end;
 
 class function TComputedStyle.ParseColor(const S: string): TAlphaColor;
@@ -2257,6 +2267,11 @@ begin
   Result.OverflowX := 'visible';
   Result.OverflowY := 'visible';
   Result.TextOverflow := 'clip';
+  Result.CSSPosition := 'static';
+  Result.CSSTop := -9999;
+  Result.CSSLeft := -9999;
+  Result.CSSRight := -9999;
+  Result.CSSBottom := -9999;
 
   if Tag = nil then Exit;
   TN := Tag.TagName.ToLower;
@@ -2746,6 +2761,17 @@ begin
     Style.BoxSizing := Temp.ToLower;
   if Decls.TryGetValue('cursor', Temp) and not ShouldSkip(Temp) then
     Style.CSSCursor := Temp.ToLower;
+
+  if Decls.TryGetValue('position', Temp) and not ShouldSkip(Temp) then
+    Style.CSSPosition := Temp.Trim.ToLower;
+  if Decls.TryGetValue('top', Temp) and not ShouldSkip(Temp) then
+    Style.CSSTop := ParseLength(Temp, Style.FontSize);
+  if Decls.TryGetValue('left', Temp) and not ShouldSkip(Temp) then
+    Style.CSSLeft := ParseLength(Temp, Style.FontSize);
+  if Decls.TryGetValue('right', Temp) and not ShouldSkip(Temp) then
+    Style.CSSRight := ParseLength(Temp, Style.FontSize);
+  if Decls.TryGetValue('bottom', Temp) and not ShouldSkip(Temp) then
+    Style.CSSBottom := ParseLength(Temp, Style.FontSize);
 
   if Decls.TryGetValue('text-transform', Temp) and not ShouldSkip(Temp) then
     Style.TextTransform := Temp.ToLower;
@@ -6016,6 +6042,17 @@ begin
 
   AbsX := OffX + Box.X;
   AbsY := OffY + Box.Y;
+
+  // Sticky positioning: when a sticky element's normal position has scrolled
+  // above its `top` value, pin it at that offset relative to the viewport.
+  // This makes headers stick to the top of the visible area while scrolling.
+  if (Box.Style.CSSPosition = 'sticky') and (Box.Style.CSSTop > -9990) then
+  begin
+    var StickyTop := Box.Style.CSSTop;
+    // If the element has scrolled above the sticky threshold, pin it
+    if AbsY < StickyTop then
+      AbsY := StickyTop;
+  end;
 
   // Viewport culling
   if (AbsY + Box.MarginBoxHeight < 0) or (AbsY > Height) then Exit;

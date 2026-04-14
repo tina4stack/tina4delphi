@@ -4334,6 +4334,12 @@ begin
   if IsPercentageValue(ExplW) then
     ExplW := ResolvePercentage(ExplW, AvailWidth);
 
+  // box-sizing: border-box means ExplW includes padding and border
+  if (ExplW > 0) and SameText(Box.Style.BoxSizing, 'border-box') then
+    ExplW := ExplW - Box.Style.Padding.Left - Box.Style.Padding.Right
+             - Box.Style.BorderWidths.Horz;
+  if ExplW < 0 then ExplW := 0;
+
   if TN = 'textarea' then
   begin
     if ExplW > 0 then

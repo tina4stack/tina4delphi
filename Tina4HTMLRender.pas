@@ -217,6 +217,9 @@ type
     OverflowWrap: string;
     TextOverflow: string;
     BoxShadow: TBoxShadow;
+    ObjectFit: string;     // 'fill' (default), 'cover', 'contain', 'none', 'scale-down'
+    BackgroundImage: string; // URL from background-image: url(...)
+    BackgroundSize: string;  // 'auto', 'cover', 'contain', or explicit size
     CSSPosition: string;   // 'static', 'relative', 'absolute', 'fixed', 'sticky'
     CSSTop: Single;        // top offset for sticky/absolute positioning (-1 = not set)
     CSSLeft: Single;
@@ -2029,6 +2032,9 @@ begin
   Result.OverflowWrap := 'normal';
   Result.TextOverflow := 'clip';
   Result.BoxShadow.Active := False;
+  Result.ObjectFit := 'fill';
+  Result.BackgroundImage := '';
+  Result.BackgroundSize := 'auto';
   Result.CSSPosition := 'static';
   Result.CSSTop := -9999;
   Result.CSSLeft := -9999;
@@ -2267,6 +2273,9 @@ begin
   Result.OverflowX := 'visible';
   Result.OverflowY := 'visible';
   Result.TextOverflow := 'clip';
+  Result.ObjectFit := 'fill';
+  Result.BackgroundImage := '';
+  Result.BackgroundSize := 'auto';
   Result.CSSPosition := 'static';
   Result.CSSTop := -9999;
   Result.CSSLeft := -9999;
@@ -2761,6 +2770,24 @@ begin
     Style.BoxSizing := Temp.ToLower;
   if Decls.TryGetValue('cursor', Temp) and not ShouldSkip(Temp) then
     Style.CSSCursor := Temp.ToLower;
+
+  if Decls.TryGetValue('object-fit', Temp) and not ShouldSkip(Temp) then
+    Style.ObjectFit := Temp.Trim.ToLower;
+  if Decls.TryGetValue('background-image', Temp) and not ShouldSkip(Temp) then
+  begin
+    // Extract URL from url('...' ) or url(...)
+    var BgTemp := Temp.Trim;
+    if BgTemp.ToLower.StartsWith('url(') then
+    begin
+      BgTemp := BgTemp.Substring(4);
+      if BgTemp.EndsWith(')') then
+        BgTemp := BgTemp.Substring(0, BgTemp.Length - 1);
+      BgTemp := BgTemp.Trim.DeQuotedString('''').DeQuotedString('"');
+      Style.BackgroundImage := BgTemp;
+    end;
+  end;
+  if Decls.TryGetValue('background-size', Temp) and not ShouldSkip(Temp) then
+    Style.BackgroundSize := Temp.Trim.ToLower;
 
   if Decls.TryGetValue('position', Temp) and not ShouldSkip(Temp) then
     Style.CSSPosition := Temp.Trim.ToLower;
@@ -6592,12 +6619,15 @@ procedure TTina4HTMLRender.PaintBackground(Canvas: TCanvas; Box: TLayoutBox; X, 
 var
   R: TRectF;
   ML, MT: Single;
+  HasBgColor, HasBgImage: Boolean;
 begin
-  if Box.Style.BackgroundColor = TAlphaColors.Null then Exit;
+  HasBgColor := Box.Style.BackgroundColor <> TAlphaColors.Null;
+  HasBgImage := Box.Style.BackgroundImage <> '';
+  if (not HasBgColor) and (not HasBgImage) then Exit;
 
   // Form controls are native FMX controls — skip canvas background
   if Assigned(Box.Tag) and
-     (SameText(Box.Tag.TagName, 'input') or SameText(Box.Tag.TagName, 'button') or
+     (SameText(Box.Tag.TagName, 'input') or
       SameText(Box.Tag.TagName, 'textarea') or SameText(Box.Tag.TagName, 'select')) then
     Exit;
 
@@ -6613,20 +6643,77 @@ begin
       Box.Style.Padding.Top + Box.ContentHeight + Box.Style.Padding.Bottom
   );
 
-  Canvas.Fill.Kind := TBrushKind.Solid;
-  Canvas.Fill.Color := Box.Style.BackgroundColor;
-  if Box.Style.MaxCornerRadius > 0 then
+  // Paint background color
+  if HasBgColor then
   begin
-    if Box.Style.HasUniformRadius then
-      Canvas.FillRect(R, Box.Style.CornerRadius(0), Box.Style.CornerRadius(0),
-        AllCorners, 1.0)
+    Canvas.Fill.Kind := TBrushKind.Solid;
+    Canvas.Fill.Color := Box.Style.BackgroundColor;
+    if Box.Style.MaxCornerRadius > 0 then
+    begin
+      if Box.Style.HasUniformRadius then
+        Canvas.FillRect(R, Box.Style.CornerRadius(0), Box.Style.CornerRadius(0),
+          AllCorners, 1.0)
+      else
+        FillRoundedRect(Canvas, R,
+          Box.Style.CornerRadius(0), Box.Style.CornerRadius(1),
+          Box.Style.CornerRadius(2), Box.Style.CornerRadius(3), 1.0);
+    end
     else
-      FillRoundedRect(Canvas, R,
-        Box.Style.CornerRadius(0), Box.Style.CornerRadius(1),
-        Box.Style.CornerRadius(2), Box.Style.CornerRadius(3), 1.0);
-  end
-  else
-    Canvas.FillRect(R, 1.0);
+      Canvas.FillRect(R, 1.0);
+  end;
+
+  // Paint background image
+  if HasBgImage then
+  begin
+    var Bmp := FImageCache.GetImage(Box.Style.BackgroundImage);
+    if Assigned(Bmp) and (Bmp.Width > 0) and (Bmp.Height > 0) then
+    begin
+      var BoxW := R.Width;
+      var BoxH := R.Height;
+      var BmpW: Single := Bmp.Width;
+      var BmpH: Single := Bmp.Height;
+      var SrcRect, DstRect: TRectF;
+
+      var SaveState := Canvas.SaveState;
+      try
+        // Clip to box bounds (respecting border-radius)
+        if Box.Style.MaxCornerRadius > 0 then
+          Canvas.IntersectClipRect(R)
+        else
+          Canvas.IntersectClipRect(R);
+
+        if Box.Style.BackgroundSize = 'cover' then
+        begin
+          var Scale := Max(BoxW / BmpW, BoxH / BmpH);
+          var FitW := BoxW / Scale;
+          var FitH := BoxH / Scale;
+          SrcRect := RectF((BmpW - FitW) / 2, (BmpH - FitH) / 2,
+                            (BmpW + FitW) / 2, (BmpH + FitH) / 2);
+          DstRect := R;
+          Canvas.DrawBitmap(Bmp, SrcRect, DstRect, 1.0);
+        end
+        else if Box.Style.BackgroundSize = 'contain' then
+        begin
+          var Scale := Min(BoxW / BmpW, BoxH / BmpH);
+          var FitW := BmpW * Scale;
+          var FitH := BmpH * Scale;
+          SrcRect := RectF(0, 0, BmpW, BmpH);
+          DstRect := RectF(R.Left + (BoxW - FitW) / 2, R.Top + (BoxH - FitH) / 2,
+                            R.Left + (BoxW + FitW) / 2, R.Top + (BoxH + FitH) / 2);
+          Canvas.DrawBitmap(Bmp, SrcRect, DstRect, 1.0);
+        end
+        else
+        begin
+          // 'auto' or explicit — stretch to fill
+          SrcRect := RectF(0, 0, BmpW, BmpH);
+          DstRect := R;
+          Canvas.DrawBitmap(Bmp, SrcRect, DstRect, 1.0);
+        end;
+      finally
+        Canvas.RestoreState(SaveState);
+      end;
+    end;
+  end;
 end;
 
 procedure TTina4HTMLRender.PaintBorder(Canvas: TCanvas; Box: TLayoutBox; X, Y: Single);
@@ -6815,6 +6902,9 @@ procedure TTina4HTMLRender.PaintImage(Canvas: TCanvas; Box: TLayoutBox; X, Y: Si
 var
   Bmp: TBitmap;
   SrcRect, DstRect: TRectF;
+  BmpW, BmpH, BoxW, BoxH: Single;
+  ScaleX, ScaleY, Scale: Single;
+  FitW, FitH: Single;
 begin
   if not Assigned(Box.Tag) then Exit;
   var Src := Box.Tag.GetAttribute('src');
@@ -6822,9 +6912,82 @@ begin
   Bmp := FImageCache.GetImage(Src);
   if Assigned(Bmp) then
   begin
-    SrcRect := RectF(0, 0, Bmp.Width, Bmp.Height);
-    DstRect := RectF(X, Y, X + Box.ContentWidth, Y + Box.ContentHeight);
-    Canvas.DrawBitmap(Bmp, SrcRect, DstRect, 1.0);
+    BmpW := Bmp.Width;
+    BmpH := Bmp.Height;
+    BoxW := Box.ContentWidth;
+    BoxH := Box.ContentHeight;
+
+    if (BmpW <= 0) or (BmpH <= 0) or (BoxW <= 0) or (BoxH <= 0) then Exit;
+
+    if Box.Style.ObjectFit = 'cover' then
+    begin
+      // Scale to cover the entire box, crop overflow
+      ScaleX := BoxW / BmpW;
+      ScaleY := BoxH / BmpH;
+      Scale := Max(ScaleX, ScaleY);
+      FitW := BoxW / Scale;
+      FitH := BoxH / Scale;
+      // Center the crop within the source image
+      SrcRect := RectF((BmpW - FitW) / 2, (BmpH - FitH) / 2,
+                        (BmpW + FitW) / 2, (BmpH + FitH) / 2);
+      DstRect := RectF(X, Y, X + BoxW, Y + BoxH);
+      // Clip to box bounds to prevent bleed
+      var SaveState := Canvas.SaveState;
+      try
+        Canvas.IntersectClipRect(DstRect);
+        Canvas.DrawBitmap(Bmp, SrcRect, DstRect, 1.0);
+      finally
+        Canvas.RestoreState(SaveState);
+      end;
+    end
+    else if Box.Style.ObjectFit = 'contain' then
+    begin
+      // Scale to fit inside the box, preserving aspect ratio
+      ScaleX := BoxW / BmpW;
+      ScaleY := BoxH / BmpH;
+      Scale := Min(ScaleX, ScaleY);
+      FitW := BmpW * Scale;
+      FitH := BmpH * Scale;
+      DstRect := RectF(X + (BoxW - FitW) / 2, Y + (BoxH - FitH) / 2,
+                        X + (BoxW + FitW) / 2, Y + (BoxH + FitH) / 2);
+      SrcRect := RectF(0, 0, BmpW, BmpH);
+      Canvas.DrawBitmap(Bmp, SrcRect, DstRect, 1.0);
+    end
+    else if Box.Style.ObjectFit = 'none' then
+    begin
+      // Original size, centered, no scaling
+      DstRect := RectF(X + (BoxW - BmpW) / 2, Y + (BoxH - BmpH) / 2,
+                        X + (BoxW + BmpW) / 2, Y + (BoxH + BmpH) / 2);
+      SrcRect := RectF(0, 0, BmpW, BmpH);
+      var SaveState := Canvas.SaveState;
+      try
+        Canvas.IntersectClipRect(RectF(X, Y, X + BoxW, Y + BoxH));
+        Canvas.DrawBitmap(Bmp, SrcRect, DstRect, 1.0);
+      finally
+        Canvas.RestoreState(SaveState);
+      end;
+    end
+    else if Box.Style.ObjectFit = 'scale-down' then
+    begin
+      // Like contain but never enlarges
+      ScaleX := BoxW / BmpW;
+      ScaleY := BoxH / BmpH;
+      Scale := Min(ScaleX, ScaleY);
+      if Scale > 1 then Scale := 1; // never enlarge
+      FitW := BmpW * Scale;
+      FitH := BmpH * Scale;
+      DstRect := RectF(X + (BoxW - FitW) / 2, Y + (BoxH - FitH) / 2,
+                        X + (BoxW + FitW) / 2, Y + (BoxH + FitH) / 2);
+      SrcRect := RectF(0, 0, BmpW, BmpH);
+      Canvas.DrawBitmap(Bmp, SrcRect, DstRect, 1.0);
+    end
+    else
+    begin
+      // 'fill' (default): stretch to fill the box
+      SrcRect := RectF(0, 0, BmpW, BmpH);
+      DstRect := RectF(X, Y, X + BoxW, Y + BoxH);
+      Canvas.DrawBitmap(Bmp, SrcRect, DstRect, 1.0);
+    end;
   end
   else
   begin

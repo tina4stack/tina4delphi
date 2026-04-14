@@ -50,7 +50,7 @@ end;
 
 procedure TForm3.Button2Click(Sender: TObject);
 begin
-  Tina4HTMLRender1.HTML.LoadFromFile('..\..\test_scroll_features.html')
+  Tina4HTMLRender1.HTML.LoadFromFile('..\..\test_images.html')
 end;
 
 procedure TForm3.FormCreate(Sender: TObject);

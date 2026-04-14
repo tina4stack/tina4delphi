@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: Arial, sans-serif; margin: 10px; background: #f5f5f5; }
+  h3 { margin: 15px 0 8px 0; color: #333; }
+  .row { display: inline-block; vertical-align: top; margin: 5px; text-align: center; }
+  .label { font-size: 11px; color: #666; margin-top: 4px; }
+  .box { width: 120px; height: 90px; border: 1px solid #ccc; border-radius: 8px; overflow: hidden; }
+</style>
+</head>
+<body>
+
+<h3>1. object-fit on img</h3>
+<div class="row">
+  <div class="box">
+    <img src="https://picsum.photos/200/300" style="width:120px; height:90px; object-fit: fill;" />
+  </div>
+  <div class="label">fill (stretch)</div>
+</div>
+<div class="row">
+  <div class="box">
+    <img src="https://picsum.photos/200/300" style="width:120px; height:90px; object-fit: cover;" />
+  </div>
+  <div class="label">cover (crop)</div>
+</div>
+<div class="row">
+  <div class="box">
+    <img src="https://picsum.photos/200/300" style="width:120px; height:90px; object-fit: contain;" />
+  </div>
+  <div class="label">contain (fit)</div>
+</div>
+<div class="row">
+  <div class="box">
+    <img src="https://picsum.photos/200/300" style="width:120px; height:90px; object-fit: none;" />
+  </div>
+  <div class="label">none (original)</div>
+</div>
+
+<h3>2. background-image with background-size</h3>
+<div class="row">
+  <div class="box" style="background-image: url('https://picsum.photos/200/300'); background-size: cover;"></div>
+  <div class="label">bg cover</div>
+</div>
+<div class="row">
+  <div class="box" style="background-image: url('https://picsum.photos/200/300'); background-size: contain;"></div>
+  <div class="label">bg contain</div>
+</div>
+<div class="row">
+  <div class="box" style="background: #eee url('https://picsum.photos/200/300'); background-size: cover;"></div>
+  <div class="label">bg shorthand</div>
+</div>
+
+<h3>3. Base64 data URI (PNG)</h3>
+<div class="row">
+  <div class="box" style="background-image: url('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADIAAAAyCAYAAAAeP4ixAAAAhElEQVRoge3PQQ6AIBAF0eL+h9YVJsSFMDMd/le7RqABAAAAAOCf3dW7+nL/u/dh73r1Zfe+ZY+96TH7tKc+e9vZPcfsa75j9hljxpi95D5mJL+b3cfMGGNmjBljdowZY8YY88+MMWOM+WfGGDPGjDFjzBhjxpgxxowxY4wZY8YAAAD4uQdmawMyp/FHPQAAAABJRU5ErkJggg=='); background-size: cover;"></div>
+  <div class="label">base64 PNG bg</div>
+</div>
+<div class="row">
+  <div class="box">
+    <img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADIAAAAyCAYAAAAeP4ixAAAAhElEQVRoge3PQQ6AIBAF0eL+h9YVJsSFMDMd/le7RqABAAAAAOCf3dW7+nL/u/dh73r1Zfe+ZY+96TH7tKc+e9vZPcfsa75j9hljxpi95D5mJL+b3cfMGGNmjBljdowZY8YY88+MMWOM+WfGGDPGjDFjzBhjxpgxxowxY4wZY8YAAAD4uQdmawMyp/FHPQAAAABJRU5ErkJggg==" style="width:120px; height:90px; object-fit: contain;" />
+  </div>
+  <div class="label">base64 PNG img</div>
+</div>
+
+<h3>4. Product tile with bg cover</h3>
+<div style="display: inline-block; width: 150px; height: 120px; border-radius: 12px; overflow: hidden; background: url('https://picsum.photos/300/200'); background-size: cover; text-align: center; position: relative;">
+  <span style="display: block; color: white; font-weight: bold; font-size: 16px; padding-top: 85px; text-shadow: 1px 1px 3px rgba(0,0,0,0.7);">Product</span>
+</div>
+
+<h3>5. Input box-sizing test</h3>
+<div style="width: 300px; padding: 10px; background: white; border: 1px solid #ccc; border-radius: 8px;">
+  <div style="font-weight: bold; margin-bottom: 6px;">Meter Number</div>
+  <input type="text" placeholder="Enter meter number" style="width: 100%; padding: 8px; border: 1px solid #0066cc; border-radius: 4px;" />
+  <div style="font-weight: bold; margin: 10px 0 6px 0;">Amount</div>
+  <input type="text" placeholder="e.g. 50.00" style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;" />
+</div>
+
+</body>
+</html>

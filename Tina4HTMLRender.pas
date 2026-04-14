@@ -234,6 +234,7 @@ type
     class function Default: TComputedStyle; static;
     class function ForTag(Tag: THTMLTag; const ParentStyle: TComputedStyle; StyleSheet: TCSSStyleSheet = nil): TComputedStyle; static;
     class procedure ApplyDeclarations(Decls: TCSSDeclarations; var Style: TComputedStyle; const ParentStyle: TComputedStyle); static;
+    class procedure ExtractBgImageUrl(const Value: string; out Url: string); static;
     class function ParseColor(const S: string): TAlphaColor; static;
     class function ParseLength(const S: string; EmSize: Single = 14): Single; static;
     class procedure ParseEdgeShorthand(const S: string; var E: TEdgeValues; EmSize: Single); static;
@@ -1601,9 +1602,15 @@ begin
     begin
       var S := Pair.Trim;
       if S = '' then Continue;
-      KV := S.Split([':'], 2);
-      if Length(KV) = 2 then
-        Dict.AddOrSetValue(KV[0].Trim.ToLower, KV[1].Trim);
+      // Split on first ':' only — can't use Split([':'], 2) because
+      // Delphi's Split truncates at the Nth delimiter instead of keeping
+      // the remainder (e.g. 'background-image: url(https://...)' would
+      // lose everything after the ':' in 'https:').
+      var ColonPos := S.IndexOf(':');
+      if ColonPos > 0 then
+        Dict.AddOrSetValue(
+          S.Substring(0, ColonPos).Trim.ToLower,
+          S.Substring(ColonPos + 1).Trim);
     end;
   finally
     Pairs.Free;
@@ -2566,6 +2573,23 @@ begin
   end;
 end;
 
+class procedure TComputedStyle.ExtractBgImageUrl(const Value: string; out Url: string);
+var
+  S: string;
+  P1, P2: Integer;
+begin
+  Url := '';
+  S := Value.Trim;
+  P1 := S.ToLower.IndexOf('url(');
+  if P1 < 0 then Exit;
+  P2 := S.LastIndexOf(')');
+  if P2 <= P1 + 4 then Exit;
+  Url := S.Substring(P1 + 4, P2 - P1 - 4).Trim;
+  // Strip quotes
+  if (Url.Length >= 2) and ((Url.Chars[0] = '''') or (Url.Chars[0] = '"')) then
+    Url := Url.Substring(1, Url.Length - 2);
+end;
+
 class procedure TComputedStyle.ApplyDeclarations(Decls: TCSSDeclarations; var Style: TComputedStyle; const ParentStyle: TComputedStyle);
 var
   Temp: string;
@@ -2587,18 +2611,11 @@ begin
   begin
     var BgVal := Temp.Trim;
     // Extract url(...) if present
-    var UrlPos := BgVal.ToLower.IndexOf('url(');
-    if UrlPos >= 0 then
+    if BgVal.ToLower.Contains('url(') then
     begin
-      var UrlStart := UrlPos + 4;
-      var UrlEnd := BgVal.IndexOf(')', UrlStart);
-      if UrlEnd > UrlStart then
-      begin
-        var BgUrl := BgVal.Substring(UrlStart, UrlEnd - UrlStart).Trim;
-        BgUrl := BgUrl.DeQuotedString('''').DeQuotedString('"');
-        Style.BackgroundImage := BgUrl;
-      end;
+      ExtractBgImageUrl(BgVal, Style.BackgroundImage);
       // Try to parse a color from the portion before url()
+      var UrlPos := BgVal.ToLower.IndexOf('url(');
       if UrlPos > 0 then
       begin
         var ColorPart := BgVal.Substring(0, UrlPos).Trim;
@@ -2825,18 +2842,7 @@ begin
   if Decls.TryGetValue('object-fit', Temp) and not ShouldSkip(Temp) then
     Style.ObjectFit := Temp.Trim.ToLower;
   if Decls.TryGetValue('background-image', Temp) and not ShouldSkip(Temp) then
-  begin
-    // Extract URL from url('...' ) or url(...)
-    var BgTemp := Temp.Trim;
-    if BgTemp.ToLower.StartsWith('url(') then
-    begin
-      BgTemp := BgTemp.Substring(4);
-      if BgTemp.EndsWith(')') then
-        BgTemp := BgTemp.Substring(0, BgTemp.Length - 1);
-      BgTemp := BgTemp.Trim.DeQuotedString('''').DeQuotedString('"');
-      Style.BackgroundImage := BgTemp;
-    end;
-  end;
+    ExtractBgImageUrl(Temp, Style.BackgroundImage);
   if Decls.TryGetValue('background-size', Temp) and not ShouldSkip(Temp) then
     Style.BackgroundSize := Temp.Trim.ToLower;
 
@@ -6760,6 +6766,8 @@ begin
   // Paint background image
   if HasBgImage then
   begin
+    // Ensure image is requested (safety net for styles parsed after layout)
+    FImageCache.RequestImage(Box.Style.BackgroundImage);
     var Bmp := FImageCache.GetImage(Box.Style.BackgroundImage);
     if Assigned(Bmp) and (Bmp.Width > 0) and (Bmp.Height > 0) then
     begin

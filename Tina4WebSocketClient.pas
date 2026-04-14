@@ -439,21 +439,21 @@ end;
 destructor TTina4WebSocketClient.Destroy;
 begin
   FAutoReconnect := False; // prevent reconnect during teardown
+  FState := wsClosed;      // signal all threads to stop immediately
 
-  // Stop the read thread first — it may be blocked in recv/SSL_read.
-  // Terminate + socket close wakes it; then WaitFor to join cleanly.
+  // 1. Stop the ping timer FIRST — it calls RawSend which uses FSocket/FSSL.
+  //    Must stop before we touch either of those objects.
+  StopPingTimer;
+
+  // 2. Stop the read thread — it's blocked in recv/SSL_read.
+  //    Close socket to unblock it, then join.
   if Assigned(FReadThread) then
   begin
     FReadThread.Terminate;
-    // Close socket to unblock recv. Only attempt if the socket is still
-    // connected — avoids Winsock errors during app finalization when the
-    // networking subsystem has already been torn down.
-    if Assigned(FSocket) and (FState in [wsOpen, wsConnecting, wsClosing]) then
-    begin
-      try
+    try
+      if Assigned(FSocket) then
         FSocket.Close(True);
-      except
-      end;
+    except
     end;
     try
       FReadThread.WaitFor;
@@ -462,7 +462,7 @@ begin
     FreeAndNil(FReadThread);
   end;
 
-  // Shut down SSL after the reader has stopped
+  // 3. Shut down SSL — no threads are using it now.
   if Assigned(FSSL) then
   begin
     try
@@ -472,11 +472,9 @@ begin
     FreeAndNil(FSSL);
   end;
 
-  // Free socket object (already closed above)
+  // 4. Free socket object (already closed above)
   FreeAndNil(FSocket);
 
-  StopPingTimer;
-  FState := wsClosed;
   FPingWake.Free;
   FWriteLock.Free;
   FHeaders.Free;
@@ -759,8 +757,10 @@ procedure TTina4WebSocketClient.RawSend(const AData: TBytes);
 var
   Sent, Total, Ret: Integer;
 begin
+  if FState <> wsOpen then Exit; // don't send on closed/closing socket
   FWriteLock.Enter;
   try
+    if not Assigned(FSocket) then Exit; // socket already freed
     Total := Length(AData);
     Sent := 0;
     while Sent < Total do
@@ -1000,27 +1000,21 @@ procedure TTina4WebSocketClient.DoDisconnectInternal(ACode: Integer;
 var
   CalledFromReader: Boolean;
 begin
-  // If the read thread itself triggered this (e.g. server dropped the
-  // connection), we cannot WaitFor it from inside itself — that would
-  // deadlock. Detect and skip the join; the reader will free itself.
+  if FState = wsClosed then Exit; // already disconnected
+
+  FState := wsClosed; // signal all threads to stop
+
   CalledFromReader := Assigned(FReadThread) and
                       (TThread.CurrentThread.ThreadID = FReadThread.ThreadID);
 
+  // 1. Stop ping timer — it calls RawSend which uses FSocket/FSSL
   StopPingTimer;
 
-  // Signal the read thread to stop. We must close the socket BEFORE WaitFor —
-  // the read thread is blocked in a kernel recv() with no timeout and will not
-  // wake up until either data arrives or the socket is shut down. Closing
-  // here causes recv to return immediately with an error, the thread catches
-  // the exception and exits, and our WaitFor returns in milliseconds instead
-  // of waiting for the OS-level TCP timeout (which can be minutes).
+  // 2. Stop read thread
   if Assigned(FReadThread) then
     FReadThread.Terminate;
 
-  // Close the underlying socket FIRST — this unblocks any in-progress
-  // SSL_read/recv in the read thread, causing it to return with an error.
-  // We must close the socket before touching FSSL, because the read thread
-  // may still be inside an SSL_read that holds a reference to FSSL.
+  // 3. Close socket to unblock recv
   if Assigned(FSocket) then
   begin
     try
@@ -1029,40 +1023,41 @@ begin
     end;
   end;
 
-  // Wait for the read thread to exit before touching FSSL — otherwise
-  // we'd free/shutdown FSSL while the reader is still using it.
+  // 4. Join read thread
   if Assigned(FReadThread) and not CalledFromReader then
   begin
-    FReadThread.WaitFor;
+    try
+      FReadThread.WaitFor;
+    except
+    end;
     FreeAndNil(FReadThread);
   end
   else if CalledFromReader then
+  begin
+    FReadThread.FreeOnTerminate := True;
     FReadThread := nil;
+  end;
 
-  // Now safe to shut down TLS — no other thread is using it
+  // 5. Shut down and free SSL
   if Assigned(FSSL) then
   begin
     try
       FSSL.Shutdown;
     except
     end;
+    FreeAndNil(FSSL);
   end;
 
-  // (Read thread already waited-for and freed above)
+  // 6. Free socket
+  FreeAndNil(FSocket);
 
-  // Free TLS context after the reader has stopped touching it
-  if Assigned(FSSL) then
-    FreeAndNil(FSSL);
+  // 7. Notify — but not during destruction (main thread may be gone)
+  if not (csDestroying in ComponentState) then
+    FireDisconnected(ACode, AReason);
 
-  // Free the socket object
-  if Assigned(FSocket) then
-    FreeAndNil(FSocket);
-
-  FState := wsClosed;
-  FireDisconnected(ACode, AReason);
-
-  // Auto-reconnect on unexpected disconnect
-  if AStartReconnect and FAutoReconnect then
+  // 8. Auto-reconnect on unexpected disconnect
+  if AStartReconnect and FAutoReconnect and
+     not (csDestroying in ComponentState) then
     DoReconnect;
 end;
 

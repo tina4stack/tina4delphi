@@ -2559,8 +2559,29 @@ begin
     Style.BackgroundColor := ParseColor(Temp);
   if Decls.TryGetValue('background', Temp) and not ShouldSkip(Temp) then
   begin
-    if not Temp.Contains('url') then
-      Style.BackgroundColor := ParseColor(Temp);
+    var BgVal := Temp.Trim;
+    // Extract url(...) if present
+    var UrlPos := BgVal.ToLower.IndexOf('url(');
+    if UrlPos >= 0 then
+    begin
+      var UrlStart := UrlPos + 4;
+      var UrlEnd := BgVal.IndexOf(')', UrlStart);
+      if UrlEnd > UrlStart then
+      begin
+        var BgUrl := BgVal.Substring(UrlStart, UrlEnd - UrlStart).Trim;
+        BgUrl := BgUrl.DeQuotedString('''').DeQuotedString('"');
+        Style.BackgroundImage := BgUrl;
+      end;
+      // Try to parse a color from the portion before url()
+      if UrlPos > 0 then
+      begin
+        var ColorPart := BgVal.Substring(0, UrlPos).Trim;
+        if ColorPart <> '' then
+          Style.BackgroundColor := ParseColor(ColorPart);
+      end;
+    end
+    else
+      Style.BackgroundColor := ParseColor(BgVal);
   end;
   if Decls.TryGetValue('font-family', Temp) and not ShouldSkip(Temp) then
     Style.FontFamily := Temp.DeQuotedString('''').DeQuotedString('"');

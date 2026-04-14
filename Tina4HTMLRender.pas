@@ -11,7 +11,7 @@ uses
   System.Math.Vectors,
   FMX.Types, FMX.Controls, FMX.Graphics, FMX.TextLayout,
   FMX.Edit, FMX.StdCtrls, FMX.Memo, FMX.ListBox, FMX.Layouts, FMX.Objects,
-  FMX.DialogService, FMX.Dialogs,
+  FMX.DialogService, FMX.Dialogs, Fmx.Surfaces,
   System.IOUtils;
 
 type
@@ -3103,6 +3103,7 @@ end;
 
 procedure TImageCache.RequestImage(const Src: string);
 begin
+  if Src = '' then Exit;
   if FCache.ContainsKey(Src) or FPending.ContainsKey(Src) then
     Exit;
 
@@ -3115,16 +3116,30 @@ begin
       var B64 := Src.Substring(CommaPos + 1);
       var Bytes := TNetEncoding.Base64.DecodeStringToBytes(B64);
       var Stream := TBytesStream.Create(Bytes);
+      var Surf := TBitmapSurface.Create;
       try
-        var Bmp := TBitmap.Create;
-        try
-          Bmp.LoadFromStream(Stream);
-          FCache.AddOrSetValue(Src, Bmp);
-        except
-          Bmp.Free;
-        end;
+        if TBitmapCodecManager.LoadFromStream(Stream, surf) then
+        begin
+          try
+            var Bmp := TBitmap.Create;
+            try
+              Bmp.Assign(Surf);
+              if (Bmp.Width > 0) and (Bmp.Height > 0) then
+                FCache.AddOrSetValue(Src, Bmp)
+              else
+              begin
+                // LoadFromStream succeeded but bitmap is empty
+                Bmp.Free;
+              end;
+            except
+              Bmp.Free;
+            end;
+          finally
+            Stream.Free;
+          end;
+        end
       finally
-        Stream.Free;
+        surf.DisposeOf;
       end;
     end;
     Exit;

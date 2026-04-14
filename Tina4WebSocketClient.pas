@@ -170,6 +170,9 @@ uses
   Winapi.Windows;
 {$ENDIF}
 
+var
+  UnitFinalized: Boolean = False;
+
 { WebSocket opcodes }
 const
   WS_OP_CONTINUATION = $00;
@@ -438,42 +441,44 @@ end;
 
 destructor TTina4WebSocketClient.Destroy;
 begin
-  FAutoReconnect := False; // prevent reconnect during teardown
-  FState := wsClosed;      // signal all threads to stop immediately
+  FAutoReconnect := False;
+  FState := wsClosed;
 
-  // 1. Stop the ping timer FIRST — it calls RawSend which uses FSocket/FSSL.
-  //    Must stop before we touch either of those objects.
+  // 1. Stop ping timer
   StopPingTimer;
 
-  // 2. Stop the read thread — it's blocked in recv/SSL_read.
-  //    Close socket to unblock it, then join.
+  // 2. Stop read thread
   if Assigned(FReadThread) then
   begin
     FReadThread.Terminate;
-    try
-      if Assigned(FSocket) then
-        FSocket.Close(True);
-    except
+    // Only close socket if networking is still available.
+    // During app finalization Winsock may already be torn down.
+    if (not UnitFinalized) and Assigned(FSocket) then
+    begin
+      try FSocket.Close(True); except end;
     end;
-    try
-      FReadThread.WaitFor;
-    except
-    end;
+    try FReadThread.WaitFor; except end;
     FreeAndNil(FReadThread);
   end;
 
-  // 3. Shut down SSL — no threads are using it now.
-  if Assigned(FSSL) then
+  // 3. Shut down and free SSL (only if OpenSSL is still loaded)
+  if not UnitFinalized then
   begin
-    try
-      FSSL.Shutdown;
-    except
+    if Assigned(FSSL) then
+    begin
+      try FSSL.Shutdown; except end;
+      FreeAndNil(FSSL);
     end;
-    FreeAndNil(FSSL);
+    FreeAndNil(FSocket);
+  end
+  else
+  begin
+    // During finalization, OpenSSL DLL is already unloaded.
+    // Don't call FSSL.Free (it calls _SSL_free on a dead DLL).
+    // Just nil the references — the OS reclaims everything on exit.
+    FSSL := nil;
+    FSocket := nil;
   end;
-
-  // 4. Free socket object (already closed above)
-  FreeAndNil(FSocket);
 
   FPingWake.Free;
   FWriteLock.Free;
@@ -1038,18 +1043,21 @@ begin
     FReadThread := nil;
   end;
 
-  // 5. Shut down and free SSL
-  if Assigned(FSSL) then
+  // 5. Shut down and free SSL (skip if OpenSSL DLL already unloaded)
+  if not UnitFinalized then
   begin
-    try
-      FSSL.Shutdown;
-    except
+    if Assigned(FSSL) then
+    begin
+      try FSSL.Shutdown; except end;
+      FreeAndNil(FSSL);
     end;
-    FreeAndNil(FSSL);
+    FreeAndNil(FSocket);
+  end
+  else
+  begin
+    FSSL := nil;
+    FSocket := nil;
   end;
-
-  // 6. Free socket
-  FreeAndNil(FSocket);
 
   // 7. Notify — but not during destruction (main thread may be gone)
   if not (csDestroying in ComponentState) then
@@ -1145,7 +1153,7 @@ end;
 procedure TTina4WebSocketClient.FireConnected;
 begin
   if Assigned(FOnConnected) then
-    TThread.Queue(TThread(nil),
+    TThread.Queue(nil,
       procedure
       begin
         if Assigned(FOnConnected) then
@@ -1157,7 +1165,7 @@ procedure TTina4WebSocketClient.FireDisconnected(ACode: Integer;
   const AReason: string);
 begin
   if Assigned(FOnDisconnected) then
-    TThread.Queue(TThread(nil),
+    TThread.Queue(nil,
       procedure
       begin
         if Assigned(FOnDisconnected) then
@@ -1168,7 +1176,7 @@ end;
 procedure TTina4WebSocketClient.FireMessage(const AMsg: string);
 begin
   if Assigned(FOnMessage) then
-    TThread.Queue(TThread(nil),
+    TThread.Queue(nil,
       procedure
       begin
         if Assigned(FOnMessage) then
@@ -1179,7 +1187,7 @@ end;
 procedure TTina4WebSocketClient.FireBinary(const AData: TBytes);
 begin
   if Assigned(FOnBinaryReceived) then
-    TThread.Queue(TThread(nil),
+    TThread.Queue(nil,
       procedure
       begin
         if Assigned(FOnBinaryReceived) then
@@ -1190,7 +1198,7 @@ end;
 procedure TTina4WebSocketClient.FireError(const AError: string);
 begin
   if Assigned(FOnError) then
-    TThread.Queue(TThread(nil),
+    TThread.Queue(nil,
       procedure
       begin
         if Assigned(FOnError) then
@@ -1201,7 +1209,7 @@ end;
 procedure TTina4WebSocketClient.FireReconnecting(AAttempt: Integer);
 begin
   if Assigned(FOnReconnecting) then
-    TThread.Queue(TThread(nil),
+    TThread.Queue(nil,
       procedure
       begin
         if Assigned(FOnReconnecting) then
@@ -1216,5 +1224,8 @@ end;
 
 initialization
   Randomize;
+
+finalization
+  UnitFinalized := True;
 
 end.

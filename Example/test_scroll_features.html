@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+  body { font-family: Arial, sans-serif; margin: 12px; background: #f5f5f5; }
+  h3 { margin: 16px 0 6px 0; color: #333; }
+  .label { font-size: 12px; color: #666; margin-bottom: 4px; }
+
+  /* 1. Horizontal nav — use styled spans, NOT <button> */
+  .hnav {
+    overflow-x: auto;
+    overflow-y: hidden;
+    white-space: nowrap;
+    background: #222;
+    padding: 8px;
+    border-radius: 6px;
+    width: 420px;
+    height: 48px;
+  }
+  .navbtn {
+    display: inline-block;
+    margin-right: 8px;
+    padding: 8px 16px;
+    background: #0d6efd;
+    color: white;
+    border-radius: 4px;
+    font-size: 13px;
+  }
+  .navbtn.alt { background: #6c757d; }
+
+  /* 2. Vertical-only list */
+  .vlist {
+    overflow-x: hidden;
+    overflow-y: auto;
+    width: 300px;
+    height: 160px;
+    background: white;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    padding: 8px;
+  }
+  .vlist .row {
+    padding: 8px 10px;
+    margin-bottom: 4px;
+    background: #fafafa;
+    border: 1px solid #eee;
+    border-radius: 3px;
+  }
+
+  /* 3. Bidirectional grid — use wide fixed-width rows instead of inline-block */
+  .grid {
+    overflow: auto;
+    width: 360px;
+    height: 200px;
+    background: white;
+    border: 2px solid #0d6efd;
+    border-radius: 6px;
+    padding: 8px;
+  }
+  .grow { white-space: nowrap; margin-bottom: 6px; }
+  .cell {
+    display: inline-block;
+    width: 80px;
+    height: 50px;
+    margin-right: 6px;
+    background: #e7f1ff;
+    border: 1px solid #0d6efd;
+    color: #0d6efd;
+    text-align: center;
+    padding-top: 16px;
+    border-radius: 4px;
+    font-size: 13px;
+  }
+
+  /* 4. Nested */
+  .outer {
+    overflow-y: auto;
+    width: 380px;
+    height: 220px;
+    background: #fffbe6;
+    border: 1px solid #e6c200;
+    padding: 10px;
+    border-radius: 6px;
+  }
+  .inner-h {
+    overflow-x: auto;
+    overflow-y: hidden;
+    white-space: nowrap;
+    background: #fff;
+    border: 1px solid #ddd;
+    padding: 6px;
+    margin: 8px 0;
+    height: 40px;
+  }
+  .chip {
+    display: inline-block;
+    padding: 6px 12px;
+    margin-right: 6px;
+    background: #ff6b6b;
+    color: white;
+    border-radius: 16px;
+    font-size: 12px;
+  }
+</style>
+</head>
+<body>
+
+<h3>1. Horizontal Nav</h3>
+<div class="label">overflow-x: auto; overflow-y: hidden (Shift+wheel or drag the bottom bar)</div>
+<div class="hnav">
+  <span class="navbtn" onclick="Form3:ShowSomething('Dashboard')">Dashboard</span><span class="navbtn alt" onclick="Form3:ShowSomething('Analytics')">Analytics</span><span class="navbtn" onclick="Form3:ShowSomething('Reports')">Reports</span><span class="navbtn alt" onclick="Form3:ShowSomething('Users')">Users</span><span class="navbtn" onclick="Form3:ShowSomething('Settings')">Settings</span><span class="navbtn alt" onclick="Form3:ShowSomething('Billing')">Billing</span><span class="navbtn" onclick="Form3:ShowSomething('Integrations')">Integrations</span><span class="navbtn alt" onclick="Form3:ShowSomething('Webhooks')">Webhooks</span><span class="navbtn" onclick="Form3:ShowSomething('API Keys')">API Keys</span><span class="navbtn alt" onclick="Form3:ShowSomething('Audit Log')">Audit Log</span><span class="navbtn" onclick="Form3:ShowSomething('Support')">Support</span>
+</div>
+
+<h3>2. Vertical List</h3>
+<div class="label">overflow-y: auto; overflow-x: hidden</div>
+<div class="vlist">
+  <div class="row">Row 1 — Alpha</div>
+  <div class="row">Row 2 — Bravo</div>
+  <div class="row">Row 3 — Charlie</div>
+  <div class="row">Row 4 — Delta</div>
+  <div class="row">Row 5 — Echo</div>
+  <div class="row">Row 6 — Foxtrot</div>
+  <div class="row">Row 7 — Golf</div>
+  <div class="row">Row 8 — Hotel</div>
+  <div class="row">Row 9 — India</div>
+  <div class="row">Row 10 — Juliet</div>
+  <div class="row">Row 11 — Kilo</div>
+  <div class="row">Row 12 — Lima</div>
+</div>
+
+<h3>3. Bidirectional Grid</h3>
+<div class="label">overflow: auto — wheel vertical, Shift+wheel horizontal</div>
+<div class="grid">
+  <div class="grow"><span class="cell">A1</span><span class="cell">A2</span><span class="cell">A3</span><span class="cell">A4</span><span class="cell">A5</span><span class="cell">A6</span></div>
+  <div class="grow"><span class="cell">B1</span><span class="cell">B2</span><span class="cell">B3</span><span class="cell">B4</span><span class="cell">B5</span><span class="cell">B6</span></div>
+  <div class="grow"><span class="cell">C1</span><span class="cell">C2</span><span class="cell">C3</span><span class="cell">C4</span><span class="cell">C5</span><span class="cell">C6</span></div>
+  <div class="grow"><span class="cell">D1</span><span class="cell">D2</span><span class="cell">D3</span><span class="cell">D4</span><span class="cell">D5</span><span class="cell">D6</span></div>
+  <div class="grow"><span class="cell">E1</span><span class="cell">E2</span><span class="cell">E3</span><span class="cell">E4</span><span class="cell">E5</span><span class="cell">E6</span></div>
+</div>
+
+<h3>4. Nested Scroll</h3>
+<div class="label">outer vertical + inner horizontal — hover over a chip row to scroll IT</div>
+<div class="outer">
+  <p>Category: Featured</p>
+  <div class="inner-h">
+    <span class="chip">Tag 1</span><span class="chip">Tag 2</span><span class="chip">Tag 3</span><span class="chip">Tag 4</span><span class="chip">Tag 5</span><span class="chip">Tag 6</span><span class="chip">Tag 7</span><span class="chip">Tag 8</span>
+  </div>
+  <p>Category: Popular</p>
+  <div class="inner-h">
+    <span class="chip">Red</span><span class="chip">Orange</span><span class="chip">Yellow</span><span class="chip">Green</span><span class="chip">Blue</span><span class="chip">Indigo</span><span class="chip">Violet</span>
+  </div>
+  <p>Category: New</p>
+  <div class="inner-h">
+    <span class="chip">Alpha</span><span class="chip">Beta</span><span class="chip">Gamma</span><span class="chip">Delta</span>
+  </div>
+  <p>Line filler 1</p>
+  <p>Line filler 2</p>
+  <p>Line filler 3</p>
+</div>
+
+</body>
+</html>

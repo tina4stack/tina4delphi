@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+body { font-family: Arial, sans-serif; margin: 0; padding: 10px; background: #f0f0f0; }
+h3 { margin: 5px 0; }
+
+.topnav-wrap {
+  overflow-x: auto;
+  white-space: nowrap;
+  background: #e8e8e8;
+  padding: 10px;
+  border: 2px solid #999;
+  margin-bottom: 20px;
+}
+
+.navbtn {
+  display: inline-block;
+  width: 100px;
+  height: 100px;
+  margin: 5px;
+  border-radius: 15px;
+  text-align: center;
+  color: white;
+  font-weight: bold;
+  cursor: pointer;
+  vertical-align: top;
+}
+.navbtn .icon { display: block; font-size: 32px; margin-top: 15px; font-style: normal; }
+.navbtn .text { display: block; font-size: 13px; margin-top: 5px; font-style: normal; }
+
+.nav-airtime    { background: #1a2744; }
+.nav-data       { background: #7b2fbe; }
+.nav-voucher    { background: #e65100; }
+.nav-electricity{ background: #fdd835; color: #333; }
+.nav-dstv       { background: #00897b; }
+.nav-gaming     { background: #c62828; }
+.nav-social     { background: #e91e63; }
+.nav-voice      { background: #1565c0; }
+
+.section { margin-top: 20px; }
+.tall-content { height: 600px; background: linear-gradient(to bottom, #ddd, #999); padding: 20px; }
+</style>
+</head>
+<body>
+
+<h3>Horizontal tile slider (drag to scroll):</h3>
+<div class="topnav-wrap">
+  <span class="navbtn nav-airtime" onclick="Net:HtmlNavClick('Airtime')"><i class="icon">&#9742;</i><i class="text">Airtime</i></span>
+  <span class="navbtn nav-data" onclick="Net:HtmlNavClick('Data')"><i class="icon">&#9673;</i><i class="text">Data</i></span>
+  <span class="navbtn nav-voucher" onclick="Net:HtmlNavClick('1Voucher')"><i class="icon">&#9733;</i><i class="text">1Voucher</i></span>
+  <span class="navbtn nav-electricity" onclick="Net:HtmlNavClick('Electricity')"><i class="icon">&#9889;</i><i class="text">Power</i></span>
+  <span class="navbtn nav-dstv" onclick="Net:HtmlNavClick('DStv')"><i class="icon">&#9654;</i><i class="text">DStv</i></span>
+  <span class="navbtn nav-gaming" onclick="Net:HtmlNavClick('Gaming')"><i class="icon">&#9830;</i><i class="text">Gaming</i></span>
+  <span class="navbtn nav-social" onclick="Net:HtmlNavClick('Social')"><i class="icon">&#9829;</i><i class="text">Social</i></span>
+  <span class="navbtn nav-voice" onclick="Net:HtmlNavClick('Voice')"><i class="icon">&#9834;</i><i class="text">Voice</i></span>
+</div>
+
+<div class="section">
+<h3>Vertical content below (drag page to scroll):</h3>
+<div class="tall-content">
+  <p>This tall block makes the page scrollable vertically.</p>
+  <p>Drag anywhere on the page to scroll up/down.</p>
+  <p>Drag the tile row above to scroll left/right.</p>
+</div>
+</div>
+
+</body>
+</html>

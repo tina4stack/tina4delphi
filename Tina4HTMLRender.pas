@@ -1570,17 +1570,43 @@ end;
 
 procedure THTMLParser.ParseStyleAttribute(const StyleStr: string; Dict: TDictionary<string, string>);
 var
-  Pairs: TArray<string>;
   KV: TArray<string>;
+  Pairs: TList<string>;
+  Start, I, ParenDepth: Integer;
 begin
-  Pairs := StyleStr.Split([';']);
-  for var Pair in Pairs do
-  begin
-    var S := Pair.Trim;
-    if S = '' then Continue;
-    KV := S.Split([':'], 2);
-    if Length(KV) = 2 then
-      Dict.AddOrSetValue(KV[0].Trim.ToLower, KV[1].Trim);
+  // Split on ';' but skip semicolons inside url() parentheses
+  Pairs := TList<string>.Create;
+  try
+    Start := 1;
+    ParenDepth := 0;
+    for I := 1 to Length(StyleStr) do
+    begin
+      if StyleStr[I] = '(' then
+        Inc(ParenDepth)
+      else if StyleStr[I] = ')' then
+      begin
+        if ParenDepth > 0 then
+          Dec(ParenDepth);
+      end
+      else if (StyleStr[I] = ';') and (ParenDepth = 0) then
+      begin
+        Pairs.Add(Copy(StyleStr, Start, I - Start));
+        Start := I + 1;
+      end;
+    end;
+    if Start <= Length(StyleStr) then
+      Pairs.Add(Copy(StyleStr, Start, Length(StyleStr) - Start + 1));
+
+    for var Pair in Pairs do
+    begin
+      var S := Pair.Trim;
+      if S = '' then Continue;
+      KV := S.Split([':'], 2);
+      if Length(KV) = 2 then
+        Dict.AddOrSetValue(KV[0].Trim.ToLower, KV[1].Trim);
+    end;
+  finally
+    Pairs.Free;
   end;
 end;
 

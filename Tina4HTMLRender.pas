@@ -630,6 +630,10 @@ type
     /// <param name="Id">The HTML id attribute of the element to scroll into view.</param>
     /// <returns>True if the element was found and scrolled to, False otherwise.</returns>
     function ScrollToElement(const Id: string): Boolean;
+    /// <summary>Sets keyboard focus to a native form control (input, textarea, select)
+    /// identified by its HTML id attribute. Returns True if the element was found
+    /// and focused.</summary>
+    function FocusElement(const Id: string): Boolean;
     /// <summary>
     /// Parses an HTML fragment and prepends it as the first children of the
     /// element with the given id. Triggers a synchronous re-layout. When
@@ -3320,6 +3324,10 @@ begin
     if (Src <> '') and Assigned(FImageCache) then
       FImageCache.RequestImage(Src);
   end;
+
+  // Request background images
+  if (Result.Style.BackgroundImage <> '') and Assigned(FImageCache) then
+    FImageCache.RequestImage(Result.Style.BackgroundImage);
 end;
 
 function IsPercentageValue(Value: Single): Boolean; inline;
@@ -5009,6 +5017,17 @@ begin
     // then let them fade out.
     BumpScrollbarVisibility;
 
+    // Handle autofocus attribute — focus the first input with autofocus
+    for var Rec in FFormControls do
+      if Assigned(Rec.Box.Tag) and Rec.Box.Tag.HasAttribute('autofocus') then
+      begin
+        var AutoId := Rec.Box.Tag.GetAttribute('id', '');
+        if AutoId <> '' then
+          ScrollToElement(AutoId);
+        Rec.Control.SetFocus;
+        Break;
+      end;
+
   finally
     FIsLayoutting := False;
   end;
@@ -5265,6 +5284,29 @@ begin
     Result := True;
   finally
     Path.Free;
+  end;
+end;
+
+function TTina4HTMLRender.FocusElement(const Id: string): Boolean;
+var
+  Tag: THTMLTag;
+begin
+  Result := False;
+  Tag := GetElementById(Id);
+  if not Assigned(Tag) then Exit;
+
+  // Find the native FMX control associated with this element
+  for var Rec in FFormControls do
+  begin
+    if Assigned(Rec.Box.Tag) and (Rec.Box.Tag = Tag) then
+    begin
+      // Scroll the element into view first
+      ScrollToElement(Id);
+      // Set focus to the native control
+      Rec.Control.SetFocus;
+      Result := True;
+      Exit;
+    end;
   end;
 end;
 

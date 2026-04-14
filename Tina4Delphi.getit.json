@@ -1,0 +1,46 @@
+{
+  "Id": "Tina4Delphi",
+  "Name": "Tina4 Delphi",
+  "Version": "1.0.0",
+  "Description": "A comprehensive FMX component suite featuring an HTML/CSS renderer with scrollable containers, touch pan-to-scroll with inertia, sticky positioning, Twig template engine, REST client, JSON adapter, WebSocket client, and web server. Cross-platform: Windows, Android, iOS, macOS, Linux.",
+  "Vendor": "Tina4 Stack",
+  "VendorUrl": "https://github.com/tina4stack",
+  "Image": "Tina4Delphi.png",
+  "License": "LICENSE",
+  "Url": "https://github.com/tina4stack/tina4delphi/archive/refs/heads/master.zip",
+  "ProjectUrl": "https://github.com/tina4stack/tina4delphi",
+  "Modified": "2026-04-14",
+  "LicenseName": "MIT",
+  "RequireElevation": false,
+  "AllUsers": false,
+  "Platforms": "Win32,Win64,Android,Android64,iOSDevice64,OSX64,Linux64",
+  "Actions": [
+    {
+      "Id": "1",
+      "ActionId": "1",
+      "Type": 2,
+      "RequireElevation": false,
+      "Parameter": "\"$(BDS)\\bin\\rsvars.bat\" && msbuild \"$(GETIT_CATALOG)\\Tina4Delphi\\tina4delphi-master\\Tina4Delphi.dproj\" /t:Build /p:Config=Release /p:Platform=Win64 /nologo /verbosity:minimal",
+      "ActionName": "BuildRuntimePackage",
+      "Description": "Build Tina4Delphi runtime package"
+    },
+    {
+      "Id": "2",
+      "ActionId": "2",
+      "Type": 2,
+      "RequireElevation": false,
+      "Parameter": "\"$(BDS)\\bin\\rsvars.bat\" && msbuild \"$(GETIT_CATALOG)\\Tina4Delphi\\tina4delphi-master\\Tina4DelphiDesign.dproj\" /t:Build /p:Config=Release /p:Platform=Win64 /nologo /verbosity:minimal",
+      "ActionName": "BuildDesignPackage",
+      "Description": "Build Tina4Delphi design-time package"
+    },
+    {
+      "Id": "3",
+      "ActionId": "3",
+      "Type": 2,
+      "RequireElevation": false,
+      "Parameter": "reg add \"HKCU\\Software\\Embarcadero\\BDS\\$(BDSVERSION)\\Library\\Win64\" /v \"SearchPath\" /d \"$(GETIT_CATALOG)\\Tina4Delphi\\tina4delphi-master\" /f",
+      "ActionName": "AddSearchPath",
+      "Description": "Add Tina4Delphi source path to library search path"
+    }
+  ]
+}

@@ -34,6 +34,7 @@ type
     FTemplatePath: String;
     FDateFormat: String;
     FDaysFormat: String;
+    FTempCounter: Integer;
     function LoadTemplate(const TemplateName: String): String;
     procedure SetDateFormat(FormatDate: String; FormatDays: String);
     function IsStrictNumeric(const Value: TValue): Boolean;
@@ -1402,6 +1403,87 @@ var
 var
   IsTestResult: TValue;
 
+  // Helper: find the innermost paren group containing a top-level ternary
+  // and recursively evaluate it, substituting with its string result. This
+  // lets expressions like `"x" ~ (cond ? a : b)` work where `?:` is nested
+  // inside parens and therefore not visible to the top-level ternary scan.
+  function ResolveParenTernaries(const S: String): String;
+  var
+    I, OpenIdx, QMark, ColonIdx, Depth: Integer;
+    Inner, SubResult: String;
+    SubVal: TValue;
+    InQuote: Boolean;
+    QuoteCh: Char;
+  begin
+    Result := S;
+    // Keep resolving while we find a paren group with a ternary inside
+    while True do
+    begin
+      OpenIdx := 0;
+      Depth := 0;
+      InQuote := False;
+      QuoteCh := #0;
+      // Find an innermost open-paren (the last '(' before a matching ')'
+      // when content between them contains '?' at depth 0).
+      for I := 1 to Length(Result) do
+      begin
+        if InQuote then
+        begin
+          if Result[I] = QuoteCh then InQuote := False;
+        end
+        else if Result[I] in ['''', '"'] then
+        begin
+          InQuote := True; QuoteCh := Result[I];
+        end
+        else if Result[I] = '(' then
+          OpenIdx := I
+        else if (Result[I] = ')') and (OpenIdx > 0) then
+        begin
+          Inner := Copy(Result, OpenIdx + 1, I - OpenIdx - 1);
+          // Does Inner have a top-level ?
+          QMark := 0;
+          ColonIdx := 0;
+          Depth := 0;
+          InQuote := False;
+          for var J := 1 to Length(Inner) do
+          begin
+            if InQuote then
+            begin
+              if Inner[J] = QuoteCh then InQuote := False;
+            end
+            else if Inner[J] in ['''', '"'] then
+            begin
+              InQuote := True; QuoteCh := Inner[J];
+            end
+            else if Inner[J] in ['(', '[', '{'] then Inc(Depth)
+            else if Inner[J] in [')', ']', '}'] then Dec(Depth)
+            else if (Depth = 0) and (Inner[J] = '?') and
+                    ((J = Length(Inner)) or (Inner[J + 1] <> '?')) then
+            begin
+              if QMark = 0 then QMark := J;
+            end
+            else if (Depth = 0) and (Inner[J] = ':') and (QMark > 0) and (ColonIdx = 0) then
+              ColonIdx := J;
+          end;
+          if (QMark > 0) and (ColonIdx > QMark) then
+          begin
+            SubVal := EvaluateExpression(Inner, Context);
+            var TmpVar := '__fnd_paren_ternary_' + IntToStr(Self.FTempCounter);
+            Inc(Self.FTempCounter);
+            Context.AddOrSetValue(TmpVar, SubVal);
+            Result := Copy(Result, 1, OpenIdx - 1) + TmpVar +
+                      Copy(Result, I + 1, MaxInt);
+            Break;
+          end;
+          OpenIdx := 0;
+        end;
+      end;
+      // If we made it through without finding a ternary-paren, stop
+      if OpenIdx = 0 then
+        Exit;
+    end;
+  end;
+
 begin
   TrimmedExpr := Expr.Trim;
 
@@ -1411,6 +1493,10 @@ begin
     Result := IsTestResult;
     Exit;
   end;
+
+  // 0b. Resolve any ternaries nested inside parens, e.g. `x ~ (c ? a : b)`.
+  //     Runs before 3-way decomposition so the outer concat sees a bare string.
+  TrimmedExpr := ResolveParenTernaries(TrimmedExpr);
 
   // 0. Inline-if: valueA if cond else valueB  (Jinja/Twig style)
   IfPos := FindTopLevelKeyword(TrimmedExpr, 'if');
@@ -1466,8 +1552,10 @@ begin
     end;
   end;
 
-  // 3. Fall through to regular tokenize -> RPN pipeline
-  Tokens := Tokenize(Expr);
+  // 3. Fall through to regular tokenize -> RPN pipeline.
+  //    Use TrimmedExpr (which may have been modified by paren-ternary
+  //    substitution) — NOT the original Expr.
+  Tokens := Tokenize(TrimmedExpr);
   if Length(Tokens) = 0 then
     Exit(TValue.From<String>('')); // Return empty string for empty expressions
   if Length(Tokens) = 1 then

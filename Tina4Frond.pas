@@ -5,7 +5,8 @@ interface
 
 
 uses
-  System.SysUtils, System.Classes, System.Generics.Collections, System.RegularExpressions,
+  System.SysUtils, System.Classes, System.Generics.Collections, System.Generics.Defaults,
+  System.RegularExpressions,
   System.Rtti, JSON, System.NetEncoding, System.Math, Variants, System.TypInfo, System.DateUtils,
   System.StrUtils, System.Hash;
 
@@ -3046,14 +3047,14 @@ begin
           for I := 0 to (Length(Arr) - 1) div Size do
           begin
             if I > 0 then
-              Batch.Append(',');
+              Batch.Append(', ');
             Batch.Append('[');
             for J := 0 to Size - 1 do
             begin
               if I * Size + J < Length(Arr) then
               begin
                 if J > 0 then
-                  Batch.Append(',');
+                  Batch.Append(', ');
                 Batch.Append(Arr[I * Size + J].ToString);
               end;
             end;
@@ -3069,14 +3070,14 @@ begin
           for I := 0 to (JSONArray.Count - 1) div Size do
           begin
             if I > 0 then
-              Batch.Append(',');
+              Batch.Append(', ');
             Batch.Append('[');
             for J := 0 to Size - 1 do
             begin
               if I * Size + J < JSONArray.Count then
               begin
                 if J > 0 then
-                  Batch.Append(',');
+                  Batch.Append(', ');
                 Batch.Append(JSONArray.Items[I * Size + J].ToString);
               end;
             end;
@@ -3798,7 +3799,7 @@ begin
           Delimiter := Copy(Delimiter, 2, Length(Delimiter) - 2); // Remove quotes
       end
       else
-        Delimiter := '';
+        Delimiter := ', '; // Frond default matches Python Frond
 
       if Input.IsType<TArray<TValue>> then
       begin
@@ -4867,18 +4868,18 @@ begin
       begin
         for I := Length(Input.AsString) downto 1 do
           OutputStr := OutputStr + Input.AsString[I];
+        Result := TValue.From<String>(OutputStr);
+        Exit;
       end
       else if Input.IsArray then
       begin
         var Arr := Input.AsType<TArray<TValue>>;
-        OutputStr := '[';
-        for I := High(Arr) downto 0 do
-        begin
-          if I < High(Arr) then
-            OutputStr := OutputStr + ',';
-          OutputStr := OutputStr + Arr[I].ToString;
-        end;
-        OutputStr := OutputStr + ']';
+        var Reversed: TArray<TValue>;
+        SetLength(Reversed, Length(Arr));
+        for I := 0 to High(Arr) do
+          Reversed[High(Arr) - I] := Arr[I];
+        Result := TValue.From<TArray<TValue>>(Reversed);
+        Exit;
       end
        else
       if Input.IsObject and (Input.AsObject is TJSONArray) then
@@ -5003,24 +5004,63 @@ begin
     var
       I: Integer;
       S: String;
+      SB: TStringBuilder;
+      LastDash: Boolean;
     begin
-      if Input.Kind in [tkString, tkUString] then
-      begin
-        S := LowerCase(Input.AsString);
-        for I := Length(S) downto 1 do
-          if not (S[I] in ['a'..'z', '0'..'9']) then
-            Delete(S, I, 1);
-        Result := S;
-      end
-      else
-        Result := Input.ToString;
+      S := LowerCase(Input.ToString);
+      SB := TStringBuilder.Create;
+      try
+        LastDash := True; // suppress leading dashes
+        for I := 1 to Length(S) do
+        begin
+          if S[I] in ['a'..'z', '0'..'9'] then
+          begin
+            SB.Append(S[I]);
+            LastDash := False;
+          end
+          else if not LastDash then
+          begin
+            SB.Append('-');
+            LastDash := True;
+          end;
+        end;
+        S := SB.ToString;
+        // Trim trailing dash
+        if (Length(S) > 0) and (S[Length(S)] = '-') then
+          Delete(S, Length(S), 1);
+        Result := TValue.From<String>(S);
+      finally
+        SB.Free;
+      end;
     end);
 
   FFilters.Add('sort',
     function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): TValue
+    var
+      Arr: TArray<TValue>;
+      I: Integer;
     begin
-      // Stub: sorting not implemented
-      Result := Input.ToString;
+      if Input.IsArray then
+      begin
+        Arr := Copy(Input.AsType<TArray<TValue>>);
+        TArray.Sort<TValue>(Arr, TComparer<TValue>.Construct(
+          function(const L, R: TValue): Integer
+          var LF, RF: Double;
+          begin
+            // Numeric comparison when both sides parse as numbers
+            if TryStrToFloat(L.ToString, LF) and TryStrToFloat(R.ToString, RF) then
+            begin
+              if LF < RF then Result := -1
+              else if LF > RF then Result := 1
+              else Result := 0;
+            end
+            else
+              Result := CompareStr(L.ToString, R.ToString);
+          end));
+        Result := TValue.From<TArray<TValue>>(Arr);
+      end
+      else
+        Result := Input;
     end);
 
   FFilters.Add('spaceless',
@@ -5827,13 +5867,19 @@ begin
               Current := ''
             else if ExprVal.IsType<TArray<TValue>> then
             begin
+              // Format arrays Python-style: [1, 2, 3]  (matches Frond/Python repr).
+              // Strings are quoted; numbers/booleans bare.
               Arr := ExprVal.AsType<TArray<TValue>>;
               var ArrStr: TArray<String>;
               SetLength(ArrStr, Length(Arr));
               for var I := 0 to High(Arr) do
-                ArrStr[I] := Arr[I].ToString;
-              Current := String.Join('', ArrStr);
-              //if FDebug then WriteLn('Debug: Array output for ', Tag, ' = ', Current);
+              begin
+                if Arr[I].Kind in [tkString, tkUString] then
+                  ArrStr[I] := '''' + Arr[I].AsString + ''''
+                else
+                  ArrStr[I] := Arr[I].ToString;
+              end;
+              Current := '[' + String.Join(', ', ArrStr) + ']';
             end
             else if ExprVal.Kind in [tkClass, tkRecord] then
               Current := ''

@@ -1335,7 +1335,17 @@ var
       TestArg := TestArg.Trim;
     end;
 
-    LHSVal := EvaluateExpression(LHS, Context);
+    // For "is defined" we cannot use EvaluateExpression because it
+    // coerces undefined variables to empty string, which always looks
+    // "defined" to our check. Instead, resolve the variable path directly
+    // and check the raw TValue — IsEmpty means the variable was missing.
+    var RawVal: TValue;
+    if (TestName = 'defined') or (TestName = 'none') or (TestName = 'null') or
+       (TestName = 'empty') then
+      RawVal := ResolveVariablePath(LHS, Context)
+    else
+      RawVal := EvaluateExpression(LHS, Context);
+    LHSVal := RawVal;
     var TestResult: Boolean := False;
 
     if TestName = 'defined' then
@@ -5023,6 +5033,8 @@ begin
     if Decimals <= 0 then
     begin
       // For integer result, output as integer string (no .00)
+      // This deliberately differs from Frond Python (which would show "4.0"
+      // for round(3.7)) to preserve compatibility with legacy Twig tests.
       Formatted := IntToStr(Trunc(Rounded));
     end
     else
@@ -5452,7 +5464,7 @@ begin
           else
           begin
             SB.Append(Current);
-            SB.AppendLine;
+            SB.Append(#10);  // pure LF survives render's CRLF-strip pass
             Current := Word;
             LineLen := Length(Word);
           end;

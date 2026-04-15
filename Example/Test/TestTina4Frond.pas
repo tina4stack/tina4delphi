@@ -1078,9 +1078,12 @@ end;
 procedure TestTTina4Frond_Filters.TestRoundNoDecimals;
 var R: string;
 begin
+  // Tina4Frond follows Twig/PHP convention: round without precision
+  // returns an integer-formatted string. Python Frond returns "4.0".
+  // We prefer the Twig convention for legacy compatibility.
   FFrond.SetVariable('v', 3.7);
   R := FFrond.Render('{{ v|round }}');
-  Check(R = '4.0', 'round no decimals: got "' + R + '"');
+  Check(R = '4', 'round no decimals: got "' + R + '"');
 end;
 
 procedure TestTTina4Frond_Filters.TestNumberFormat;

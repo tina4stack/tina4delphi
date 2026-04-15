@@ -1123,7 +1123,214 @@ function TTina4Frond.EvaluateExpression(const Expr: String; Context: TDictionary
 var
   Tokens: TArray<String>;
   RPN: TArray<String>;
+  TrimmedExpr: String;
+  NullCoalescePos, TernaryPos, ColonPos: Integer;
+  LHSExpr, RHSExpr, CondExpr, TrueExpr, FalseExpr, ValueExpr: String;
+  LHSValue, CondValue: TValue;
+  IfPos, ElsePos: Integer;
+
+  // Find ?? at top level (ignoring quotes/brackets). Returns position in S,
+  // or 0 if not found.
+  function FindNullCoalesce(const S: String): Integer;
+  var
+    Depth, Idx: Integer;
+    InQuote: Boolean;
+    QuoteCh: Char;
+  begin
+    Result := 0;
+    Depth := 0;
+    InQuote := False;
+    QuoteCh := #0;
+    Idx := 1;
+    while Idx <= Length(S) - 1 do
+    begin
+      if InQuote then
+      begin
+        if S[Idx] = QuoteCh then InQuote := False;
+      end
+      else if S[Idx] in ['''', '"'] then
+      begin
+        InQuote := True; QuoteCh := S[Idx];
+      end
+      else if S[Idx] in ['(', '[', '{'] then
+        Inc(Depth)
+      else if S[Idx] in [')', ']', '}'] then
+        Dec(Depth)
+      else if (Depth = 0) and (S[Idx] = '?') and (S[Idx + 1] = '?') then
+        Exit(Idx);
+      Inc(Idx);
+    end;
+  end;
+
+  // Find top-level ? (for ternary), ensuring it's NOT part of ??.
+  function FindTernaryQuestion(const S: String): Integer;
+  var
+    Depth, Idx: Integer;
+    InQuote: Boolean;
+    QuoteCh: Char;
+  begin
+    Result := 0;
+    Depth := 0;
+    InQuote := False;
+    QuoteCh := #0;
+    Idx := 1;
+    while Idx <= Length(S) do
+    begin
+      if InQuote then
+      begin
+        if S[Idx] = QuoteCh then InQuote := False;
+      end
+      else if S[Idx] in ['''', '"'] then
+      begin
+        InQuote := True; QuoteCh := S[Idx];
+      end
+      else if S[Idx] in ['(', '[', '{'] then
+        Inc(Depth)
+      else if S[Idx] in [')', ']', '}'] then
+        Dec(Depth)
+      else if (Depth = 0) and (S[Idx] = '?') then
+      begin
+        // Skip ??
+        if (Idx < Length(S)) and (S[Idx + 1] = '?') then
+        begin
+          Inc(Idx, 2);
+          Continue;
+        end;
+        Exit(Idx);
+      end;
+      Inc(Idx);
+    end;
+  end;
+
+  // Find top-level : matching a ? for ternary
+  function FindTernaryColon(const S: String; StartPos: Integer): Integer;
+  var
+    Depth, Idx: Integer;
+    InQuote: Boolean;
+    QuoteCh: Char;
+  begin
+    Result := 0;
+    Depth := 0;
+    InQuote := False;
+    QuoteCh := #0;
+    for Idx := StartPos to Length(S) do
+    begin
+      if InQuote then
+      begin
+        if S[Idx] = QuoteCh then InQuote := False;
+      end
+      else if S[Idx] in ['''', '"'] then
+      begin
+        InQuote := True; QuoteCh := S[Idx];
+      end
+      else if S[Idx] in ['(', '[', '{'] then
+        Inc(Depth)
+      else if S[Idx] in [')', ']', '}'] then
+        Dec(Depth)
+      else if (Depth = 0) and (S[Idx] = ':') then
+        Exit(Idx);
+    end;
+  end;
+
+  // Find top-level occurrence of a whole-word keyword in S. Returns position
+  // (1-based), or 0 if not found. Skips quoted strings and bracketed groups.
+  function FindTopLevelKeyword(const S, Keyword: String): Integer;
+  var
+    Depth, Idx, KLen: Integer;
+    InQuote: Boolean;
+    QuoteCh: Char;
+    LeftOK, RightOK: Boolean;
+  begin
+    Result := 0;
+    Depth := 0;
+    InQuote := False;
+    QuoteCh := #0;
+    KLen := Length(Keyword);
+    Idx := 1;
+    while Idx <= Length(S) - KLen + 1 do
+    begin
+      if InQuote then
+      begin
+        if S[Idx] = QuoteCh then InQuote := False;
+      end
+      else if S[Idx] in ['''', '"'] then
+      begin
+        InQuote := True; QuoteCh := S[Idx];
+      end
+      else if S[Idx] in ['(', '[', '{'] then
+        Inc(Depth)
+      else if S[Idx] in [')', ']', '}'] then
+        Dec(Depth)
+      else if (Depth = 0) and (SameText(Copy(S, Idx, KLen), Keyword)) then
+      begin
+        LeftOK := (Idx = 1) or not CharInSet(S[Idx - 1], ['A'..'Z','a'..'z','0'..'9','_']);
+        RightOK := (Idx + KLen - 1 = Length(S)) or
+                   not CharInSet(S[Idx + KLen], ['A'..'Z','a'..'z','0'..'9','_']);
+        if LeftOK and RightOK then
+          Exit(Idx);
+      end;
+      Inc(Idx);
+    end;
+  end;
+
 begin
+  TrimmedExpr := Expr.Trim;
+
+  // 0. Inline-if: valueA if cond else valueB  (Jinja/Twig style)
+  IfPos := FindTopLevelKeyword(TrimmedExpr, 'if');
+  if IfPos > 0 then
+  begin
+    ElsePos := FindTopLevelKeyword(TrimmedExpr, 'else');
+    if (ElsePos > IfPos) then
+    begin
+      ValueExpr := Copy(TrimmedExpr, 1, IfPos - 1).Trim;
+      CondExpr := Copy(TrimmedExpr, IfPos + 2, ElsePos - IfPos - 2).Trim;
+      FalseExpr := Copy(TrimmedExpr, ElsePos + 4, MaxInt).Trim;
+      CondValue := EvaluateExpression(CondExpr, Context);
+      if ToBool(CondValue) then
+        Result := EvaluateExpression(ValueExpr, Context)
+      else
+        Result := EvaluateExpression(FalseExpr, Context);
+      Exit;
+    end;
+  end;
+
+  // 1. Null-coalescing: LHS ?? RHS  (lowest precedence, check first)
+  NullCoalescePos := FindNullCoalesce(TrimmedExpr);
+  if NullCoalescePos > 0 then
+  begin
+    LHSExpr := Copy(TrimmedExpr, 1, NullCoalescePos - 1).Trim;
+    RHSExpr := Copy(TrimmedExpr, NullCoalescePos + 2, MaxInt).Trim;
+    LHSValue := EvaluateExpression(LHSExpr, Context);
+    // Frond semantics: ?? falls through when LHS is null/empty
+    if LHSValue.IsEmpty or
+       ((LHSValue.Kind in [tkString, tkUString]) and (LHSValue.AsString = '')) then
+      Result := EvaluateExpression(RHSExpr, Context)
+    else
+      Result := LHSValue;
+    Exit;
+  end;
+
+  // 2. Ternary: cond ? trueVal : falseVal
+  TernaryPos := FindTernaryQuestion(TrimmedExpr);
+  if TernaryPos > 0 then
+  begin
+    ColonPos := FindTernaryColon(TrimmedExpr, TernaryPos + 1);
+    if ColonPos > TernaryPos then
+    begin
+      CondExpr := Copy(TrimmedExpr, 1, TernaryPos - 1).Trim;
+      TrueExpr := Copy(TrimmedExpr, TernaryPos + 1, ColonPos - TernaryPos - 1).Trim;
+      FalseExpr := Copy(TrimmedExpr, ColonPos + 1, MaxInt).Trim;
+      CondValue := EvaluateExpression(CondExpr, Context);
+      if ToBool(CondValue) then
+        Result := EvaluateExpression(TrueExpr, Context)
+      else
+        Result := EvaluateExpression(FalseExpr, Context);
+      Exit;
+    end;
+  end;
+
+  // 3. Fall through to regular tokenize -> RPN pipeline
   Tokens := Tokenize(Expr);
   if Length(Tokens) = 0 then
     Exit(TValue.From<String>('')); // Return empty string for empty expressions

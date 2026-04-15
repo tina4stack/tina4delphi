@@ -163,6 +163,7 @@
             <MainSource>MainSource</MainSource>
         </DelphiCompile>
         <DCCReference Include="TestTina4Twig.pas"/>
+        <DCCReference Include="TestTina4Frond.pas"/>
         <DCCReference Include="TestTina4Core.pas"/>
         <DCCReference Include="TestTina4Components.pas"/>
         <DCCReference Include="TestTina4WebSocket.pas"/>

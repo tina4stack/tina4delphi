@@ -89,6 +89,17 @@ type
     /// <summary>Enables or disables debug output during template rendering.</summary>
     /// <param name="Value">True to enable debug output, False to disable.</param>
     procedure SetDebug(Value: Boolean=True);
+    /// <summary>
+    /// Registers a custom filter callable from templates as `{{ value | name }}`
+    /// or `{{ value | name(arg1, arg2) }}`. Replaces any prior filter of the
+    /// same name (including built-ins).
+    /// </summary>
+    procedure AddFilter(const AName: String; AFilter: TFilterFunc);
+    /// <summary>
+    /// Registers a custom function callable from templates as `{{ name(arg) }}`.
+    /// Replaces any prior function of the same name.
+    /// </summary>
+    procedure AddFunction(const AName: String; AFunc: TFunctionFunc);
   end;
 
   /// <summary>Backwards-compatibility alias. Existing code using TTina4Twig
@@ -934,6 +945,71 @@ begin
           end
           else
             raise Exception.Create('Function ' + Token + ' not found');
+        finally
+          ArgList.Free;
+        end;
+        Inc(I);
+        Continue;
+      end;
+      // Macro call dispatch — consume N args from RPN where N = macro's
+      // declared param count. Each arg may be a quoted string literal,
+      // a context variable name, or a numeric literal. The InfixToRPN
+      // filter-chain folder may have collapsed the LAST arg with a
+      // trailing `|filter` chain (e.g. `"World"|raw`); split that off
+      // and apply the chain to the macro result instead.
+      if FMacros.ContainsKey(Token) then
+      begin
+        var MacroParamArr: TArray<String>;
+        var MacroParamCount := 0;
+        if FMacroParams.TryGetValue(Token, MacroParamArr) then
+          MacroParamCount := Length(MacroParamArr);
+        ArgList := TList<String>.Create;
+        var TrailingFilterChain := '';
+        try
+          var Consumed := 0;
+          while (Consumed < MacroParamCount) and (I + 1 < Length(RPN)) do
+          begin
+            Inc(I);
+            var ArgTok := RPN[I];
+            // If arg starts with a quote, find the matching closing quote
+            // and split off any trailing |filter chain.
+            if (Length(ArgTok) >= 2) and
+               (ArgTok.StartsWith('"') or ArgTok.StartsWith('''')) then
+            begin
+              var QC := ArgTok[1];
+              var CloseIdx := -1;
+              for var qi := 2 to Length(ArgTok) do
+                if ArgTok[qi] = QC then begin CloseIdx := qi; Break; end;
+              if (CloseIdx > 0) and (CloseIdx < Length(ArgTok)) and
+                 (ArgTok[CloseIdx + 1] = '|') then
+              begin
+                TrailingFilterChain := Copy(ArgTok, CloseIdx + 1, MaxInt);
+                ArgTok := Copy(ArgTok, 2, CloseIdx - 2);
+              end
+              else if (CloseIdx > 0) and (CloseIdx = Length(ArgTok)) then
+                ArgTok := Copy(ArgTok, 2, CloseIdx - 2);
+            end;
+            ArgList.Add(ArgTok);
+            Inc(Consumed);
+          end;
+          var MacroDispatch := FMacros[Token];
+          CurrentVal := TValue.From<String>(MacroDispatch(Token, ArgList.ToArray, Context));
+          // If a filter chain trailed the last arg, apply it now.
+          if TrailingFilterChain <> '' then
+          begin
+            var ChainParts := TrailingFilterChain.Split(['|'], TStringSplitOptions.ExcludeEmpty);
+            for var ChainFilterName in ChainParts do
+            begin
+              var FName := Trim(ChainFilterName);
+              // Strip any (args) from filter name for now — apply with no args.
+              var ParenIdx := Pos('(', FName);
+              if ParenIdx > 0 then
+                FName := Trim(Copy(FName, 1, ParenIdx - 1));
+              if FFilters.TryGetValue(FName, Filter) then
+                CurrentVal := Filter(CurrentVal, [], Context);
+            end;
+          end;
+          Stack.Push(CurrentVal);
         finally
           ArgList.Free;
         end;
@@ -3118,6 +3194,40 @@ begin
         end;
         SB.Append(IncludedText);
       end
+      else if Tag.StartsWith('from ') then
+      begin
+        // Syntax: {% from "path/to/file.twig" import name1, name2, ... %}
+        // Loads the template, registers all its macros into FMacros,
+        // then drops the tag from output.
+        var Rest := Trim(Copy(Tag, 6, MaxInt));
+        var ImportPos := Pos(' import ', Rest);
+        if ImportPos = 0 then
+          Continue;
+        var FromPath := Trim(Copy(Rest, 1, ImportPos - 1));
+        // Strip surrounding quotes from path
+        if (Length(FromPath) >= 2) and
+           ((FromPath.StartsWith('"') and FromPath.EndsWith('"')) or
+            (FromPath.StartsWith('''') and FromPath.EndsWith(''''))) then
+          FromPath := Copy(FromPath, 2, Length(FromPath) - 2);
+        var FromFullPath := IncludeTrailingPathDelimiter(FTemplatePath) + FromPath;
+        if not FileExists(FromFullPath) then
+          Continue;
+        var FromTpl: String := '';
+        var FromTplList := TStringList.Create;
+        try
+          try
+            FromTplList.LoadFromFile(FromFullPath);
+            FromTpl := FromTplList.Text;
+          except
+            Continue;
+          end;
+        finally
+          FromTplList.Free;
+        end;
+        // Register macros from the imported file. The discard is intentional —
+        // we only need the side effect of populating FMacros / FMacroBodies.
+        EvaluateMacroBlocks(FromTpl, Context);
+      end
       else
         SB.Append('{% ' + Tag + ' %}');
     end;
@@ -3141,14 +3251,14 @@ end;
 /// blocks in the parent. Ensures includes in the parent template are processed correctly.
 /// </remarks>
 function TTina4Frond.EvaluateExtends(const Template: String; Context: TDictionary<String, TValue>): String;
-// Walks a single template body, returning (via out params) the first
-// {% extends "..." %} target name and a dict of block-name -> raw body
-// for every {% block X %}...{% endblock %} found at the top level.
-//
-// Used by EvaluateExtends to walk the inheritance chain from child upward.
+// Walks a single template body, gathering the first {% extends "..." %}
+// target and APPENDING each top-level {% block X %}...{% endblock %} body
+// to BlockChains[X]. Multiple bodies stack in the order encountered:
+// because we walk leaf -> root, BlockChains[X][0] is the leafmost (child),
+// BlockChains[X][N] is the rootmost. parent()/super() expansion uses this.
   procedure CollectBlocksAndExtends(
     const Tpl: String;
-    Blocks: TDictionary<String, String>;
+    BlockChains: TDictionary<String, TList<String>>;
     out ExtendsName: String);
   var
     P, EP, TS, BS, Depth: Integer;
@@ -3203,19 +3313,47 @@ function TTina4Frond.EvaluateExtends(const Template: String; Context: TDictionar
           if T.StartsWith('block ') then Inc(Depth)
           else if T = 'endblock' then Dec(Depth);
         end;
-        // Only register the FIRST occurrence (a child's block wins)
-        if not Blocks.ContainsKey(BN) then
-          Blocks.AddOrSetValue(BN, Copy(Tpl, BS, TS - BS));
+        // Append this body to the chain. Caller walks leaf -> root, so
+        // the leaf's body lands at index 0, the root's at index N.
+        var BodyText := Copy(Tpl, BS, TS - BS);
+        if not BlockChains.ContainsKey(BN) then
+          BlockChains.Add(BN, TList<String>.Create);
+        BlockChains[BN].Add(BodyText);
       end;
     end;
   end;
 
-  // Renders a template against an accumulated block override map.
-  // Walks template body; for each {% block X %}, if X is in BlockMap,
-  // emits BlockMap[X] (which may itself contain nested blocks needing
-  // further substitution — handled by recursive call). Else emits
-  // the block's default body.
-  function RenderWithBlocks(const Tpl: String; BlockMap: TDictionary<String, String>): String;
+  // Resolves a block body at a given chain depth, replacing any
+  // parent()/super() calls inside it with the next-level-up body
+  // (recursively resolved). Index 0 = leaf (most-derived), N = root.
+  function ResolveBlockBody(BlockChains: TDictionary<String, TList<String>>;
+    const BN: String; Depth: Integer): String;
+  var
+    Body, ParentResolved: String;
+  begin
+    if (not BlockChains.ContainsKey(BN)) or (Depth >= BlockChains[BN].Count) then
+      Exit('');
+    Body := BlockChains[BN][Depth];
+    // Resolve parent()/super() to the next level up. If no further level,
+    // they collapse to empty string.
+    if (Pos('parent()', Body) > 0) or (Pos('super()', Body) > 0) then
+    begin
+      ParentResolved := ResolveBlockBody(BlockChains, BN, Depth + 1);
+      Body := StringReplace(Body, '{{ parent() }}', ParentResolved, [rfReplaceAll]);
+      Body := StringReplace(Body, '{{parent()}}', ParentResolved, [rfReplaceAll]);
+      Body := StringReplace(Body, '{{ super() }}', ParentResolved, [rfReplaceAll]);
+      Body := StringReplace(Body, '{{super()}}', ParentResolved, [rfReplaceAll]);
+    end;
+    Result := Body;
+  end;
+
+  // Renders a template against accumulated block override chains.
+  // Walks template body; for each {% block X %}, emits the leafmost
+  // override (with parent()/super() resolved against the chain) if X
+  // has overrides, else the default body. Nested block tags inside
+  // substituted content are resolved by recursive call.
+  function RenderWithBlocks(const Tpl: String;
+    BlockChains: TDictionary<String, TList<String>>): String;
   var
     SB: TStringBuilder;
     P, EP, TS, BS, Depth: Integer;
@@ -3263,13 +3401,12 @@ function TTina4Frond.EvaluateExtends(const Template: String; Context: TDictionar
             if T.StartsWith('block ') then Inc(Depth)
             else if T = 'endblock' then Dec(Depth);
           end;
-          // Substitute: child override if present, else block default.
-          // Recurse — the substituted content may contain more block tags
-          // that need their own substitution from the same map.
-          if BlockMap.ContainsKey(BN) then
-            SB.Append(RenderWithBlocks(BlockMap[BN], BlockMap))
+          // Substitute: leaf override (with parent() resolved) if present,
+          // else block default. Recurse to handle nested block tags.
+          if BlockChains.ContainsKey(BN) and (BlockChains[BN].Count > 0) then
+            SB.Append(RenderWithBlocks(ResolveBlockBody(BlockChains, BN, 0), BlockChains))
           else
-            SB.Append(RenderWithBlocks(Copy(Tpl, BS, TS - BS), BlockMap));
+            SB.Append(RenderWithBlocks(Copy(Tpl, BS, TS - BS), BlockChains));
         end
         else if T = 'endblock' then
           Continue
@@ -3286,16 +3423,18 @@ var
   SB: TStringBuilder;
   CurrentPos, EndPos, TagStart, BlockStart: Integer;
   Tag, ExtendsExpr, ParentTemplateName, ParentTemplate, BlockName, BlockContent: String;
-  Blocks: TDictionary<String, String>;
+  Blocks: TDictionary<String, TList<String>>;
   BlockDepth: Integer;
 begin
   // Multi-level extends: walk the chain bottom-up, accumulating block
-  // overrides. Then render the topmost ancestor's body with all collected
-  // block bodies substituted.
-  Blocks := TDictionary<String, String>.Create;
+  // overrides per name into a list (leaf at index 0, root at index N).
+  // Then render the topmost ancestor's body with all collected
+  // block bodies substituted, resolving parent()/super() against the chain.
+  Blocks := TDictionary<String, TList<String>>.Create;
   try
     var CurrentTpl := Template;
     var TopLevelTpl := Template;
+    var SawExtends := False;
     while True do
     begin
       var NextExtends: String := '';
@@ -3305,22 +3444,11 @@ begin
         TopLevelTpl := CurrentTpl;
         Break;
       end;
+      SawExtends := True;
       CurrentTpl := LoadTemplate(NextExtends);
     end;
-    // If no extends in the chain at all, return the original template as-is
-    if TopLevelTpl = Template then
-    begin
-      // Was there an extends? Re-check first level.
-      var Probe: String := '';
-      var ProbeBlocks := TDictionary<String, String>.Create;
-      try
-        CollectBlocksAndExtends(Template, ProbeBlocks, Probe);
-        if Probe = '' then
-          Exit(Template);
-      finally
-        ProbeBlocks.Free;
-      end;
-    end;
+    if not SawExtends then
+      Exit(Template);
     var Substituted := RenderWithBlocks(TopLevelTpl, Blocks);
     var LocalContext := TDictionary<String, TValue>.Create;
     try
@@ -3332,6 +3460,8 @@ begin
     end;
     Exit;
   finally
+    for var BList in Blocks.Values do
+      BList.Free;
     Blocks.Free;
   end;
 end;
@@ -3344,6 +3474,8 @@ end;
 /// </remarks>
 
 function TTina4Frond.ConvertPHPToDelphiDateFormat(const PHPFmt: String): String;
+var
+  I: Integer;
 begin
   // If format already contains Delphi-style repeated specifiers, use as-is
   if ContainsText(PHPFmt, 'yyyy') or ContainsText(PHPFmt, 'mm') or
@@ -3351,10 +3483,37 @@ begin
      ContainsText(PHPFmt, 'ss') or ContainsText(PHPFmt, 'hh') then
     Exit(PHPFmt);
 
-  // Convert PHP single-character date specifiers to Delphi FormatDateTime equivalents
+  // Convert PHP single-character date specifiers to Delphi FormatDateTime
+  // equivalents. Also accepts Python strftime %-prefixed codes (%Y, %m, %d,
+  // %H, %M, %S, %y, %B, %b, %A, %a, %j, %p) by translating them inline.
   Result := '';
-  for var I := 1 to Length(PHPFmt) do
+  I := 1;
+  while I <= Length(PHPFmt) do
   begin
+    if (PHPFmt[I] = '%') and (I < Length(PHPFmt)) then
+    begin
+      case PHPFmt[I + 1] of
+        'Y': Result := Result + 'yyyy';
+        'y': Result := Result + 'yy';
+        'm': Result := Result + 'mm';
+        'd': Result := Result + 'dd';
+        'H': Result := Result + 'hh';
+        'I': Result := Result + 'hh';
+        'M': Result := Result + 'nn';
+        'S': Result := Result + 'ss';
+        'B': Result := Result + 'mmmm';
+        'b': Result := Result + 'mmm';
+        'A': Result := Result + 'dddd';
+        'a': Result := Result + 'ddd';
+        'j': Result := Result + 'ddd';
+        'p': Result := Result + 'AM/PM';
+        '%': Result := Result + '%';
+      else
+        Result := Result + PHPFmt[I] + PHPFmt[I + 1];
+      end;
+      Inc(I, 2);
+      Continue;
+    end;
     case PHPFmt[I] of
       'Y': Result := Result + 'yyyy';
       'y': Result := Result + 'yy';
@@ -3377,6 +3536,7 @@ begin
     else
       Result := Result + PHPFmt[I];
     end;
+    Inc(I);
   end;
 end;
 
@@ -3786,9 +3946,29 @@ begin
 
   FFilters.Add('filter',
     function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): TValue
+    var
+      Arr, Filtered: TArray<TValue>;
+      I, K: Integer;
     begin
-      // Stub: generic filter not implemented
-      Result := Input.ToString;
+      // Without a callback, behave like Python's filter(None, seq) /
+      // Twig default: keep only truthy items (drop empty strings, 0,
+      // false, None/empty TValue).
+      if not Input.IsType<TArray<TValue>> then
+        Exit(Input);
+      Arr := Input.AsType<TArray<TValue>>;
+      SetLength(Filtered, Length(Arr));
+      K := 0;
+      for I := 0 to High(Arr) do
+      begin
+        if Arr[I].IsEmpty then Continue;
+        if (Arr[I].Kind in [tkString, tkUString]) and (Arr[I].AsString = '') then Continue;
+        if Arr[I].IsOrdinal and (Arr[I].AsOrdinal = 0) then Continue;
+        if Arr[I].IsType<Boolean> and (not Arr[I].AsBoolean) then Continue;
+        Filtered[K] := Arr[I];
+        Inc(K);
+      end;
+      SetLength(Filtered, K);
+      Result := TValue.From<TArray<TValue>>(Filtered);
     end);
 
   FFilters.Add('find',
@@ -3831,12 +4011,19 @@ begin
     Fmt := Input.ToString;
     SB := TStringBuilder.Create;
     try
-      // Resolve all arguments via context, handling variables and literals
+      // Resolve all arguments via context, handling variables and literals.
+      // Args have already been quote-stripped by the filter-chain parser.
+      // Try context lookup first; if the variable doesn't exist, treat
+      // the arg as a literal string so {{ "x %s" | format("y") }} works.
       SetLength(ArgValues, Length(Args));
       for I := 0 to High(Args) do
       begin
-        ArgValues[I] := GetExpressionValue(Args[I], Context).ToString;
-        // Remove quotes from string literals if present
+        var Resolved: TValue;
+        if Context.TryGetValue(Args[I], Resolved) then
+          ArgValues[I] := Resolved.ToString
+        else
+          ArgValues[I] := Args[I];
+        // Defensive: strip surrounding quotes if any survived.
         if ((ArgValues[I].StartsWith('"') and ArgValues[I].EndsWith('"')) or
             (ArgValues[I].StartsWith('''') and ArgValues[I].EndsWith(''''))) and (Length(ArgValues[I]) >= 2) then
           ArgValues[I] := Copy(ArgValues[I], 2, Length(ArgValues[I]) - 2);
@@ -4345,14 +4532,28 @@ begin
       if Length(Args) = 0 then
         Exit(Input.ToString);
       ArrowExpr := Trim(Args[0]);
-      // Parse arrow function: e.g., "task => task.end_date"
+      // Parse arrow function ("task => task.end_date") or, when there is
+      // no `=>`, treat the arg as a field/attribute name and project that
+      // field from each item ({{ items|map("name") }}).
       PosArrow := Pos('=>', ArrowExpr);
       if PosArrow <= 0 then
-        raise Exception.Create('Invalid map filter argument: expected arrow function, got ' + ArrowExpr);
-      VarName := Trim(Copy(ArrowExpr, 1, PosArrow - 1));
-      Expr := Trim(Copy(ArrowExpr, PosArrow + 2, MaxInt));
-      if (VarName = '') or (Expr = '') then
-        raise Exception.Create('Invalid map filter argument: empty variable or expression in ' + ArrowExpr);
+      begin
+        // Field projection mode — synthesise an arrow function.
+        var FieldName := ArrowExpr;
+        if (Length(FieldName) >= 2) and
+           ((FieldName.StartsWith('"') and FieldName.EndsWith('"')) or
+            (FieldName.StartsWith('''') and FieldName.EndsWith(''''))) then
+          FieldName := Copy(FieldName, 2, Length(FieldName) - 2);
+        VarName := '_item';
+        Expr := '_item.' + FieldName;
+      end
+      else
+      begin
+        VarName := Trim(Copy(ArrowExpr, 1, PosArrow - 1));
+        Expr := Trim(Copy(ArrowExpr, PosArrow + 2, MaxInt));
+        if (VarName = '') or (Expr = '') then
+          raise Exception.Create('Invalid map filter argument: empty variable or expression in ' + ArrowExpr);
+      end;
 
       ResultArr := TList<TValue>.Create;
       try
@@ -6291,6 +6492,26 @@ begin
               end;
               Current := '[' + String.Join(', ', ArrStr) + ']';
             end
+            else if ExprVal.IsObject and (ExprVal.AsObject is TDictionary<String, TValue>) then
+            begin
+              // Format dict Python-style: {'a': 1, 'b': 'c'} so {{ obj }}
+              // produces useful output instead of an empty string.
+              var Dict := TDictionary<String, TValue>(ExprVal.AsObject);
+              var Pairs: TArray<String>;
+              SetLength(Pairs, Dict.Count);
+              var Idx := 0;
+              for var Pair in Dict do
+              begin
+                var ValStr: String;
+                if Pair.Value.Kind in [tkString, tkUString] then
+                  ValStr := '''' + Pair.Value.AsString + ''''
+                else
+                  ValStr := Pair.Value.ToString;
+                Pairs[Idx] := '''' + Pair.Key + ''': ' + ValStr;
+                Inc(Idx);
+              end;
+              Current := '{' + String.Join(', ', Pairs) + '}';
+            end
             else if ExprVal.Kind in [tkClass, tkRecord] then
               Current := ''
             else
@@ -6536,22 +6757,38 @@ begin
                 if ForDepth = 0 then
                 begin
                   ForParts := Tokenize(Copy(ForTag, 5, MaxInt));
-                  if (Length(ForParts) < 3) or (ForParts[1] <> 'in') then
+                  // Two forms supported:
+                  //   for x in iter            -> ForParts[0]=x, [1]=in
+                  //   for k, v in iter         -> ForParts[0]=k, [1]=',', [2]=v, [3]=in
+                  // For the second form, KeyLoopVar holds the dict key.
+                  var KeyLoopVar := '';
+                  var InIdx := -1;
+                  if (Length(ForParts) >= 4) and (ForParts[1] = ',') and (ForParts[3] = 'in') then
+                  begin
+                    KeyLoopVar := ForParts[0];
+                    LoopVar := ForParts[2];
+                    InIdx := 3;
+                  end
+                  else if (Length(ForParts) >= 3) and (ForParts[1] = 'in') then
+                  begin
+                    LoopVar := ForParts[0];
+                    InIdx := 1;
+                  end
+                  else
                     raise Exception.Create('Invalid for: ' + ForTag);
-                  LoopVar := ForParts[0];
                   LoopExpr := '';
                   LoopCondition := '';
-                  for var J := 2 to High(ForParts) do
+                  for var J := InIdx + 1 to High(ForParts) do
                   begin
                     if ForParts[J] = 'if' then
                     begin
-                      LoopExpr := String.Join(' ', Copy(ForParts, 2, J - 2));
+                      LoopExpr := String.Join(' ', Copy(ForParts, InIdx + 1, J - InIdx - 1));
                       LoopCondition := String.Join(' ', Copy(ForParts, J + 1, MaxInt));
                       Break;
                     end;
                   end;
                   if LoopExpr = '' then
-                    LoopExpr := String.Join(' ', Copy(ForParts, 2, MaxInt));
+                    LoopExpr := String.Join(' ', Copy(ForParts, InIdx + 1, MaxInt));
                   Iterable := EvaluateExpression(LoopExpr, LocalContext);
 
                   (*if FDebug then
@@ -6629,6 +6866,10 @@ begin
                         // Copy all current LocalContext values to LoopContext
                         for var Pair2 in LocalContext do
                           LoopContext.AddOrSetValue(Pair2.Key, Pair2.Value);
+                        // For `for k, v in dict`, bind both names; otherwise
+                        // only the value (Twig default).
+                        if KeyLoopVar <> '' then
+                          LoopContext.AddOrSetValue(KeyLoopVar, TValue.From<String>(Pair.Key));
                         LoopContext.AddOrSetValue(LoopVar, Pair.Value);
                         //if FDebug then WriteLn('Debug: Loop var ', LoopVar, ' = ', Pair.Value.ToString);
                         if (LoopCondition = '') or ToBool(EvaluateExpression(LoopCondition, LoopContext)) then
@@ -7105,6 +7346,16 @@ end;
 procedure TTina4Frond.SetDebug(Value: Boolean);
 begin
   FDebug := Value;
+end;
+
+procedure TTina4Frond.AddFilter(const AName: String; AFilter: TFilterFunc);
+begin
+  FFilters.AddOrSetValue(AName, AFilter);
+end;
+
+procedure TTina4Frond.AddFunction(const AName: String; AFunc: TFunctionFunc);
+begin
+  FFunctions.AddOrSetValue(AName, AFunc);
 end;
 
 /// <summary>

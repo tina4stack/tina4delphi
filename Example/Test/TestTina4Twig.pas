@@ -1225,7 +1225,11 @@ var
 begin
   TemplateOrContent := '{{ names | merge(["Charlie", "David"]) }}';
   ReturnValue := FTina4Twig.Render(TemplateOrContent);
-  Check(ReturnValue = 'AliceBobCharlieDavid', TemplateOrContent + ' - Should be AliceBobCharlieDavid, got ' + ReturnValue);
+  // After Frond rename: arrays now render Python-style as
+  // ['Alice', 'Bob', 'Charlie', 'David'] instead of concatenated.
+  // Use |join when concatenation is desired.
+  Check(ReturnValue = '[''Alice'', ''Bob'', ''Charlie'', ''David'']',
+    TemplateOrContent + ' - got ' + ReturnValue);
 end;
 
 procedure TestTTina4Twig.TestMacrosMultipleMacros;

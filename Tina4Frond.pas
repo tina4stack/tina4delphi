@@ -3070,6 +3070,14 @@ begin
         IncludeExpr := Trim(Copy(Tag, 9, MaxInt));
         UseOnly := False;
         IncludeDict := nil;
+        // Detect "ignore missing" suffix — when present, missing template
+        // is silently skipped (Twig/Jinja semantics).
+        var IgnoreMissing := False;
+        if IncludeExpr.EndsWith(' ignore missing') then
+        begin
+          IgnoreMissing := True;
+          IncludeExpr := Trim(Copy(IncludeExpr, 1, Length(IncludeExpr) - 15));
+        end;
         if IncludeExpr.Contains(' with ') then
         begin
           var WithPos := Pos(' with ', IncludeExpr);
@@ -3085,6 +3093,15 @@ begin
         IncludeName := EvaluateExpression(IncludeExpr, Context).ToString;
         if ((IncludeName.StartsWith('"') and IncludeName.EndsWith('"')) or (IncludeName.StartsWith('''') and IncludeName.EndsWith(''''))) and (Length(IncludeName) >= 2) then
           IncludeName := Copy(IncludeName, 2, Length(IncludeName) - 2);
+        // Check existence; honor ignore missing flag
+        var FullPath := IncludeTrailingPathDelimiter(FTemplatePath) + IncludeName;
+        if not FileExists(FullPath) then
+        begin
+          if IgnoreMissing then
+            Continue   // skip silently
+          else
+            raise Exception.Create('Template not found: ' + IncludeName);
+        end;
         var LocalContext: TDictionary<String, TValue> := TDictionary<String, TValue>.Create;
         try
           if not UseOnly then
@@ -3124,6 +3141,147 @@ end;
 /// blocks in the parent. Ensures includes in the parent template are processed correctly.
 /// </remarks>
 function TTina4Frond.EvaluateExtends(const Template: String; Context: TDictionary<String, TValue>): String;
+// Walks a single template body, returning (via out params) the first
+// {% extends "..." %} target name and a dict of block-name -> raw body
+// for every {% block X %}...{% endblock %} found at the top level.
+//
+// Used by EvaluateExtends to walk the inheritance chain from child upward.
+  procedure CollectBlocksAndExtends(
+    const Tpl: String;
+    Blocks: TDictionary<String, String>;
+    out ExtendsName: String);
+  var
+    P, EP, TS, BS, Depth: Integer;
+    T, EE: String;
+  begin
+    ExtendsName := '';
+    P := 1;
+    while P <= Length(Tpl) do
+    begin
+      EP := P;
+      while (EP <= Length(Tpl)) and not ((Tpl[EP] = '{') and (EP + 1 <= Length(Tpl)) and (Tpl[EP + 1] = '%')) do
+        Inc(EP);
+      if EP > Length(Tpl) then Break;
+      TS := EP;
+      P := EP + 2;
+      EP := P;
+      while (EP <= Length(Tpl)) and not ((Tpl[EP] = '%') and (EP + 1 <= Length(Tpl)) and (Tpl[EP + 1] = '}')) do
+        Inc(EP);
+      if EP > Length(Tpl) then Exit;
+      T := Trim(Copy(Tpl, P, EP - P));
+      P := EP + 2;
+      if T.StartsWith('extends ') then
+      begin
+        if ExtendsName = '' then
+        begin
+          EE := Trim(Copy(T, 8, MaxInt));
+          ExtendsName := EvaluateExpression(EE, Context).ToString;
+          if ((ExtendsName.StartsWith('"') and ExtendsName.EndsWith('"')) or
+              (ExtendsName.StartsWith('''') and ExtendsName.EndsWith(''''))) and
+             (Length(ExtendsName) >= 2) then
+            ExtendsName := Copy(ExtendsName, 2, Length(ExtendsName) - 2);
+        end;
+      end
+      else if T.StartsWith('block ') then
+      begin
+        var BN := Trim(Copy(T, 6, MaxInt));
+        Depth := 1;
+        BS := P;
+        while (P <= Length(Tpl)) and (Depth > 0) do
+        begin
+          EP := P;
+          while (EP <= Length(Tpl)) and not ((Tpl[EP] = '{') and (EP + 1 <= Length(Tpl)) and (Tpl[EP + 1] = '%')) do
+            Inc(EP);
+          if EP > Length(Tpl) then Exit;
+          TS := EP;
+          P := EP + 2;
+          EP := P;
+          while (EP <= Length(Tpl)) and not ((Tpl[EP] = '%') and (EP + 1 <= Length(Tpl)) and (Tpl[EP + 1] = '}')) do
+            Inc(EP);
+          T := Trim(Copy(Tpl, P, EP - P));
+          P := EP + 2;
+          if T.StartsWith('block ') then Inc(Depth)
+          else if T = 'endblock' then Dec(Depth);
+        end;
+        // Only register the FIRST occurrence (a child's block wins)
+        if not Blocks.ContainsKey(BN) then
+          Blocks.AddOrSetValue(BN, Copy(Tpl, BS, TS - BS));
+      end;
+    end;
+  end;
+
+  // Renders a template against an accumulated block override map.
+  // Walks template body; for each {% block X %}, if X is in BlockMap,
+  // emits BlockMap[X] (which may itself contain nested blocks needing
+  // further substitution — handled by recursive call). Else emits
+  // the block's default body.
+  function RenderWithBlocks(const Tpl: String; BlockMap: TDictionary<String, String>): String;
+  var
+    SB: TStringBuilder;
+    P, EP, TS, BS, Depth: Integer;
+    T, BN: String;
+  begin
+    SB := TStringBuilder.Create;
+    try
+      P := 1;
+      while P <= Length(Tpl) do
+      begin
+        EP := P;
+        while (EP <= Length(Tpl)) and not ((Tpl[EP] = '{') and (EP + 1 <= Length(Tpl)) and (Tpl[EP + 1] = '%')) do
+          Inc(EP);
+        if EP > P then
+          SB.Append(Copy(Tpl, P, EP - P));
+        if EP > Length(Tpl) then Break;
+        TS := EP;
+        P := EP + 2;
+        EP := P;
+        while (EP <= Length(Tpl)) and not ((Tpl[EP] = '%') and (EP + 1 <= Length(Tpl)) and (Tpl[EP + 1] = '}')) do
+          Inc(EP);
+        if EP > Length(Tpl) then Break;
+        T := Trim(Copy(Tpl, P, EP - P));
+        P := EP + 2;
+        if T.StartsWith('extends ') then
+          Continue  // already resolved; skip
+        else if T.StartsWith('block ') then
+        begin
+          BN := Trim(Copy(T, 6, MaxInt));
+          Depth := 1;
+          BS := P;
+          while (P <= Length(Tpl)) and (Depth > 0) do
+          begin
+            EP := P;
+            while (EP <= Length(Tpl)) and not ((Tpl[EP] = '{') and (EP + 1 <= Length(Tpl)) and (Tpl[EP + 1] = '%')) do
+              Inc(EP);
+            if EP > Length(Tpl) then Break;
+            TS := EP;
+            P := EP + 2;
+            EP := P;
+            while (EP <= Length(Tpl)) and not ((Tpl[EP] = '%') and (EP + 1 <= Length(Tpl)) and (Tpl[EP + 1] = '}')) do
+              Inc(EP);
+            T := Trim(Copy(Tpl, P, EP - P));
+            P := EP + 2;
+            if T.StartsWith('block ') then Inc(Depth)
+            else if T = 'endblock' then Dec(Depth);
+          end;
+          // Substitute: child override if present, else block default.
+          // Recurse — the substituted content may contain more block tags
+          // that need their own substitution from the same map.
+          if BlockMap.ContainsKey(BN) then
+            SB.Append(RenderWithBlocks(BlockMap[BN], BlockMap))
+          else
+            SB.Append(RenderWithBlocks(Copy(Tpl, BS, TS - BS), BlockMap));
+        end
+        else if T = 'endblock' then
+          Continue
+        else
+          SB.Append('{% ' + T + ' %}');
+      end;
+      Result := SB.ToString;
+    finally
+      SB.Free;
+    end;
+  end;
+
 var
   SB: TStringBuilder;
   CurrentPos, EndPos, TagStart, BlockStart: Integer;
@@ -3131,149 +3289,48 @@ var
   Blocks: TDictionary<String, String>;
   BlockDepth: Integer;
 begin
+  // Multi-level extends: walk the chain bottom-up, accumulating block
+  // overrides. Then render the topmost ancestor's body with all collected
+  // block bodies substituted.
   Blocks := TDictionary<String, String>.Create;
   try
-    SB := TStringBuilder.Create;
-    try
-      CurrentPos := 1;
-      while CurrentPos <= Length(Template) do
+    var CurrentTpl := Template;
+    var TopLevelTpl := Template;
+    while True do
+    begin
+      var NextExtends: String := '';
+      CollectBlocksAndExtends(CurrentTpl, Blocks, NextExtends);
+      if NextExtends = '' then
       begin
-        EndPos := CurrentPos;
-        while (EndPos <= Length(Template)) and not ((Template[EndPos] = '{') and (EndPos + 1 <= Length(Template)) and (Template[EndPos + 1] = '%')) do
-          Inc(EndPos);
-        if EndPos > CurrentPos then
-          SB.Append(Copy(Template, CurrentPos, EndPos - CurrentPos));
-        if EndPos > Length(Template) then
-          Break;
-        TagStart := EndPos;
-        CurrentPos := EndPos + 2;
-        EndPos := CurrentPos;
-        while (EndPos <= Length(Template)) and not ((Template[EndPos] = '%') and (EndPos + 1 <= Length(Template)) and (Template[EndPos + 1] = '}')) do
-          Inc(EndPos);
-        if EndPos > Length(Template) then
-          raise Exception.Create('Unclosed {%');
-        Tag := Trim(Copy(Template, CurrentPos, EndPos - CurrentPos));
-        CurrentPos := EndPos + 2;
-
-        if Tag.StartsWith('extends ') then
-        begin
-          ExtendsExpr := Trim(Copy(Tag, 8, MaxInt));
-          ParentTemplateName := EvaluateExpression(ExtendsExpr, Context).ToString;
-          if ((ParentTemplateName.StartsWith('"') and ParentTemplateName.EndsWith('"')) or
-              (ParentTemplateName.StartsWith('''') and ParentTemplateName.EndsWith(''''))) and
-             (Length(ParentTemplateName) >= 2) then
-            ParentTemplateName := Copy(ParentTemplateName, 2, Length(ParentTemplateName) - 2);
-          ParentTemplate := LoadTemplate(ParentTemplateName);
-        end
-        else if Tag.StartsWith('block ') then
-        begin
-          BlockName := Trim(Copy(Tag, 6, MaxInt));
-          BlockDepth := 1;
-          BlockStart := CurrentPos;
-          while (CurrentPos <= Length(Template)) and (BlockDepth > 0) do
-          begin
-            EndPos := CurrentPos;
-            while (EndPos <= Length(Template)) and not ((Template[EndPos] = '{') and (EndPos + 1 <= Length(Template)) and (Template[EndPos + 1] = '%')) do
-              Inc(EndPos);
-            if EndPos > Length(Template) then
-              raise Exception.Create('Unclosed block');
-            TagStart := EndPos;
-            CurrentPos := EndPos + 2;
-            EndPos := CurrentPos;
-            while (EndPos <= Length(Template)) and not ((Template[EndPos] = '%') and (EndPos + 1 <= Length(Template)) and (Template[EndPos + 1] = '}')) do
-              Inc(EndPos);
-            Tag := Trim(Copy(Template, CurrentPos, EndPos - CurrentPos));
-            CurrentPos := EndPos + 2;
-            if Tag.StartsWith('block ') then
-              Inc(BlockDepth)
-            else if Tag = 'endblock' then
-              Dec(BlockDepth);
-          end;
-          BlockContent := Copy(Template, BlockStart, TagStart - BlockStart);
-          Blocks.AddOrSetValue(BlockName, BlockContent);
-        end
-        else
-        begin
-          SB.Append('{% ' + Tag + ' %}');
-        end;
+        TopLevelTpl := CurrentTpl;
+        Break;
       end;
-
-      // If no extends tag was found, return the original template
-      if ParentTemplateName = '' then
-      begin
-        Result := SB.ToString;
-        Exit;
-      end;
-
-      // Process parent template, replacing blocks with child blocks
-      CurrentPos := 1;
-      SB.Clear;
-      while CurrentPos <= Length(ParentTemplate) do
-      begin
-        EndPos := CurrentPos;
-        while (EndPos <= Length(ParentTemplate)) and not ((ParentTemplate[EndPos] = '{') and (EndPos + 1 <= Length(ParentTemplate)) and (ParentTemplate[EndPos + 1] = '%')) do
-          Inc(EndPos);
-        if EndPos > CurrentPos then
-          SB.Append(Copy(ParentTemplate, CurrentPos, EndPos - CurrentPos));
-        if EndPos > Length(ParentTemplate) then
-          Break;
-        TagStart := EndPos;
-        CurrentPos := EndPos + 2;
-        EndPos := CurrentPos;
-        while (EndPos <= Length(ParentTemplate)) and not ((ParentTemplate[EndPos] = '%') and (EndPos + 1 <= Length(ParentTemplate)) and (ParentTemplate[EndPos + 1] = '}')) do
-          Inc(EndPos);
-        if EndPos > Length(ParentTemplate) then
-          raise Exception.Create('Unclosed {% in parent template');
-        Tag := Trim(Copy(ParentTemplate, CurrentPos, EndPos - CurrentPos));
-        CurrentPos := EndPos + 2;
-
-        if Tag.StartsWith('block ') then
-        begin
-          BlockName := Trim(Copy(Tag, 6, MaxInt));
-          BlockDepth := 1;
-          BlockStart := CurrentPos;
-          while (CurrentPos <= Length(ParentTemplate)) and (BlockDepth > 0) do
-          begin
-            EndPos := CurrentPos;
-            while (EndPos <= Length(ParentTemplate)) and not ((ParentTemplate[EndPos] = '{') and (EndPos + 1 <= Length(ParentTemplate)) and (ParentTemplate[EndPos + 1] = '%')) do
-              Inc(EndPos);
-            if EndPos > Length(ParentTemplate) then
-              raise Exception.Create('Unclosed block in parent template');
-            TagStart := EndPos;
-            CurrentPos := EndPos + 2;
-            EndPos := CurrentPos;
-            while (EndPos <= Length(ParentTemplate)) and not ((ParentTemplate[EndPos] = '%') and (EndPos + 1 <= Length(ParentTemplate)) and (ParentTemplate[EndPos + 1] = '}')) do
-              Inc(EndPos);
-            Tag := Trim(Copy(ParentTemplate, CurrentPos, EndPos - CurrentPos));
-            CurrentPos := EndPos + 2;
-            if Tag.StartsWith('block ') then
-              Inc(BlockDepth)
-            else if Tag = 'endblock' then
-              Dec(BlockDepth);
-          end;
-          if Blocks.ContainsKey(BlockName) then
-            SB.Append(Blocks[BlockName])
-          else
-            SB.Append(Copy(ParentTemplate, BlockStart, TagStart - BlockStart));
-        end
-        else
-        begin
-          SB.Append('{% ' + Tag + ' %}');
-        end;
-      end;
-
-      // Render the resulting template to process any includes (like default.css)
-      var LocalContext := TDictionary<String, TValue>.Create;
-      try
-        for var Pair in Context do
-          LocalContext.AddOrSetValue(Pair.Key, Pair.Value);
-        Result := RenderInternal(SB.ToString, LocalContext);
-      finally
-        LocalContext.Free;
-      end;
-    finally
-      SB.Free;
+      CurrentTpl := LoadTemplate(NextExtends);
     end;
+    // If no extends in the chain at all, return the original template as-is
+    if TopLevelTpl = Template then
+    begin
+      // Was there an extends? Re-check first level.
+      var Probe: String := '';
+      var ProbeBlocks := TDictionary<String, String>.Create;
+      try
+        CollectBlocksAndExtends(Template, ProbeBlocks, Probe);
+        if Probe = '' then
+          Exit(Template);
+      finally
+        ProbeBlocks.Free;
+      end;
+    end;
+    var Substituted := RenderWithBlocks(TopLevelTpl, Blocks);
+    var LocalContext := TDictionary<String, TValue>.Create;
+    try
+      for var Pair in Context do
+        LocalContext.AddOrSetValue(Pair.Key, Pair.Value);
+      Result := RenderInternal(Substituted, LocalContext);
+    finally
+      LocalContext.Free;
+    end;
+    Exit;
   finally
     Blocks.Free;
   end;

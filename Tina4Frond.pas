@@ -7,7 +7,7 @@ interface
 uses
   System.SysUtils, System.Classes, System.Generics.Collections, System.RegularExpressions,
   System.Rtti, JSON, System.NetEncoding, System.Math, Variants, System.TypInfo, System.DateUtils,
-  System.StrUtils;
+  System.StrUtils, System.Hash;
 
 type
   TStringDict = TDictionary<String, TValue>;
@@ -4924,6 +4924,477 @@ begin
         Result := TNetEncoding.URL.Encode(Input.AsString)
       else
         Result := Input.ToString;
+    end);
+
+  // ── Phase 3a missing filters ──────────────────────────────────
+
+  FFilters.Add('ltrim',
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): TValue
+    begin
+      Result := TValue.From<String>(TrimLeft(Input.ToString));
+    end);
+
+  FFilters.Add('rtrim',
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): TValue
+    begin
+      Result := TValue.From<String>(TrimRight(Input.ToString));
+    end);
+
+  FFilters.Add('truncate',
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): TValue
+    var
+      Len: Integer;
+      Suffix, S: String;
+    begin
+      S := Input.ToString;
+      if Length(Args) >= 1 then
+        Len := StrToIntDef(Args[0], 30)
+      else
+        Len := 30;
+      if Length(Args) >= 2 then
+        Suffix := Args[1].DeQuotedString('''').DeQuotedString('"')
+      else
+        Suffix := '...';
+      if Length(S) <= Len then
+        Result := TValue.From<String>(S)
+      else
+        Result := TValue.From<String>(Copy(S, 1, Len) + Suffix);
+    end);
+
+  FFilters.Add('wordwrap',
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): TValue
+    var
+      Width, LineLen, I: Integer;
+      S, Word, Current: String;
+      Words: TArray<String>;
+      SB: TStringBuilder;
+    begin
+      S := Input.ToString;
+      if Length(Args) >= 1 then
+        Width := StrToIntDef(Args[0], 75)
+      else
+        Width := 75;
+      if Width < 1 then Width := 1;
+      Words := S.Split([' '], TStringSplitOptions.None);
+      SB := TStringBuilder.Create;
+      try
+        Current := '';
+        LineLen := 0;
+        for I := 0 to High(Words) do
+        begin
+          Word := Words[I];
+          if LineLen = 0 then
+          begin
+            Current := Word;
+            LineLen := Length(Word);
+          end
+          else if LineLen + 1 + Length(Word) <= Width then
+          begin
+            Current := Current + ' ' + Word;
+            LineLen := LineLen + 1 + Length(Word);
+          end
+          else
+          begin
+            SB.Append(Current);
+            SB.AppendLine;
+            Current := Word;
+            LineLen := Length(Word);
+          end;
+        end;
+        SB.Append(Current);
+        Result := TValue.From<String>(SB.ToString);
+      finally
+        SB.Free;
+      end;
+    end);
+
+  FFilters.Add('string',
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): TValue
+    begin
+      Result := TValue.From<String>(Input.ToString);
+    end);
+
+  FFilters.Add('int',
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): TValue
+    var
+      N: Int64;
+      F: Double;
+    begin
+      if Input.IsOrdinal then
+        Result := TValue.From<Int64>(Input.AsInt64)
+      else if Input.IsType<Double> then
+        Result := TValue.From<Int64>(Trunc(Input.AsExtended))
+      else if TryStrToInt64(Input.ToString, N) then
+        Result := TValue.From<Int64>(N)
+      else if TryStrToFloat(Input.ToString, F) then
+        Result := TValue.From<Int64>(Trunc(F))
+      else
+        Result := TValue.From<Int64>(0);
+    end);
+
+  FFilters.Add('float',
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): TValue
+    var
+      F: Double;
+    begin
+      if Input.IsOrdinal then
+        Result := TValue.From<Double>(Input.AsInt64)
+      else if Input.IsType<Double> then
+        Result := TValue.From<Double>(Input.AsExtended)
+      else if TryStrToFloat(Input.ToString, F) then
+        Result := TValue.From<Double>(F)
+      else
+        Result := TValue.From<Double>(0.0);
+    end);
+
+  FFilters.Add('safe',
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): TValue
+    begin
+      // 'safe' marks content as not needing further HTML-escaping. Since
+      // our default is no auto-escape, this is a no-op pass-through.
+      Result := Input;
+    end);
+
+  FFilters.Add('dump',
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): TValue
+    var
+      List: TStringList;
+    begin
+      List := TStringList.Create;
+      try
+        Self.DumpValue(Input, List, '');
+        Result := TValue.From<String>(List.Text);
+      finally
+        List.Free;
+      end;
+    end);
+
+  FFilters.Add('to_json',
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): TValue
+    var
+      JS: TJSONValue;
+    begin
+      if Input.IsObject and (Input.AsObject is TJSONValue) then
+        Result := TValue.From<String>(TJSONValue(Input.AsObject).ToJSON)
+      else if Input.Kind in [tkString, tkUString] then
+        Result := TValue.From<String>('"' + StringReplace(Input.AsString, '"', '\"', [rfReplaceAll]) + '"')
+      else if Input.IsOrdinal then
+        Result := TValue.From<String>(IntToStr(Input.AsInt64))
+      else if Input.IsType<Double> then
+        Result := TValue.From<String>(FloatToStr(Input.AsExtended))
+      else if Input.IsType<Boolean> then
+      begin
+        if Input.AsBoolean then
+          Result := TValue.From<String>('true')
+        else
+          Result := TValue.From<String>('false');
+      end
+      else
+      begin
+        try
+          JS := TJSONObject.ParseJSONValue(Input.ToString);
+          if Assigned(JS) then
+          try
+            Result := TValue.From<String>(JS.ToJSON);
+          finally
+            JS.Free;
+          end
+          else
+            Result := TValue.From<String>('null');
+        except
+          Result := TValue.From<String>('null');
+        end;
+      end;
+    end);
+
+  FFilters.Add('tojson', FFilters['to_json']);
+
+  FFilters.Add('js_escape',
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): TValue
+    var
+      S: String;
+    begin
+      S := Input.ToString;
+      S := StringReplace(S, '\', '\\', [rfReplaceAll]);
+      S := StringReplace(S, '"', '\"', [rfReplaceAll]);
+      S := StringReplace(S, '''', '\''', [rfReplaceAll]);
+      S := StringReplace(S, #10, '\n', [rfReplaceAll]);
+      S := StringReplace(S, #13, '\r', [rfReplaceAll]);
+      S := StringReplace(S, #9, '\t', [rfReplaceAll]);
+      S := StringReplace(S, '</', '<\/', [rfReplaceAll]);
+      Result := TValue.From<String>(S);
+    end);
+
+  FFilters.Add('unique',
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): TValue
+    var
+      Arr, Seen: TArray<TValue>;
+      I: Integer;
+      Found: Boolean;
+    begin
+      if Input.IsArray then
+      begin
+        Arr := Input.AsType<TArray<TValue>>;
+        SetLength(Seen, 0);
+        for I := 0 to High(Arr) do
+        begin
+          Found := False;
+          for var J := 0 to High(Seen) do
+            if Arr[I].ToString = Seen[J].ToString then
+            begin
+              Found := True;
+              Break;
+            end;
+          if not Found then
+          begin
+            SetLength(Seen, Length(Seen) + 1);
+            Seen[High(Seen)] := Arr[I];
+          end;
+        end;
+        Result := TValue.From<TArray<TValue>>(Seen);
+      end
+      else
+        Result := Input;
+    end);
+
+  FFilters.Add('values',
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): TValue
+    var
+      Dict: TDictionary<String, TValue>;
+      Arr: TArray<TValue>;
+      I: Integer;
+    begin
+      if Input.IsType<TDictionary<String, TValue>> then
+      begin
+        Dict := Input.AsType<TDictionary<String, TValue>>;
+        SetLength(Arr, Dict.Count);
+        I := 0;
+        for var Pair in Dict do
+        begin
+          Arr[I] := Pair.Value;
+          Inc(I);
+        end;
+        Result := TValue.From<TArray<TValue>>(Arr);
+      end
+      else
+        Result := Input;
+    end);
+
+  // Hash filters
+  FFilters.Add('md5',
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): TValue
+    begin
+      Result := TValue.From<String>(THashMD5.GetHashString(Input.ToString));
+    end);
+
+  FFilters.Add('sha1',
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): TValue
+    begin
+      Result := TValue.From<String>(THashSHA1.GetHashString(Input.ToString));
+    end);
+
+  FFilters.Add('sha256',
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): TValue
+    begin
+      Result := TValue.From<String>(THashSHA2.GetHashString(Input.ToString, SHA256));
+    end);
+
+  FFilters.Add('base64_encode',
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): TValue
+    begin
+      Result := TValue.From<String>(TNetEncoding.Base64.Encode(Input.ToString));
+    end);
+
+  FFilters.Add('base64_decode',
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): TValue
+    begin
+      Result := TValue.From<String>(TNetEncoding.Base64.Decode(Input.ToString));
+    end);
+
+  FFilters.Add('url_decode',
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): TValue
+    begin
+      Result := TValue.From<String>(TNetEncoding.URL.Decode(Input.ToString));
+    end);
+
+  // Numeric extras
+  FFilters.Add('ceil',
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): TValue
+    var
+      F: Double;
+    begin
+      if Input.IsOrdinal then
+        Result := Input
+      else if Input.IsType<Double> then
+        Result := TValue.From<Int64>(Ceil(Input.AsExtended))
+      else if TryStrToFloat(Input.ToString, F) then
+        Result := TValue.From<Int64>(Ceil(F))
+      else
+        Result := Input;
+    end);
+
+  FFilters.Add('floor',
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): TValue
+    var
+      F: Double;
+    begin
+      if Input.IsOrdinal then
+        Result := Input
+      else if Input.IsType<Double> then
+        Result := TValue.From<Int64>(Floor(Input.AsExtended))
+      else if TryStrToFloat(Input.ToString, F) then
+        Result := TValue.From<Int64>(Floor(F))
+      else
+        Result := Input;
+    end);
+
+  FFilters.Add('at_least',
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): TValue
+    var
+      N, M: Double;
+    begin
+      if (Length(Args) >= 1) and TryStrToFloat(Args[0], M) and
+         (Input.IsOrdinal or Input.IsType<Double> or TryStrToFloat(Input.ToString, N)) then
+      begin
+        if Input.IsOrdinal then N := Input.AsInt64
+        else if Input.IsType<Double> then N := Input.AsExtended
+        else TryStrToFloat(Input.ToString, N);
+        if N < M then N := M;
+        if Frac(N) = 0 then
+          Result := TValue.From<Int64>(Trunc(N))
+        else
+          Result := TValue.From<Double>(N);
+      end
+      else
+        Result := Input;
+    end);
+
+  FFilters.Add('at_most',
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): TValue
+    var
+      N, M: Double;
+    begin
+      if (Length(Args) >= 1) and TryStrToFloat(Args[0], M) and
+         (Input.IsOrdinal or Input.IsType<Double> or TryStrToFloat(Input.ToString, N)) then
+      begin
+        if Input.IsOrdinal then N := Input.AsInt64
+        else if Input.IsType<Double> then N := Input.AsExtended
+        else TryStrToFloat(Input.ToString, N);
+        if N > M then N := M;
+        if Frac(N) = 0 then
+          Result := TValue.From<Int64>(Trunc(N))
+        else
+          Result := TValue.From<Double>(N);
+      end
+      else
+        Result := Input;
+    end);
+
+  FFilters.Add('filesizeformat',
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): TValue
+    var
+      Bytes: Double;
+      Suffix: String;
+    begin
+      if Input.IsOrdinal then
+        Bytes := Input.AsInt64
+      else if Input.IsType<Double> then
+        Bytes := Input.AsExtended
+      else if not TryStrToFloat(Input.ToString, Bytes) then
+        Exit(Input);
+      if Bytes < 1024 then
+      begin
+        Suffix := 'B';
+      end
+      else if Bytes < 1024 * 1024 then
+      begin
+        Bytes := Bytes / 1024; Suffix := 'KB';
+      end
+      else if Bytes < 1024 * 1024 * 1024 then
+      begin
+        Bytes := Bytes / (1024 * 1024); Suffix := 'MB';
+      end
+      else
+      begin
+        Bytes := Bytes / (1024 * 1024 * 1024); Suffix := 'GB';
+      end;
+      if Frac(Bytes) = 0 then
+        Result := TValue.From<String>(IntToStr(Trunc(Bytes)) + ' ' + Suffix)
+      else
+        Result := TValue.From<String>(FormatFloat('0.0', Bytes) + ' ' + Suffix);
+    end);
+
+  // String padding/repetition
+  FFilters.Add('pad',
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): TValue
+    var
+      Width: Integer;
+      Ch, S: String;
+    begin
+      S := Input.ToString;
+      if Length(Args) >= 1 then
+        Width := StrToIntDef(Args[0], Length(S))
+      else
+        Width := Length(S);
+      if Length(Args) >= 2 then
+        Ch := Args[1].DeQuotedString('''').DeQuotedString('"')
+      else
+        Ch := ' ';
+      if Ch = '' then Ch := ' ';
+      while Length(S) < Width do
+        S := S + Ch[1];
+      Result := TValue.From<String>(S);
+    end);
+
+  FFilters.Add('repeat',
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): TValue
+    var
+      N, I: Integer;
+      SB: TStringBuilder;
+      S: String;
+    begin
+      S := Input.ToString;
+      if Length(Args) >= 1 then
+        N := StrToIntDef(Args[0], 1)
+      else
+        N := 1;
+      SB := TStringBuilder.Create;
+      try
+        for I := 1 to N do SB.Append(S);
+        Result := TValue.From<String>(SB.ToString);
+      finally
+        SB.Free;
+      end;
+    end);
+
+  FFilters.Add('indent',
+    function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): TValue
+    var
+      N, I: Integer;
+      Prefix: String;
+      Lines: TArray<String>;
+      SB: TStringBuilder;
+    begin
+      if Length(Args) >= 1 then
+        N := StrToIntDef(Args[0], 4)
+      else
+        N := 4;
+      Prefix := StringOfChar(' ', N);
+      Lines := Input.ToString.Split([sLineBreak], TStringSplitOptions.None);
+      SB := TStringBuilder.Create;
+      try
+        for I := 0 to High(Lines) do
+        begin
+          if I > 0 then SB.AppendLine;
+          if Lines[I] <> '' then
+            SB.Append(Prefix).Append(Lines[I])
+          else
+            SB.Append(Lines[I]);
+        end;
+        Result := TValue.From<String>(SB.ToString);
+      finally
+        SB.Free;
+      end;
     end);
 end;
 

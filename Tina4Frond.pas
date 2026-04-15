@@ -5481,40 +5481,78 @@ begin
 
   FFilters.Add('to_json',
     function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): TValue
-    var
-      JS: TJSONValue;
-    begin
-      if Input.IsObject and (Input.AsObject is TJSONValue) then
-        Result := TValue.From<String>(TJSONValue(Input.AsObject).ToJSON)
-      else if Input.Kind in [tkString, tkUString] then
-        Result := TValue.From<String>('"' + StringReplace(Input.AsString, '"', '\"', [rfReplaceAll]) + '"')
-      else if Input.IsOrdinal then
-        Result := TValue.From<String>(IntToStr(Input.AsInt64))
-      else if Input.IsType<Double> then
-        Result := TValue.From<String>(FloatToStr(Input.AsExtended))
-      else if Input.IsType<Boolean> then
+
+      function ValueToJSON(const V: TValue): String;
+      var
+        Arr: TArray<TValue>;
+        Dict: TDictionary<String, TValue>;
+        Parts: TArray<String>;
+        I: Integer;
+        JS: TJSONValue;
+        S: String;
       begin
-        if Input.AsBoolean then
-          Result := TValue.From<String>('true')
-        else
-          Result := TValue.From<String>('false');
-      end
-      else
-      begin
+        if V.IsEmpty then
+          Exit('null');
+        if V.IsType<Boolean> then
+        begin
+          if V.AsBoolean then Exit('true') else Exit('false');
+        end;
+        if V.IsOrdinal then
+          Exit(IntToStr(V.AsInt64));
+        if V.IsType<Double> or V.IsType<Single> or V.IsType<Extended> then
+          Exit(FloatToStr(V.AsExtended, TFormatSettings.Invariant));
+        if V.IsType<TArray<TValue>> then
+        begin
+          Arr := V.AsType<TArray<TValue>>;
+          SetLength(Parts, Length(Arr));
+          for I := 0 to High(Arr) do
+            Parts[I] := ValueToJSON(Arr[I]);
+          Exit('[' + String.Join(',', Parts) + ']');
+        end;
+        if V.IsType<TDictionary<String, TValue>> then
+        begin
+          Dict := V.AsType<TDictionary<String, TValue>>;
+          SetLength(Parts, Dict.Count);
+          I := 0;
+          for var Pair in Dict do
+          begin
+            Parts[I] := '"' + StringReplace(Pair.Key, '"', '\"', [rfReplaceAll]) + '":' +
+                        ValueToJSON(Pair.Value);
+            Inc(I);
+          end;
+          Exit('{' + String.Join(',', Parts) + '}');
+        end;
+        if V.IsObject and (V.AsObject is TJSONValue) then
+          Exit(TJSONValue(V.AsObject).ToJSON);
+        if V.Kind in [tkString, tkUString] then
+        begin
+          S := V.AsString;
+          S := StringReplace(S, '\', '\\', [rfReplaceAll]);
+          S := StringReplace(S, '"', '\"', [rfReplaceAll]);
+          S := StringReplace(S, #10, '\n', [rfReplaceAll]);
+          S := StringReplace(S, #13, '\r', [rfReplaceAll]);
+          S := StringReplace(S, #9, '\t', [rfReplaceAll]);
+          Exit('"' + S + '"');
+        end;
+        // Last resort: try parsing Input.ToString as JSON, else wrap as string
         try
-          JS := TJSONObject.ParseJSONValue(Input.ToString);
+          JS := TJSONObject.ParseJSONValue(V.ToString);
           if Assigned(JS) then
           try
-            Result := TValue.From<String>(JS.ToJSON);
+            Exit(JS.ToJSON);
           finally
             JS.Free;
-          end
-          else
-            Result := TValue.From<String>('null');
+          end;
         except
-          Result := TValue.From<String>('null');
         end;
+        S := V.ToString;
+        S := StringReplace(S, '\', '\\', [rfReplaceAll]);
+        S := StringReplace(S, '"', '\"', [rfReplaceAll]);
+        Result := '"' + S + '"';
       end;
+
+    begin
+      Result := TValue.From<String>(ValueToJSON(Input));
     end);
 
   FFilters.Add('tojson', FFilters['to_json']);

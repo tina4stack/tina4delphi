@@ -16,17 +16,17 @@ type
 
   /// <summary>
   /// Represents a single page in a TTina4HTMLPages navigation component.
-  /// Each page has a unique PageName and can contain either Twig template
+  /// Each page has a unique PageName and can contain either Frond template
   /// content or raw HTML content. When navigated to, the content is rendered
   /// by the linked TTina4HTMLRender component.
   /// </summary>
   TTina4Page = class(TCollectionItem)
   private
     FPageName: string;
-    FTwigContent: TStringList;
+    FFrondContent: TStringList;
     FHTMLContent: TStringList;
     FIsDefault: Boolean;
-    procedure SetTwigContent(const Value: TStringList);
+    procedure SetFrondContent(const Value: TStringList);
     procedure SetHTMLContent(const Value: TStringList);
   protected
     function GetDisplayName: string; override;
@@ -38,12 +38,14 @@ type
   published
     /// <summary>Unique name used as the navigation target (e.g. 'home', 'dashboard').</summary>
     property PageName: string read FPageName write FPageName;
-    /// <summary>Twig template source. When non-empty, rendered via TTina4Twig on navigation.</summary>
-    property TwigContent: TStringList read FTwigContent write SetTwigContent;
-    /// <summary>Raw HTML content. Used when TwigContent is empty.</summary>
+    /// <summary>Frond template source. When non-empty, rendered via TTina4Frond on navigation.</summary>
+    property FrondContent: TStringList read FFrondContent write SetFrondContent;
+    /// <summary>Raw HTML content. Used when FrondContent is empty.</summary>
     property HTMLContent: TStringList read FHTMLContent write SetHTMLContent;
     /// <summary>When True, this page is automatically displayed on component startup.</summary>
     property IsDefault: Boolean read FIsDefault write FIsDefault default False;
+    /// <summary>Alias for FrondContent — kept for source-compatibility. Prefer FrondContent.</summary>
+    property TwigContent: TStringList read FFrondContent write SetFrondContent stored False;
   end;
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -77,7 +79,7 @@ type
   /// Design-time page navigation component that provides SPA-style navigation
   /// using TTina4HTMLRender. Pages are defined as a collection (editable in the
   /// Object Inspector). Navigation is triggered by anchor href clicks in the
-  /// rendered HTML or programmatically via NavigateTo. Supports both Twig
+  /// rendered HTML or programmatically via NavigateTo. Supports both Frond
   /// templates and raw HTML content per page.
   /// </summary>
   TTina4HTMLPages = class(TComponent)
@@ -85,13 +87,13 @@ type
     FPages: TTina4PageCollection;
     FRenderer: TTina4HTMLRender;
     FActivePage: string;
-    FTwigEngine: TObject;  // TTina4Twig (declared in implementation uses)
-    FTwigTemplatePath: string;
+    FFrondEngine: TObject;  // TTina4Frond (declared in implementation uses)
+    FFrondTemplatePath: string;
     FOnBeforeNavigate: TPageNavigateEvent;
     FOnAfterNavigate: TNotifyEvent;
     procedure SetRenderer(const Value: TTina4HTMLRender);
     procedure SetActivePage(const Value: string);
-    procedure SetTwigTemplatePath(const Value: string);
+    procedure SetFrondTemplatePath(const Value: string);
     procedure SetPages(const Value: TTina4PageCollection);
     procedure HandleLinkClick(Sender: TObject; const AURL: string;
       var Handled: Boolean);
@@ -100,9 +102,9 @@ type
       Operation: TOperation); override;
     procedure Loaded; override;
   public
-    /// <summary>Creates the component with an empty page collection and Twig engine.</summary>
+    /// <summary>Creates the component with an empty page collection and Frond engine.</summary>
     constructor Create(AOwner: TComponent); override;
-    /// <summary>Unhooks from the renderer and frees the page collection and Twig engine.</summary>
+    /// <summary>Unhooks from the renderer and frees the page collection and Frond engine.</summary>
     destructor Destroy; override;
     /// <summary>
     /// Navigates to the page with the given name. Fires OnBeforeNavigate
@@ -112,11 +114,13 @@ type
     /// <param name="APageName">The PageName of the target page.</param>
     procedure NavigateTo(const APageName: string);
     /// <summary>
-    /// Sets a variable in the Twig rendering context. Call before NavigateTo
-    /// to make variables available in Twig templates.
+    /// Sets a variable in the Frond rendering context. Call before NavigateTo
+    /// to make variables available in Frond templates.
     /// </summary>
     /// <param name="AName">Variable name (used as {{ name }} in templates).</param>
     /// <param name="AValue">Variable value.</param>
+    procedure SetFrondVariable(const AName: string; const AValue: string);
+    /// <summary>Alias for SetFrondVariable — kept for source-compatibility.</summary>
     procedure SetTwigVariable(const AName: string; const AValue: string);
   published
     /// <summary>Collection of pages (design-time editable via Object Inspector).</summary>
@@ -125,8 +129,10 @@ type
     property Renderer: TTina4HTMLRender read FRenderer write SetRenderer;
     /// <summary>Name of the currently displayed page. Setting this calls NavigateTo.</summary>
     property ActivePage: string read FActivePage write SetActivePage;
-    /// <summary>Base path for Twig {% include %} and {% extends %} resolution.</summary>
-    property TwigTemplatePath: string read FTwigTemplatePath write SetTwigTemplatePath;
+    /// <summary>Base path for Frond {% include %} and {% extends %} resolution.</summary>
+    property FrondTemplatePath: string read FFrondTemplatePath write SetFrondTemplatePath;
+    /// <summary>Alias for FrondTemplatePath — kept for source-compatibility.</summary>
+    property TwigTemplatePath: string read FFrondTemplatePath write SetFrondTemplatePath stored False;
     /// <summary>Fires before navigation. Set Allow := False to cancel.</summary>
     property OnBeforeNavigate: TPageNavigateEvent read FOnBeforeNavigate write FOnBeforeNavigate;
     /// <summary>Fires after the new page has been rendered.</summary>
@@ -138,7 +144,7 @@ procedure Register;
 implementation
 
 uses
-  Tina4Twig;
+  Tina4Frond;
 
 procedure Register;
 begin
@@ -152,7 +158,7 @@ end;
 constructor TTina4Page.Create(Collection: TCollection);
 begin
   inherited Create(Collection);
-  FTwigContent := TStringList.Create;
+  FFrondContent := TStringList.Create;
   FHTMLContent := TStringList.Create;
   FIsDefault := False;
 end;
@@ -160,7 +166,7 @@ end;
 destructor TTina4Page.Destroy;
 begin
   FHTMLContent.Free;
-  FTwigContent.Free;
+  FFrondContent.Free;
   inherited;
 end;
 
@@ -172,9 +178,9 @@ begin
     Result := inherited GetDisplayName;
 end;
 
-procedure TTina4Page.SetTwigContent(const Value: TStringList);
+procedure TTina4Page.SetFrondContent(const Value: TStringList);
 begin
-  FTwigContent.Assign(Value);
+  FFrondContent.Assign(Value);
 end;
 
 procedure TTina4Page.SetHTMLContent(const Value: TStringList);
@@ -209,7 +215,7 @@ constructor TTina4HTMLPages.Create(AOwner: TComponent);
 begin
   inherited Create(AOwner);
   FPages := TTina4PageCollection.Create(Self, TTina4Page);
-  FTwigEngine := TTina4Twig.Create('');
+  FFrondEngine := TTina4Frond.Create('');
 end;
 
 destructor TTina4HTMLPages.Destroy;
@@ -220,7 +226,7 @@ begin
     FRenderer.OnLinkClick := nil;
     FRenderer.RemoveFreeNotification(Self);
   end;
-  FTwigEngine.Free;
+  FFrondEngine.Free;
   FPages.Free;
   inherited;
 end;
@@ -254,13 +260,13 @@ begin
     NavigateTo(Value);
 end;
 
-procedure TTina4HTMLPages.SetTwigTemplatePath(const Value: string);
+procedure TTina4HTMLPages.SetFrondTemplatePath(const Value: string);
 begin
-  if FTwigTemplatePath <> Value then
+  if FFrondTemplatePath <> Value then
   begin
-    FTwigTemplatePath := Value;
-    FTwigEngine.Free;
-    FTwigEngine := TTina4Twig.Create(Value);
+    FFrondTemplatePath := Value;
+    FFrondEngine.Free;
+    FFrondEngine := TTina4Frond.Create(Value);
   end;
 end;
 
@@ -305,10 +311,10 @@ begin
 
   if Assigned(FRenderer) then
   begin
-    if Page.TwigContent.Text.Trim <> '' then
+    if Page.FrondContent.Text.Trim <> '' then
     begin
-      // Render Twig content through our own engine and set as HTML
-      RenderedHTML := TTina4Twig(FTwigEngine).Render(Page.TwigContent.Text);
+      // Render Frond content through our own engine and set as HTML
+      RenderedHTML := TTina4Frond(FFrondEngine).Render(Page.FrondContent.Text);
       FRenderer.HTML.Text := RenderedHTML;
     end
     else if Page.HTMLContent.Text.Trim <> '' then
@@ -337,9 +343,14 @@ begin
   // If page not found, Handled stays False — link not consumed
 end;
 
+procedure TTina4HTMLPages.SetFrondVariable(const AName: string; const AValue: string);
+begin
+  TTina4Frond(FFrondEngine).SetVariable(AName, AValue);
+end;
+
 procedure TTina4HTMLPages.SetTwigVariable(const AName: string; const AValue: string);
 begin
-  TTina4Twig(FTwigEngine).SetVariable(AName, AValue);
+  SetFrondVariable(AName, AValue);
 end;
 
 end.

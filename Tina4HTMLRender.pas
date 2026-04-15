@@ -449,9 +449,9 @@ type
     FOnSubmit: THTMLFormSubmitEvent;
     FOnElementClick: THTMLElementClickEvent;
     FOnLinkClick: THTMLLinkClickEvent;
-    FTwig: TStringList;
-    FTwigEngine: TObject;        // TTina4Twig (declared in implementation uses)
-    FTwigTemplatePath: string;
+    FFrond: TStringList;
+    FFrondEngine: TObject;        // TTina4Frond (declared in implementation uses)
+    FFrondTemplatePath: string;
     procedure ScrollbarFadeTimerTick(Sender: TObject);
     procedure BumpScrollbarVisibility;
     function GetScrollbarOpacity: Single;
@@ -462,11 +462,11 @@ type
     procedure SetCacheEnabled(Value: Boolean);
     procedure SetCacheDir(const Value: string);
     procedure FHTMLChange(Sender: TObject);
-    procedure SetTwig(const Value: TStringList);
-    function GetTwig: TStringList;
-    procedure FTwigChange(Sender: TObject);
-    procedure RenderTwig;
-    procedure SetTwigTemplatePath(const Value: string);
+    procedure SetFrond(const Value: TStringList);
+    function GetFrond: TStringList;
+    procedure FFrondChange(Sender: TObject);
+    procedure RenderFrond;
+    procedure SetFrondTemplatePath(const Value: string);
     procedure OnImageLoaded(Sender: TObject);
     procedure DoLayout;
     procedure ClearFormControls;
@@ -609,11 +609,13 @@ type
     /// <param name="Id">The HTML id of the element (currently triggers full relayout).</param>
     procedure RefreshElement(const Id: string);
     /// <summary>
-    /// Sets a variable in the Twig rendering context. Call before setting
-    /// the Twig property to make variables available in templates.
+    /// Sets a variable in the Frond rendering context. Call before setting
+    /// the Frond property to make variables available in templates.
     /// </summary>
-    /// <param name="AName">Variable name (used as {{ name }} in Twig templates).</param>
+    /// <param name="AName">Variable name (used as {{ name }} in Frond templates).</param>
     /// <param name="AValue">Variable value.</param>
+    procedure SetFrondVariable(const AName: string; const AValue: string);
+    /// <summary>Alias for SetFrondVariable — kept for source-compatibility.</summary>
     procedure SetTwigVariable(const AName: string; const AValue: string);
     /// <summary>Scrolls to an absolute position. Values are clamped to content bounds.</summary>
     /// <param name="X">Absolute horizontal scroll offset in pixels.</param>
@@ -667,10 +669,14 @@ type
   published
     /// <summary>HTML content to render. Changes trigger automatic relayout and repaint.</summary>
     property HTML: TStringList read GetHTML write SetHTML;
-    /// <summary>Twig template content. Automatically rendered to HTML via TTina4Twig on change.</summary>
-    property Twig: TStringList read GetTwig write SetTwig;
-    /// <summary>Base path for Twig {% include %} and {% extends %} resolution.</summary>
-    property TwigTemplatePath: string read FTwigTemplatePath write SetTwigTemplatePath;
+    /// <summary>Frond template content. Automatically rendered to HTML via TTina4Frond on change.</summary>
+    property Frond: TStringList read GetFrond write SetFrond;
+    /// <summary>Base path for Frond {% include %} and {% extends %} resolution.</summary>
+    property FrondTemplatePath: string read FFrondTemplatePath write SetFrondTemplatePath;
+    /// <summary>Alias for Frond — kept for source-compatibility. Prefer Frond.</summary>
+    property Twig: TStringList read GetFrond write SetFrond stored False;
+    /// <summary>Alias for FrondTemplatePath — kept for source-compatibility.</summary>
+    property TwigTemplatePath: string read FFrondTemplatePath write SetFrondTemplatePath stored False;
     /// <summary>Debug output string list for diagnostic information.</summary>
     property Debug: TStringList read FDebug write FDebug;
     /// <summary>Enables disk-based caching for downloaded images and stylesheets.</summary>
@@ -737,7 +743,7 @@ procedure Register;
 implementation
 
 uses
-  Tina4Twig;
+  Tina4Frond;
 
 procedure Register;
 begin
@@ -4535,9 +4541,9 @@ begin
   FStyleSheet := TCSSStyleSheet.Create;
   FStyleSheet.FileCache := FFileCache;
   FHTML.OnChange := FHTMLChange;
-  FTwig := TStringList.Create;
-  FTwig.OnChange := FTwigChange;
-  FTwigEngine := TTina4Twig.Create('');
+  FFrond := TStringList.Create;
+  FFrond.OnChange := FFrondChange;
+  FFrondEngine := TTina4Frond.Create('');
   FScrollX := 0;
   FScrollY := 0;
   FContentWidth := 0;
@@ -4689,8 +4695,8 @@ begin
   FFileCache.Free;
   FHTML.Free;
   FDebug.Free;
-  FTwigEngine.Free;
-  FTwig.Free;
+  FFrondEngine.Free;
+  FFrond.Free;
   inherited;
 end;
 
@@ -4705,35 +4711,35 @@ begin
   Repaint;
 end;
 
-function TTina4HTMLRender.GetTwig: TStringList;
+function TTina4HTMLRender.GetFrond: TStringList;
 begin
-  Result := FTwig;
+  Result := FFrond;
 end;
 
-procedure TTina4HTMLRender.SetTwig(const Value: TStringList);
+procedure TTina4HTMLRender.SetFrond(const Value: TStringList);
 begin
-  FTwig.Assign(Value);
+  FFrond.Assign(Value);
   // OnChange handler fires automatically via Assign
 end;
 
-procedure TTina4HTMLRender.SetTwigTemplatePath(const Value: string);
+procedure TTina4HTMLRender.SetFrondTemplatePath(const Value: string);
 begin
-  if FTwigTemplatePath <> Value then
+  if FFrondTemplatePath <> Value then
   begin
-    FTwigTemplatePath := Value;
-    FTwigEngine.Free;
-    FTwigEngine := TTina4Twig.Create(Value);
+    FFrondTemplatePath := Value;
+    FFrondEngine.Free;
+    FFrondEngine := TTina4Frond.Create(Value);
   end;
 end;
 
-procedure TTina4HTMLRender.RenderTwig;
+procedure TTina4HTMLRender.RenderFrond;
 var
   RenderedHTML: string;
 begin
-  if FTwig.Text.Trim = '' then Exit;
-  // Render Twig template to HTML
-  RenderedHTML := TTina4Twig(FTwigEngine).Render(FTwig.Text);
-  // Set HTML without triggering FHTMLChange (which would recurse into Twig).
+  if FFrond.Text.Trim = '' then Exit;
+  // Render Frond template to HTML
+  RenderedHTML := TTina4Frond(FFrondEngine).Render(FFrond.Text);
+  // Set HTML without triggering FHTMLChange (which would recurse into Frond).
   // We must still mark the parser dirty manually since we're bypassing the
   // normal change-notification path.
   FHTML.OnChange := nil;
@@ -4748,16 +4754,22 @@ begin
   Repaint;
 end;
 
-procedure TTina4HTMLRender.FTwigChange(Sender: TObject);
+procedure TTina4HTMLRender.FFrondChange(Sender: TObject);
 begin
-  RenderTwig;
+  RenderFrond;
+end;
+
+procedure TTina4HTMLRender.SetFrondVariable(const AName: string; const AValue: string);
+begin
+  TTina4Frond(FFrondEngine).SetVariable(AName, AValue);
+  // Re-render the Frond template so the new variable value takes effect
+  RenderFrond;
 end;
 
 procedure TTina4HTMLRender.SetTwigVariable(const AName: string; const AValue: string);
 begin
-  TTina4Twig(FTwigEngine).SetVariable(AName, AValue);
-  // Re-render the Twig template so the new variable value takes effect
-  RenderTwig;
+  // Compat alias — delegates to SetFrondVariable
+  SetFrondVariable(AName, AValue);
 end;
 
 procedure TTina4HTMLRender.SetCacheEnabled(Value: Boolean);

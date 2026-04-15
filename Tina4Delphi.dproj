@@ -215,6 +215,7 @@
         <DCCReference Include="Tina4JSONAdapter.pas"/>
         <DCCReference Include="Tina4InterposerClasses.pas"/>
         <DCCReference Include="Tina4SocketServer.pas"/>
+        <DCCReference Include="Tina4Frond.pas"/>
         <DCCReference Include="Tina4Twig.pas"/>
         <DCCReference Include="Tina4HTMLRender.pas"/>
         <DCCReference Include="Tina4HTMLPages.pas"/>

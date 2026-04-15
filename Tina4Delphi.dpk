@@ -49,6 +49,7 @@ contains
   Tina4JSONAdapter in 'Tina4JSONAdapter.pas',
   Tina4InterposerClasses in 'Tina4InterposerClasses.pas',
   Tina4SocketServer in 'Tina4SocketServer.pas',
+  Tina4Frond in 'Tina4Frond.pas',
   Tina4Twig in 'Tina4Twig.pas',
   Tina4HTMLRender in 'Tina4HTMLRender.pas',
   Tina4HTMLPages in 'Tina4HTMLPages.pas',

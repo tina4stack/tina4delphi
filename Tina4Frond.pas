@@ -2263,8 +2263,9 @@ var
 begin
   Result := TValue.Empty;
 
-  // Regex to match identifiers, array indices, or quoted strings
-  Regex := TRegEx.Create('(\w+|\[\d+\]|''[^'']*''|"[^"]*")', [roIgnoreCase]);
+  // Regex to match identifiers, array indices, Python-style slices, or quoted strings
+  // Slice forms: [N], [N:M], [:M], [N:], [:]
+  Regex := TRegEx.Create('(\w+|\[-?\d*:-?\d*\]|\[-?\d+\]|''[^'']*''|"[^"]*")', [roIgnoreCase]);
   Matches := Regex.Matches(VariablePath);
   SetLength(Parts, Matches.Count);
   for i := 0 to Matches.Count - 1 do
@@ -2305,11 +2306,54 @@ begin
   begin
     Key := Parts[i];
 
-    // Handle array index (e.g., [0])
+    // Handle array index (e.g., [0]) or Python-style slice (e.g., [1:3], [:5], [2:])
     if (Key.StartsWith('[') and Key.EndsWith(']')) then
     begin
+      // Extract the bracket content
+      var BracketContent := Copy(Key, 2, Length(Key) - 2);
+      // Detect slice: has ':' inside (and not inside a quoted key)
+      var ColonPos := Pos(':', BracketContent);
+      if ColonPos > 0 then
+      begin
+        var StartStr := Trim(Copy(BracketContent, 1, ColonPos - 1));
+        var EndStr := Trim(Copy(BracketContent, ColonPos + 1, MaxInt));
+        var StartIdx, EndIdx, SrcLen: Integer;
+        // Slice a string
+        if Current.Kind in [tkString, tkUString] then
+        begin
+          SrcLen := Length(Current.AsString);
+          if StartStr = '' then StartIdx := 0 else StartIdx := StrToIntDef(StartStr, 0);
+          if EndStr = '' then EndIdx := SrcLen else EndIdx := StrToIntDef(EndStr, SrcLen);
+          if StartIdx < 0 then StartIdx := Max(0, SrcLen + StartIdx);
+          if EndIdx < 0 then EndIdx := Max(0, SrcLen + EndIdx);
+          if EndIdx > SrcLen then EndIdx := SrcLen;
+          if StartIdx > EndIdx then StartIdx := EndIdx;
+          Current := TValue.From<String>(Copy(Current.AsString, StartIdx + 1, EndIdx - StartIdx));
+          Continue;
+        end
+        // Slice a TArray<TValue>
+        else if Current.IsType<TArray<TValue>> then
+        begin
+          Arr := Current.AsType<TArray<TValue>>;
+          SrcLen := Length(Arr);
+          if StartStr = '' then StartIdx := 0 else StartIdx := StrToIntDef(StartStr, 0);
+          if EndStr = '' then EndIdx := SrcLen else EndIdx := StrToIntDef(EndStr, SrcLen);
+          if StartIdx < 0 then StartIdx := Max(0, SrcLen + StartIdx);
+          if EndIdx < 0 then EndIdx := Max(0, SrcLen + EndIdx);
+          if EndIdx > SrcLen then EndIdx := SrcLen;
+          if StartIdx > EndIdx then StartIdx := EndIdx;
+          var Sliced: TArray<TValue>;
+          SetLength(Sliced, EndIdx - StartIdx);
+          for var K := 0 to High(Sliced) do
+            Sliced[K] := Arr[StartIdx + K];
+          Current := TValue.From<TArray<TValue>>(Sliced);
+          Continue;
+        end
+        else
+          Exit(TValue.Empty);
+      end;
       // Extract index from [0]
-      if TryStrToInt(Copy(Key, 2, Length(Key) - 2), Index) then
+      if TryStrToInt(BracketContent, Index) then
       begin
         // Handle TArray<TValue>
         if Current.IsType<TArray<TValue>> then

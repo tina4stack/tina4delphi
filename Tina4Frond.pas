@@ -977,6 +977,16 @@ begin
           Inc(I);
           Continue;
         end;
+        // Unary 'not' — applies to the top of the stack
+        if Token = 'not' then
+        begin
+          if Stack.Count < 1 then
+            raise Exception.Create('Invalid expression: insufficient operands for not');
+          A := Stack.Pop;
+          Stack.Push(TValue.From<Boolean>(not ToBool(A)));
+          Inc(I);
+          Continue;
+        end;
         if Stack.Count < 2 then
           raise Exception.Create('Invalid expression: insufficient operands for ' + Token + ', StackCount=' + IntToStr(Stack.Count));
         B := Stack.Pop;
@@ -3997,25 +4007,9 @@ begin
 
   FFilters.Add('json_encode',
     function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): TValue
-    var
-      JsonValue: TJSONValue;
     begin
-      if Input.IsObject and (Input.AsObject is TJSONValue) then
-        Result := TJSONValue(Input.AsObject).ToString
-      else if Input.Kind in [tkString, tkUString] then
-      begin
-        JsonValue := TJSONObject.ParseJSONValue(Input.AsString) as TJSONObject;
-        try
-          if Assigned(JsonValue) then
-            Result := JsonValue.ToString
-          else
-            Result := JsonEncodeString(Input.AsString);
-        finally
-          JsonValue.Free;
-        end;
-      end
-      else
-        Result := Input.ToString;
+      // json_encode is a proper alias of to_json — same TValue->JSON traversal
+      Result := FFilters['to_json'](Input, Args, Context);
     end);
 
   FFilters.Add('json_decode',
@@ -5532,6 +5526,12 @@ begin
           S := StringReplace(S, #10, '\n', [rfReplaceAll]);
           S := StringReplace(S, #13, '\r', [rfReplaceAll]);
           S := StringReplace(S, #9, '\t', [rfReplaceAll]);
+          // HTML-safe escaping: encode <, >, &, ' as \uXXXX so the JSON
+          // output is safe to embed inside <script> tags.
+          S := StringReplace(S, '<', '\u003c', [rfReplaceAll]);
+          S := StringReplace(S, '>', '\u003e', [rfReplaceAll]);
+          S := StringReplace(S, '&', '\u0026', [rfReplaceAll]);
+          S := StringReplace(S, '''', '\u0027', [rfReplaceAll]);
           Exit('"' + S + '"');
         end;
         // Last resort: try parsing Input.ToString as JSON, else wrap as string

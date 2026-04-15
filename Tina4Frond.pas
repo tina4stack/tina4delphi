@@ -1274,8 +1274,123 @@ var
     end;
   end;
 
+  // Helper: Frond "is X" test operators.
+  // Returns 1 if expr contained an 'is <test>' and Result was set, 0 otherwise.
+  function TryIsTest(const S: String; out R: TValue): Integer;
+  var
+    IsPosLocal: Integer;
+    LHS, Rest: String;
+    LHSVal: TValue;
+    Negate: Boolean;
+    TestName, TestArg: String;
+    ArrVal: TArray<TValue>;
+    NumVal: Double;
+    IntVal: Int64;
+  begin
+    Result := 0;
+    IsPosLocal := FindTopLevelKeyword(S, 'is');
+    if IsPosLocal <= 0 then Exit;
+    LHS := Copy(S, 1, IsPosLocal - 1).Trim;
+    Rest := Copy(S, IsPosLocal + 2, MaxInt).Trim;
+    Negate := False;
+    if SameText(Copy(Rest, 1, 4), 'not ') then
+    begin
+      Negate := True;
+      Rest := Copy(Rest, 5, MaxInt).Trim;
+    end;
+    // Extract test name and optional arg
+    var SpacePos := Pos(' ', Rest);
+    if SpacePos > 0 then
+    begin
+      TestName := LowerCase(Copy(Rest, 1, SpacePos - 1));
+      TestArg := Copy(Rest, SpacePos + 1, MaxInt).Trim;
+    end
+    else
+    begin
+      TestName := LowerCase(Rest);
+      TestArg := '';
+    end;
+    // Special case: "divisible by(N)" written as "divisible by N"
+    if (TestName = 'divisible') and SameText(Copy(TestArg, 1, 3), 'by ') then
+    begin
+      TestName := 'divisible_by';
+      TestArg := Copy(TestArg, 4, MaxInt).Trim;
+    end
+    else if (TestName = 'divisible') and SameText(Copy(TestArg, 1, 3), 'by(') then
+    begin
+      TestName := 'divisible_by';
+      TestArg := Copy(TestArg, 4, MaxInt);
+      if TestArg.EndsWith(')') then
+        TestArg := Copy(TestArg, 1, Length(TestArg) - 1);
+      TestArg := TestArg.Trim;
+    end;
+
+    LHSVal := EvaluateExpression(LHS, Context);
+    var TestResult: Boolean := False;
+
+    if TestName = 'defined' then
+      TestResult := not LHSVal.IsEmpty
+    else if (TestName = 'none') or (TestName = 'null') then
+      TestResult := LHSVal.IsEmpty
+    else if TestName = 'empty' then
+    begin
+      if LHSVal.IsEmpty then TestResult := True
+      else if LHSVal.IsType<TArray<TValue>> then
+      begin
+        ArrVal := LHSVal.AsType<TArray<TValue>>;
+        TestResult := Length(ArrVal) = 0;
+      end
+      else if LHSVal.Kind in [tkString, tkUString] then
+        TestResult := LHSVal.AsString = ''
+      else
+        TestResult := False;
+    end
+    else if TestName = 'even' then
+    begin
+      if TryStrToInt64(LHSVal.ToString, IntVal) then
+        TestResult := (IntVal mod 2) = 0;
+    end
+    else if TestName = 'odd' then
+    begin
+      if TryStrToInt64(LHSVal.ToString, IntVal) then
+        TestResult := (IntVal mod 2) <> 0;
+    end
+    else if TestName = 'iterable' then
+      TestResult := LHSVal.IsType<TArray<TValue>> or LHSVal.IsType<TDictionary<String, TValue>>
+        or (LHSVal.IsObject and (LHSVal.AsObject is TJSONArray))
+    else if TestName = 'string' then
+      TestResult := LHSVal.Kind in [tkString, tkUString]
+    else if TestName = 'number' then
+      TestResult := LHSVal.IsOrdinal or LHSVal.IsType<Double> or TryStrToFloat(LHSVal.ToString, NumVal)
+    else if TestName = 'boolean' then
+      TestResult := LHSVal.IsType<Boolean>
+    else if TestName = 'divisible_by' then
+    begin
+      var Divisor: Int64;
+      if TryStrToInt64(LHSVal.ToString, IntVal) and
+         TryStrToInt64(TestArg, Divisor) and (Divisor <> 0) then
+        TestResult := (IntVal mod Divisor) = 0;
+    end
+    else
+      Exit(0); // Unknown test — fall through to normal parsing
+
+    if Negate then TestResult := not TestResult;
+    R := TValue.From<Boolean>(TestResult);
+    Result := 1;
+  end;
+
+var
+  IsTestResult: TValue;
+
 begin
   TrimmedExpr := Expr.Trim;
+
+  // 0a. Frond "is X" test operators (is defined, is empty, is even, is odd, etc.)
+  if TryIsTest(TrimmedExpr, IsTestResult) = 1 then
+  begin
+    Result := IsTestResult;
+    Exit;
+  end;
 
   // 0. Inline-if: valueA if cond else valueB  (Jinja/Twig style)
   IfPos := FindTopLevelKeyword(TrimmedExpr, 'if');
@@ -6095,14 +6210,16 @@ begin
                   Inc(MacroDepth)
                 else if Tag = 'endmacro' then
                   Dec(MacroDepth);
-                if (IfDepth = 1) and (Tag.StartsWith('elseif ') or (Tag = 'else')) and (ForDepth = 0) and (WithDepth = 0) and (MacroDepth = 0) then
+                if (IfDepth = 1) and (Tag.StartsWith('elseif ') or Tag.StartsWith('elif ') or (Tag = 'else')) and (ForDepth = 0) and (WithDepth = 0) and (MacroDepth = 0) then
                 begin
                   Branch.Body := Copy(Template, BodyStart, TagStart - BodyStart);
                   Branches.Add(Branch);
                   if Tag = 'else' then
                     Branch.Condition := ''
-                  else
-                    Branch.Condition := Trim(Copy(Tag, 8, MaxInt));
+                  else if Tag.StartsWith('elseif ') then
+                    Branch.Condition := Trim(Copy(Tag, 8, MaxInt))
+                  else  // elif
+                    Branch.Condition := Trim(Copy(Tag, 6, MaxInt));
                   BodyStart := CurrentPos;
                 end;
               end;
@@ -6206,13 +6323,26 @@ begin
                     Arr := Iterable.AsType<TArray<TValue>>;
                     if Length(Arr) > 0 then
                       HasItems := True;
-                    for Item in Arr do
+                    for var IdxI := 0 to High(Arr) do
                     begin
+                      Item := Arr[IdxI];
                       LoopContext := TDictionary<String, TValue>.Create(LocalContext);
                       try
                         // Set the loop variable
                         LoopContext.AddOrSetValue(LoopVar, Item);
-                        //if FDebug then  WriteLn('Debug: Loop var ', LoopVar, ' = ', Item.ToString, ' ==== ', LoopCondition);
+                        // Build loop.* meta variables (Jinja/Frond convention)
+                        var LoopMeta := TDictionary<String, TValue>.Create;
+                        LoopMeta.AddOrSetValue('index', TValue.From<Integer>(IdxI + 1));
+                        LoopMeta.AddOrSetValue('index0', TValue.From<Integer>(IdxI));
+                        LoopMeta.AddOrSetValue('first', TValue.From<Boolean>(IdxI = 0));
+                        LoopMeta.AddOrSetValue('last', TValue.From<Boolean>(IdxI = High(Arr)));
+                        LoopMeta.AddOrSetValue('length', TValue.From<Integer>(Length(Arr)));
+                        LoopMeta.AddOrSetValue('revindex', TValue.From<Integer>(Length(Arr) - IdxI));
+                        LoopMeta.AddOrSetValue('revindex0', TValue.From<Integer>(Length(Arr) - IdxI - 1));
+                        LoopMeta.AddOrSetValue('remaining', TValue.From<Integer>(Length(Arr) - IdxI - 1));
+                        LoopMeta.AddOrSetValue('even', TValue.From<Boolean>(((IdxI + 1) mod 2) = 0));
+                        LoopMeta.AddOrSetValue('odd', TValue.From<Boolean>(((IdxI + 1) mod 2) = 1));
+                        LoopContext.AddOrSetValue('loop', TValue.From<TDictionary<String, TValue>>(LoopMeta));
                         if (LoopCondition = '') or ToBool(EvaluateExpression(LoopCondition, LoopContext)) then
                         begin
                           var ForBody: String;
@@ -6220,18 +6350,17 @@ begin
                             ForBody := Copy(Template, BodyStart, ElsePos - BodyStart - Length('{% else %}'))
                           else
                             ForBody := Copy(Template, BodyStart, TagStart - BodyStart);
-                          //if FDebug then WriteLn('Debug: Loop Body ', ForBody, LoopContext.ToString);
                           var BodyResult := '';
                           ProcessTemplate(ForBody, LoopContext, BodyResult);
                           for var Pair in LoopContext do
                           begin
-                            //if FDebug then WriteLn('Reading: ', Pair.Key, ' = ', Pair.Value.ToString);
-                            LocalContext.AddOrSetValue(Pair.Key, Pair.Value);
+                            if Pair.Key <> 'loop' then
+                              LocalContext.AddOrSetValue(Pair.Key, Pair.Value);
                           end;
                           if BodyResult <> '' then
                             SB.Append(BodyResult);
-                          //if FDebug then WriteLn('Debug: For body result = ', BodyResult);
                         end;
+                        LoopMeta.Free;
                       finally
                         LoopContext.Free;
                       end;

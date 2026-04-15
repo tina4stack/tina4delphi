@@ -4811,11 +4811,15 @@ begin
 
   FFilters.Add('nl2br',
     function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): TValue
+    var
+      S: String;
     begin
-      if Input.Kind in [tkString, tkUString] then
-        Result := StringReplace(Input.AsString, sLineBreak, '<br>', [rfReplaceAll])
-      else
-        Result := Input.ToString;
+      S := Input.ToString;
+      // Handle all newline variants: CRLF first so it's not double-replaced
+      S := StringReplace(S, #13#10, '<br>', [rfReplaceAll]);
+      S := StringReplace(S, #10, '<br>', [rfReplaceAll]);
+      S := StringReplace(S, #13, '<br>', [rfReplaceAll]);
+      Result := TValue.From<String>(S);
     end);
 
 
@@ -6782,6 +6786,28 @@ var
     TemplateText := RE.Replace(TemplateText, '');
   end;
 
+  // Frond/Jinja whitespace control:
+  //   {%-  strips whitespace BEFORE the tag
+  //    -%} strips whitespace AFTER the tag
+  //   {{-  / -}}   same for expression tags
+  procedure ApplyWhitespaceControl;
+  var
+    RE: TRegEx;
+  begin
+    // "{{-" eats preceding whitespace (spaces, tabs, newlines)
+    RE := TRegEx.Create('\s*\{\{-');
+    TemplateText := RE.Replace(TemplateText, '{{');
+    // "-}}" eats following whitespace
+    RE := TRegEx.Create('-\}\}\s*');
+    TemplateText := RE.Replace(TemplateText, '}}');
+    // "{%-" eats preceding whitespace
+    RE := TRegEx.Create('\s*\{%-');
+    TemplateText := RE.Replace(TemplateText, '{%');
+    // "-%}" eats following whitespace
+    RE := TRegEx.Create('-%\}\s*');
+    TemplateText := RE.Replace(TemplateText, '%}');
+  end;
+
 begin
   FullPath := IncludeTrailingPathDelimiter(FTemplatePath) + TemplateOrContent;
   if FileExists(FullPath) then
@@ -6803,6 +6829,9 @@ begin
     // Autoescape wrappers: strip the markers; the inner content renders
     // normally (we don't escape by default, so there's nothing to toggle).
     StripAutoescapeWrappers;
+
+    // Whitespace control: {{- -}} and {%- -%} eat adjacent whitespace
+    ApplyWhitespaceControl;
 
     TemplateText := RemoveComments(TemplateText);
     TemplateText := EvaluateMacroBlocks(TemplateText, Context);

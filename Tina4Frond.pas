@@ -2388,9 +2388,11 @@ var
 begin
   Result := TValue.Empty;
 
-  // Regex to match identifiers, array indices, Python-style slices, or quoted strings
-  // Slice forms: [N], [N:M], [:M], [N:], [:]
-  Regex := TRegEx.Create('(\w+|\[-?\d*:-?\d*\]|\[-?\d+\]|''[^'']*''|"[^"]*")', [roIgnoreCase]);
+  // Regex to match identifiers, bracketed keys (int, slice, variable,
+  // dotted path, or quoted), or quoted strings.
+  // The bracket form [^\[\]]* admits any content without nested brackets:
+  //   [0], [1:3], [:5], [k], [i.code], ['key'], ["key"]
+  Regex := TRegEx.Create('(\w+|\[[^\[\]]*\]|''[^'']*''|"[^"]*")', [roIgnoreCase]);
   Matches := Regex.Matches(VariablePath);
   SetLength(Parts, Matches.Count);
   for i := 0 to Matches.Count - 1 do
@@ -2518,7 +2520,57 @@ begin
           Exit(TValue.Empty);
       end
       else
-        Exit(TValue.Empty);
+      begin
+        // Not a slice, not an int — could be a quoted string key or a
+        // variable name. Try to resolve as an expression against the
+        // context so {% set k = "foo" %}{{ dict[k] }} works.
+        var KeyStr: String;
+        if (BracketContent.StartsWith('''') and BracketContent.EndsWith('''')) or
+           (BracketContent.StartsWith('"') and BracketContent.EndsWith('"')) then
+          KeyStr := Copy(BracketContent, 2, Length(BracketContent) - 2)
+        else
+        begin
+          var KeyVal := EvaluateExpression(BracketContent, Context);
+          if KeyVal.IsEmpty then
+            Exit(TValue.Empty);
+          KeyStr := KeyVal.ToString;
+        end;
+        // Lookup in dict/JSONObject using the resolved key
+        if Current.IsType<TDictionary<String, TValue>> then
+        begin
+          if Current.AsType<TDictionary<String, TValue>>.TryGetValue(KeyStr, Current) then
+            // resolved
+          else
+            Exit(TValue.Empty);
+        end
+        else if Current.IsObject and (Current.AsObject is TDictionary<String, TValue>) then
+        begin
+          if TDictionary<String, TValue>(Current.AsObject).TryGetValue(KeyStr, Current) then
+            // resolved
+          else
+            Exit(TValue.Empty);
+        end
+        else if Current.IsObject and (Current.AsObject is TJSONObject) then
+        begin
+          var JO := TJSONObject(Current.AsObject);
+          if JO.GetValue(KeyStr) <> nil then
+          begin
+            var JV := JO.GetValue(KeyStr);
+            if JV is TJSONNumber then
+              Current := TValue.From<Double>(TJSONNumber(JV).AsDouble)
+            else if JV is TJSONString then
+              Current := TValue.From<String>(TJSONString(JV).Value)
+            else if JV is TJSONBool then
+              Current := TValue.From<Boolean>(TJSONBool(JV).AsBoolean)
+            else
+              Current := TValue.From<String>(JV.ToString);
+          end
+          else
+            Exit(TValue.Empty);
+        end
+        else
+          Exit(TValue.Empty);
+      end;
     end
     // Handle dictionary or property access
     else

@@ -6509,6 +6509,106 @@ end;
 function TTina4Frond.RenderInternal(const TemplateOrContent: String; var Context: TStringDict): String;
 var
   TemplateText, FullPath: String;
+  SpacelessBlocks: TList<String>;
+  RawBlocks: TList<String>;
+
+  // Extract {% raw %}...{% endraw %} blocks, replace with sentinel.
+  // The content inside is preserved literally through all template passes.
+  procedure ExtractRawBlocks;
+  var
+    OpenTag, CloseTag: String;
+    StartIdx, TagEnd, Content: Integer;
+  begin
+    OpenTag := '{% raw %}';
+    CloseTag := '{% endraw %}';
+    StartIdx := 1;
+    while True do
+    begin
+      StartIdx := Pos(OpenTag, TemplateText, StartIdx);
+      if StartIdx = 0 then Break;
+      TagEnd := Pos(CloseTag, TemplateText, StartIdx + Length(OpenTag));
+      if TagEnd = 0 then Break;
+      Content := StartIdx + Length(OpenTag);
+      RawBlocks.Add(Copy(TemplateText, Content, TagEnd - Content));
+      TemplateText := Copy(TemplateText, 1, StartIdx - 1) +
+                      Format('__FROND_RAW_%d__', [RawBlocks.Count - 1]) +
+                      Copy(TemplateText, TagEnd + Length(CloseTag), MaxInt);
+      StartIdx := StartIdx + 1;
+    end;
+  end;
+
+  procedure RestoreRawBlocks(var S: String);
+  var
+    I: Integer;
+  begin
+    for I := 0 to RawBlocks.Count - 1 do
+      S := StringReplace(S, Format('__FROND_RAW_%d__', [I]), RawBlocks[I], [rfReplaceAll]);
+  end;
+
+  // Extract {% spaceless %}...{% endspaceless %} blocks — remember positions,
+  // process normally, then post-process by stripping whitespace between tags.
+  procedure ExtractSpacelessBlocks;
+  var
+    OpenTag, CloseTag: String;
+    StartIdx, TagEnd, Content: Integer;
+  begin
+    OpenTag := '{% spaceless %}';
+    CloseTag := '{% endspaceless %}';
+    StartIdx := 1;
+    while True do
+    begin
+      StartIdx := Pos(OpenTag, TemplateText, StartIdx);
+      if StartIdx = 0 then Break;
+      TagEnd := Pos(CloseTag, TemplateText, StartIdx + Length(OpenTag));
+      if TagEnd = 0 then Break;
+      Content := StartIdx + Length(OpenTag);
+      SpacelessBlocks.Add(Copy(TemplateText, Content, TagEnd - Content));
+      TemplateText := Copy(TemplateText, 1, StartIdx - 1) +
+                      Format('__FROND_SPACELESS_%d__', [SpacelessBlocks.Count - 1]) +
+                      Copy(TemplateText, TagEnd + Length(CloseTag), MaxInt);
+      StartIdx := StartIdx + 1;
+    end;
+  end;
+
+  function StripWhitespaceBetweenTags(const S: String): String;
+  var
+    RE: TRegEx;
+  begin
+    // Collapse ">   <" to "><" (whitespace between tags only)
+    RE := TRegEx.Create('>\s+<');
+    Result := RE.Replace(S, '><');
+    Result := Trim(Result);
+  end;
+
+  procedure RestoreSpacelessBlocks(var S: String);
+  var
+    I: Integer;
+    Rendered: String;
+    InnerCtx: TStringDict;
+  begin
+    for I := 0 to SpacelessBlocks.Count - 1 do
+    begin
+      InnerCtx := Context;
+      Rendered := SpacelessBlocks[I];
+      ProcessTemplate(Rendered, InnerCtx, Rendered);
+      Rendered := StripWhitespaceBetweenTags(Rendered);
+      S := StringReplace(S, Format('__FROND_SPACELESS_%d__', [I]), Rendered, [rfReplaceAll]);
+    end;
+  end;
+
+  // Strip {% autoescape true|false %}...{% endautoescape %} wrappers.
+  // We don't auto-escape by default, so both modes are currently no-ops
+  // on the content — just remove the tags so the inner content renders.
+  procedure StripAutoescapeWrappers;
+  var
+    RE: TRegEx;
+  begin
+    RE := TRegEx.Create('\{%\s*autoescape\s+\w+\s*%\}', [roIgnoreCase]);
+    TemplateText := RE.Replace(TemplateText, '');
+    RE := TRegEx.Create('\{%\s*endautoescape\s*%\}', [roIgnoreCase]);
+    TemplateText := RE.Replace(TemplateText, '');
+  end;
+
 begin
   FullPath := IncludeTrailingPathDelimiter(FTemplatePath) + TemplateOrContent;
   if FileExists(FullPath) then
@@ -6516,12 +6616,35 @@ begin
   else
     TemplateText := TemplateOrContent;
 
-  TemplateText := RemoveComments(TemplateText);
-  TemplateText := EvaluateMacroBlocks(TemplateText, Context);
-  TemplateText := EvaluateIncludes(TemplateText, Context);
-  TemplateText := EvaluateExtends(TemplateText, Context);
-  ProcessTemplate(TemplateText, Context, Result);
-  Result := StringReplace(Result, #$D#$A, '', []);
+  SpacelessBlocks := TList<String>.Create;
+  RawBlocks := TList<String>.Create;
+  try
+    // Raw blocks are extracted FIRST so their content (which may contain
+    // {% %} and {{ }} syntax) is not touched by any later processing step.
+    ExtractRawBlocks;
+
+    // Spaceless blocks also extract, but their content IS rendered — we
+    // just post-strip whitespace between tags after rendering.
+    ExtractSpacelessBlocks;
+
+    // Autoescape wrappers: strip the markers; the inner content renders
+    // normally (we don't escape by default, so there's nothing to toggle).
+    StripAutoescapeWrappers;
+
+    TemplateText := RemoveComments(TemplateText);
+    TemplateText := EvaluateMacroBlocks(TemplateText, Context);
+    TemplateText := EvaluateIncludes(TemplateText, Context);
+    TemplateText := EvaluateExtends(TemplateText, Context);
+    ProcessTemplate(TemplateText, Context, Result);
+    Result := StringReplace(Result, #$D#$A, '', []);
+
+    // Restore raw blocks first (they're literal), then spaceless (render + strip)
+    RestoreRawBlocks(Result);
+    RestoreSpacelessBlocks(Result);
+  finally
+    RawBlocks.Free;
+    SpacelessBlocks.Free;
+  end;
 end;
 
 procedure TTina4Frond.SetDateFormat(FormatDate, FormatDays: String);

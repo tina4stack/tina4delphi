@@ -6,7 +6,7 @@ uses
   System.SysUtils, System.Classes, System.SyncObjs, System.Net.Socket,
   System.Types, System.NetEncoding, System.Hash, System.DateUtils,
   {$IFDEF POSIX}Posix.NetDB, Posix.SysSocket, Posix.ArpaInet,{$ENDIF}
-  Tina4OpenSSL;
+  Tina4OpenSSL, Tina4WebSocketFrames;
 
 type
   /// <summary>WebSocket connection state</summary>
@@ -95,10 +95,9 @@ type
     function RawRecv(ALen: Integer): TBytes;
     function RawRecvByte: Byte;
 
-    // WebSocket frame encode/decode
+    // WebSocket frame encode/decode (delegates to Tina4WebSocketFrames)
     function EncodeFrame(AOpcode: Byte; const APayload: TBytes): TBytes;
     procedure ProcessFrame(AOpcode: Byte; const APayload: TBytes);
-    function GenerateMaskKey: TBytes;
 
     // Event dispatchers (queue to main thread)
     procedure FireConnected;
@@ -173,19 +172,8 @@ uses
 var
   UnitFinalized: Boolean = False;
 
-{ WebSocket opcodes }
-const
-  WS_OP_CONTINUATION = $00;
-  WS_OP_TEXT         = $01;
-  WS_OP_BINARY       = $02;
-  WS_OP_CLOSE        = $08;
-  WS_OP_PING         = $09;
-  WS_OP_PONG         = $0A;
-
-  WS_FIN_BIT         = $80;
-  WS_MASK_BIT        = $80;
-
-  WS_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
+// WebSocket opcodes, FIN/MASK bits and the WS GUID now live in
+// Tina4WebSocketFrames so the upcoming server can share them.
 
 procedure Register;
 begin
@@ -317,97 +305,20 @@ end;
 
 procedure TTina4WSReadThread.Execute;
 var
-  B0, B1: Byte;
-  Opcode, FinalOpcode: Byte;
-  Fin: Boolean;
-  PayloadLen: UInt64;
-  MaskKey: TBytes;
-  Masked: Boolean;
-  FramePayload: TBytes;
-  MessageBuf: TBytes;
-  I: Integer;
-  TempBytes: TBytes;
+  Frame: TTina4WSFrame;
 begin
-  MessageBuf := nil;
-  FinalOpcode := 0;
-
+  // Frame parsing now lives in Tina4WebSocketFrames.ReadFrame so the
+  // server unit can share it. We just supply our byte source and
+  // dispatch the assembled message to ProcessFrame.
   while not Terminated and (FOwner.FState = wsOpen) do
   begin
     try
-      // Read first 2 bytes of frame header
-      B0 := FOwner.RawRecvByte;
-      B1 := FOwner.RawRecvByte;
-
-      Fin := (B0 and WS_FIN_BIT) <> 0;
-      Opcode := B0 and $0F;
-      Masked := (B1 and WS_MASK_BIT) <> 0;
-      PayloadLen := B1 and $7F;
-
-      // Extended payload length
-      if PayloadLen = 126 then
-      begin
-        TempBytes := FOwner.RawRecv(2);
-        PayloadLen := (UInt64(TempBytes[0]) shl 8) or UInt64(TempBytes[1]);
-      end
-      else if PayloadLen = 127 then
-      begin
-        TempBytes := FOwner.RawRecv(8);
-        PayloadLen := 0;
-        for I := 0 to 7 do
-          PayloadLen := (PayloadLen shl 8) or UInt64(TempBytes[I]);
-      end;
-
-      // Masking key (server should not mask, but handle it)
-      if Masked then
-        MaskKey := FOwner.RawRecv(4)
-      else
-        MaskKey := nil;
-
-      // Read payload
-      if PayloadLen > 0 then
-      begin
-        FramePayload := FOwner.RawRecv(Integer(PayloadLen));
-
-        // Unmask if needed
-        if Masked and (Length(MaskKey) = 4) then
-          for I := 0 to Length(FramePayload) - 1 do
-            FramePayload[I] := FramePayload[I] xor MaskKey[I mod 4];
-      end
-      else
-        FramePayload := nil;
-
-      // Handle control frames immediately (they can interleave data frames)
-      if Opcode >= $08 then
-      begin
-        FOwner.ProcessFrame(Opcode, FramePayload);
-        Continue;
-      end;
-
-      // Data frame: accumulate fragments
-      if Opcode <> WS_OP_CONTINUATION then
-      begin
-        // Start of new message
-        FinalOpcode := Opcode;
-        MessageBuf := FramePayload;
-      end
-      else
-      begin
-        // Continuation frame — append
-        if (MessageBuf <> nil) and (FramePayload <> nil) then
+      Frame := ReadFrame(
+        function(ALen: Integer): TBytes
         begin
-          var OldLen := Length(MessageBuf);
-          SetLength(MessageBuf, OldLen + Length(FramePayload));
-          Move(FramePayload[0], MessageBuf[OldLen], Length(FramePayload));
-        end;
-      end;
-
-      if Fin then
-      begin
-        FOwner.ProcessFrame(FinalOpcode, MessageBuf);
-        MessageBuf := nil;
-        FinalOpcode := 0;
-      end;
-
+          Result := FOwner.RawRecv(ALen);
+        end);
+      FOwner.ProcessFrame(Frame.Opcode, Frame.Payload);
     except
       on E: Exception do
       begin
@@ -819,61 +730,12 @@ end;
 
 { ---- WebSocket Frame Encoding ---- }
 
-function TTina4WebSocketClient.GenerateMaskKey: TBytes;
-begin
-  SetLength(Result, 4);
-  Result[0] := Byte(Random(256));
-  Result[1] := Byte(Random(256));
-  Result[2] := Byte(Random(256));
-  Result[3] := Byte(Random(256));
-end;
-
 function TTina4WebSocketClient.EncodeFrame(AOpcode: Byte;
   const APayload: TBytes): TBytes;
-var
-  Header: TBytes;
-  MaskKey: TBytes;
-  PayloadLen: Int64;
-  I, Offset: Integer;
 begin
-  PayloadLen := Length(APayload);
-  MaskKey := GenerateMaskKey;
-
-  // Calculate header size
-  if PayloadLen <= 125 then
-    SetLength(Header, 2)
-  else if PayloadLen <= 65535 then
-    SetLength(Header, 4)
-  else
-    SetLength(Header, 10);
-
-  // FIN + opcode
-  Header[0] := WS_FIN_BIT or AOpcode;
-
-  // Payload length + mask bit (client MUST mask)
-  if PayloadLen <= 125 then
-    Header[1] := WS_MASK_BIT or Byte(PayloadLen)
-  else if PayloadLen <= 65535 then
-  begin
-    Header[1] := WS_MASK_BIT or 126;
-    Header[2] := Byte(PayloadLen shr 8);
-    Header[3] := Byte(PayloadLen);
-  end
-  else
-  begin
-    Header[1] := WS_MASK_BIT or 127;
-    for I := 0 to 7 do
-      Header[2 + I] := Byte(PayloadLen shr ((7 - I) * 8));
-  end;
-
-  // Build complete frame: header + mask key + masked payload
-  SetLength(Result, Length(Header) + 4 + Length(APayload));
-  Move(Header[0], Result[0], Length(Header));
-  Move(MaskKey[0], Result[Length(Header)], 4);
-
-  Offset := Length(Header) + 4;
-  for I := 0 to Length(APayload) - 1 do
-    Result[Offset + I] := APayload[I] xor MaskKey[I mod 4];
+  // Client always masks (RFC 6455 requires it). Server side will pass
+  // AMask=False — same Tina4WebSocketFrames.EncodeFrame, different flag.
+  Result := Tina4WebSocketFrames.EncodeFrame(AOpcode, APayload, True);
 end;
 
 { ---- Frame Processing ---- }
@@ -913,20 +775,7 @@ begin
 
     WS_OP_CLOSE:
       begin
-        // Parse close code and reason
-        CloseCode := 1000;
-        CloseReason := '';
-        if (APayload <> nil) and (Length(APayload) >= 2) then
-        begin
-          CloseCode := (Integer(APayload[0]) shl 8) or Integer(APayload[1]);
-          if Length(APayload) > 2 then
-          begin
-            var ReasonBytes: TBytes;
-            SetLength(ReasonBytes, Length(APayload) - 2);
-            Move(APayload[2], ReasonBytes[0], Length(ReasonBytes));
-            CloseReason := TEncoding.UTF8.GetString(ReasonBytes);
-          end;
-        end;
+        ParseClosePayload(APayload, CloseCode, CloseReason);
 
         // Echo close frame back if we haven't sent one yet
         if FState = wsOpen then

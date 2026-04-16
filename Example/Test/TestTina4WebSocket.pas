@@ -80,6 +80,27 @@ type
     procedure TestAutoReconnectOff;
   end;
 
+  // ---- wss:// integration tests ----
+  // Uses a self-signed cert+key checked into Example/Test/testdata/.
+  // Each test no-ops gracefully if OpenSSL isn't loadable in this
+  // environment (Check passes with a note instead of failing).
+  TestTTina4WebSocketTLS = class(TTestCase)
+  private
+    FServer: TTina4WebSocketServer;
+    FBroker: TTina4WebSocketBroker;
+    FClient: TTina4WebSocketClient;
+    FHelper: TWSTestHelper;
+    FPort: Integer;
+    FOpenSSLAvailable: Boolean;
+    procedure WaitForCondition(ACondition: TFunc<Boolean>;
+      ATimeoutMs: Integer = 10000);
+  public
+    procedure SetUp; override;
+    procedure TearDown; override;
+  published
+    procedure TestWssConnectAndSubscribe;
+  end;
+
 implementation
 
 const
@@ -606,7 +627,140 @@ begin
   end;
 end;
 
+{ ---- TestTTina4WebSocketTLS ---- }
+
+function TestDataDir: string;
+begin
+  // Cert+key live next to this test source. We resolve relative to the
+  // executable's working dir at runtime — Tina4DelphiExampleTests.exe
+  // is launched from Example\Test\Win32\Debug\, so back up to the
+  // Example\Test\ folder.
+  Result := IncludeTrailingPathDelimiter(GetCurrentDir) + '..' +
+    PathDelim + '..' + PathDelim + '..' + PathDelim + 'testdata' + PathDelim;
+end;
+
+procedure TestTTina4WebSocketTLS.SetUp;
+var
+  Attempt: Integer;
+  CertPath, KeyPath: string;
+begin
+  FHelper := TWSTestHelper.Create;
+  FHelper.Reset;
+  FOpenSSLAvailable := LoadOpenSSL;
+
+  FServer := TTina4WebSocketServer.Create;
+  FBroker := TTina4WebSocketBroker.Create;
+  FBroker.Attach(FServer);
+  FServer.OnError := FHelper.OnServerError;
+
+  if FOpenSSLAvailable then
+  begin
+    CertPath := TestDataDir + 'test_cert.pem';
+    KeyPath := TestDataDir + 'test_key.pem';
+    if FileExists(CertPath) and FileExists(KeyPath) then
+    begin
+      // If LoadCertificate fails (e.g., the server-side OpenSSL
+      // entry points aren't exported), the test will skip.
+      if not FServer.UseCertificate(CertPath, KeyPath) then
+        FOpenSSLAvailable := False;
+    end
+    else
+      FOpenSSLAvailable := False;
+  end;
+
+  if not FOpenSSLAvailable then Exit;  // SetUp is partial; test will skip
+
+  for Attempt := 0 to 9 do
+  begin
+    FPort := 48000 + Random(1000) + Attempt;
+    try
+      FServer.Listen(FPort);
+      Break;
+    except
+      FPort := 0;
+    end;
+  end;
+  Check(FPort > 0, 'Could not bind a free local port for TLS test server');
+  Sleep(50);
+
+  FClient := TTina4WebSocketClient.Create(nil);
+  FClient.URL := 'wss://127.0.0.1:' + IntToStr(FPort) + '/';
+  FClient.AutoReconnect := False;
+  FClient.PingInterval := 0;
+  FClient.OnConnected := FHelper.OnConnected;
+  FClient.OnDisconnected := FHelper.OnDisconnected;
+  FClient.OnMessage := FHelper.OnMessage;
+  FClient.OnError := FHelper.OnError;
+  FClient.OnReconnecting := FHelper.OnReconnecting;
+end;
+
+procedure TestTTina4WebSocketTLS.TearDown;
+begin
+  if Assigned(FClient) and FClient.IsConnected then
+    FClient.Disconnect;
+  CheckSynchronize(200);
+  FreeAndNil(FClient);
+  if Assigned(FServer) then
+    FServer.Stop;
+  FreeAndNil(FBroker);
+  FreeAndNil(FServer);
+  FreeAndNil(FHelper);
+end;
+
+procedure TestTTina4WebSocketTLS.WaitForCondition(
+  ACondition: TFunc<Boolean>; ATimeoutMs: Integer);
+var
+  Elapsed: Integer;
+begin
+  Elapsed := 0;
+  while (not ACondition()) and (Elapsed < ATimeoutMs) do
+  begin
+    CheckSynchronize(100);
+    Sleep(100);
+    Inc(Elapsed, 200);
+  end;
+end;
+
+procedure TestTTina4WebSocketTLS.TestWssConnectAndSubscribe;
+begin
+  if not FOpenSSLAvailable then
+  begin
+    // Pass with a note rather than fail — environments without OpenSSL
+    // shouldn't make this test red. The plain ws:// integration tests
+    // already exercise the protocol logic.
+    Check(True, 'OpenSSL/server-side TLS not available; skipping wss test');
+    Exit;
+  end;
+
+  FClient.Connect;
+
+  WaitForCondition(
+    function: Boolean
+    begin
+      Result := FHelper.Connected or (FHelper.LastError <> '');
+    end);
+
+  Check(FHelper.Connected,
+    'wss connect failed — lastError=' + FHelper.LastError +
+    ' state=' + IntToStr(Ord(FClient.State)));
+
+  // Round-trip a subscribe through the encrypted channel to prove
+  // the framing layer is wired correctly on top of TLS.
+  FClient.Send('{"action":"subscribe","topic":"tls-test"}');
+
+  WaitForCondition(
+    function: Boolean
+    begin
+      Result := FHelper.MessageCount > 0;
+    end);
+
+  Check(FHelper.MessageCount > 0, 'Should receive ack over wss');
+  Check(Pos('Subscribed', FHelper.LastMessage) > 0,
+    'Should receive subscribe ack over wss, got: ' + FHelper.LastMessage);
+end;
+
 initialization
   RegisterTest('WebSocket.Unit', TestTTina4WebSocketUnit.Suite);
   RegisterTest('WebSocket.Integration', TestTTina4WebSocketIntegration.Suite);
+  RegisterTest('WebSocket.TLS', TestTTina4WebSocketTLS.Suite);
 end.

@@ -4,7 +4,8 @@ interface
 
 uses
   TestFramework, System.SysUtils, System.Classes, System.SyncObjs,
-  Tina4OpenSSL, Tina4WebSocketClient;
+  Tina4OpenSSL, Tina4WebSocketClient,
+  Tina4WebSocketServer, Tina4WebSocketFrames;
 
 type
   // Helper to capture events from TTina4WebSocketClient

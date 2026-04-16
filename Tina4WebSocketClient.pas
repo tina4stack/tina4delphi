@@ -673,7 +673,10 @@ procedure TTina4WebSocketClient.RawSend(const AData: TBytes);
 var
   Sent, Total, Ret: Integer;
 begin
-  if FState <> wsOpen then Exit; // don't send on closed/closing socket
+  // Allow sends during the handshake too — the WS upgrade request
+  // is dispatched while FState is still wsConnecting. Only block on
+  // states where the socket is gone (wsClosed, wsClosing).
+  if FState in [wsClosed, wsClosing] then Exit;
   FWriteLock.Enter;
   try
     if not Assigned(FSocket) then Exit; // socket already freed

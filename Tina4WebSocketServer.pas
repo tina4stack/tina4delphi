@@ -366,15 +366,24 @@ end;
 procedure TWSConnReadThread.Execute;
 begin
   try
-    if PerformHandshake then
-    begin
-      FConn.FServer.FireConnect(FConn);
-      RunFrameLoop;
-    end
-    else
-    begin
-      FCloseCode := WS_CLOSE_PROTOCOL_ERROR;
-      FCloseReason := 'Handshake failed';
+    try
+      if PerformHandshake then
+      begin
+        FConn.FServer.FireConnect(FConn);
+        RunFrameLoop;
+      end
+      else
+      begin
+        FCloseCode := WS_CLOSE_PROTOCOL_ERROR;
+        FCloseReason := 'Handshake failed';
+      end;
+    except
+      on E: Exception do
+      begin
+        FCloseCode := WS_CLOSE_INTERNAL_ERROR;
+        FCloseReason := 'Exception: ' + E.Message;
+        FConn.FServer.FireError(FConn, E.Message);
+      end;
     end;
   finally
     if FConn.FOpen then
@@ -525,20 +534,20 @@ end;
 
 procedure TTina4WebSocketServer.Listen(APort: Integer; const ABindHost: string);
 var
-  Endpoint: TNetEndpoint;
-  BindHost: string;
+  BindIP: string;
 begin
   if FRunning then Exit;
   FPort := APort;
   FBindHost := ABindHost;
   if ABindHost = '' then
-    BindHost := '0.0.0.0'
+    BindIP := '0.0.0.0'
   else
-    BindHost := ABindHost;
+    BindIP := ABindHost;
 
   FListener := TSocket.Create(TSocketType.TCP);
-  Endpoint := TNetEndpoint.Create(TIPAddress.Create(BindHost), APort);
-  FListener.Listen('', '', APort);  // bind to all interfaces on this port
+  // TSocket.Listen overload: Listen(Address, Service, Port, QueueSize).
+  // Service '' = no service name lookup; QueueSize -1 = system default.
+  FListener.Listen(BindIP, '', Word(APort), -1);
   FRunning := True;
 
   FAcceptThread := TWSAcceptThread.Create(Self);

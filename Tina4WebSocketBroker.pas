@@ -339,9 +339,12 @@ begin
     Payload.Free;
   end;
 
+  // Skip the publisher — the convention (matching tina4-python) is
+  // that the publisher gets a single ack, while every OTHER subscriber
+  // receives the broadcast.
   for C in Subscribers do
   begin
-    if (C <> nil) and C.IsOpen then
+    if (C <> nil) and (C <> AConn) and C.IsOpen then
       try C.Send(PayloadStr); except end;
   end;
 

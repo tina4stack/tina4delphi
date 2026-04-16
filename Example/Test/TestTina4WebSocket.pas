@@ -26,6 +26,8 @@ type
     procedure OnError(Sender: TObject; const AError: string);
     procedure OnReconnecting(Sender: TObject; AAttempt: Integer);
     procedure Reset;
+    procedure OnServerError(Sender: TObject; Connection: TTina4WSConnection;
+      const AError: string);
   end;
 
   // ---- Unit tests (no network) ----
@@ -57,11 +59,14 @@ type
     procedure TestOpenSSLLoad;
   end;
 
-  // ---- Integration tests (require network) ----
+  // ---- Integration tests (in-process server + client) ----
   TestTTina4WebSocketIntegration = class(TTestCase)
   private
+    FServer: TTina4WebSocketServer;
+    FBroker: TTina4WebSocketBroker;
     FClient: TTina4WebSocketClient;
     FHelper: TWSTestHelper;
+    FPort: Integer;
     procedure WaitForCondition(ACondition: TFunc<Boolean>;
       ATimeoutMs: Integer = 10000);
   public
@@ -78,10 +83,11 @@ type
 implementation
 
 const
-  // Live test server
-  TEST_URL = 'wss://api.aatos-ai.com/api/notifications';
-  TEST_AUTH = 'Authorization: Bearer ded53236-19fa-11f0-b129-07867f38df3b';
-  TEST_TOPIC = 'Sleek';
+  // Each integration test spins up its own broker on a fresh ephemeral
+  // port so tests don't collide with each other or with anything else
+  // that happens to be listening locally.
+  TEST_PORT_BASE = 47000;
+  TEST_TOPIC = 'TestRoom';
 
 { ---- TWSTestHelper ---- }
 
@@ -124,6 +130,12 @@ end;
 procedure TWSTestHelper.OnReconnecting(Sender: TObject; AAttempt: Integer);
 begin
   ReconnectAttempt := AAttempt;
+end;
+
+procedure TWSTestHelper.OnServerError(Sender: TObject;
+  Connection: TTina4WSConnection; const AError: string);
+begin
+  LastError := 'server: ' + AError;
 end;
 
 { ---- TestTTina4WebSocketUnit ---- }
@@ -387,13 +399,39 @@ end;
 { ---- TestTTina4WebSocketIntegration ---- }
 
 procedure TestTTina4WebSocketIntegration.SetUp;
+var
+  Attempt: Integer;
 begin
   FHelper := TWSTestHelper.Create;
   FHelper.Reset;
 
+  FServer := TTina4WebSocketServer.Create;
+  FBroker := TTina4WebSocketBroker.Create;
+  FBroker.Attach(FServer);
+  // After Attach, OnConnect/OnDisconnect/OnMessage are owned by the
+  // broker. OnError is still free — capture it for diagnostics.
+  FServer.OnError := FHelper.OnServerError;
+
+  // Try a sequence of ephemeral ports so a stale TIME_WAIT socket
+  // from a previous test doesn't fail this one. After 10 attempts
+  // give up and let the test fail informatively.
+  for Attempt := 0 to 9 do
+  begin
+    FPort := TEST_PORT_BASE + Random(1000) + Attempt;
+    try
+      FServer.Listen(FPort);
+      Break;
+    except
+      FPort := 0;
+    end;
+  end;
+  Check(FPort > 0, 'Could not find a free local port to bind the test server');
+  // Give the accept thread a tick to enter Accept() before the
+  // client races to connect.
+  Sleep(50);
+
   FClient := TTina4WebSocketClient.Create(nil);
-  FClient.URL := TEST_URL;
-  FClient.Headers.Add(TEST_AUTH);
+  FClient.URL := 'ws://127.0.0.1:' + IntToStr(FPort) + '/';
   FClient.AutoReconnect := False;
   FClient.PingInterval := 0; // disable for tests
   FClient.OnConnected := FHelper.OnConnected;
@@ -405,11 +443,15 @@ end;
 
 procedure TestTTina4WebSocketIntegration.TearDown;
 begin
-  if FClient.IsConnected then
+  if Assigned(FClient) and FClient.IsConnected then
     FClient.Disconnect;
-  // Process any remaining queued events
+  // Drain any queued events on the main thread before tearing down.
   CheckSynchronize(200);
   FreeAndNil(FClient);
+  if Assigned(FServer) then
+    FServer.Stop;
+  FreeAndNil(FBroker);
+  FreeAndNil(FServer);
   FreeAndNil(FHelper);
 end;
 
@@ -437,7 +479,8 @@ begin
       Result := FHelper.Connected;
     end);
 
-  Check(FHelper.Connected, 'Should connect to WebSocket server');
+  Check(FHelper.Connected, 'Should connect to WebSocket server at ' +
+    FClient.URL + ' — lastError=' + FHelper.LastError);
   Check(FClient.IsConnected, 'IsConnected should be True');
   Check(FClient.State = wsOpen, 'State should be wsOpen');
   CheckEquals('', FHelper.LastError, 'Should have no errors');

@@ -26,7 +26,7 @@ interface
 uses
   System.SysUtils, System.Classes, System.SyncObjs, System.Net.Socket,
   System.Generics.Collections,
-  Tina4WebSocketFrames;
+  Tina4WebSocketFrames, Tina4OpenSSL;
 
 type
   TTina4WebSocketServer = class;
@@ -57,6 +57,7 @@ type
   private
     FServer: TTina4WebSocketServer;
     FSocket: TSocket;
+    FSSL: TTina4SSLConnection;  // nil for ws://, set for wss://
     FReadThread: TThread;
     FWriteLock: TCriticalSection;
     FOpen: Boolean;
@@ -96,6 +97,7 @@ type
     FRunning: Boolean;
     FPort: Integer;
     FBindHost: string;
+    FSSLCtx: TTina4SSLServerContext;  // nil for ws://, set for wss://
     FOnConnect: TTina4WSSrvConnectEvent;
     FOnDisconnect: TTina4WSSrvDisconnectEvent;
     FOnMessage: TTina4WSSrvMessageEvent;
@@ -112,6 +114,15 @@ type
   public
     constructor Create;
     destructor Destroy; override;
+    /// <summary>
+    /// Loads a PEM cert + private key. Once called, every accepted
+    /// connection is wrapped in TLS (wss://). Must be called before
+    /// Listen(). Returns False if OpenSSL isn't available, the files
+    /// can't be read, or the key doesn't match the cert.
+    /// </summary>
+    function UseCertificate(const ACertFile, AKeyFile: string): Boolean;
+    /// <summary>True once a cert has been successfully loaded.</summary>
+    function UsesTLS: Boolean;
     /// <summary>
     /// Starts the listener on APort. If ABindHost is empty, listens on
     /// 0.0.0.0 (all interfaces). Returns immediately; tear down with Stop.
@@ -364,9 +375,30 @@ begin
 end;
 
 procedure TWSConnReadThread.Execute;
+var
+  TLSOk: Boolean;
 begin
   try
     try
+      // wss:// path — wrap the accepted TCP socket with TLS BEFORE
+      // running the WS upgrade. SSL_accept blocks the thread until
+      // the handshake completes; the upgrade then flows through SSL.
+      if FConn.FServer.UsesTLS then
+      begin
+        FConn.FSSL := TTina4SSLConnection.Create;
+        TLSOk := FConn.FSSL.AcceptOn(FConn.FServer.FSSLCtx,
+          THandle(FConn.FSocket.Handle));
+        if not TLSOk then
+        begin
+          FConn.FServer.FireError(FConn,
+            'TLS handshake failed: ' + FConn.FSSL.GetLastError);
+          FCloseCode := WS_CLOSE_PROTOCOL_ERROR;
+          FCloseReason := 'TLS handshake failed';
+          FreeAndNil(FConn.FSSL);
+          Exit;
+        end;
+      end;
+
       if PerformHandshake then
       begin
         FConn.FServer.FireConnect(FConn);
@@ -411,6 +443,7 @@ begin
   inherited Create;
   FServer := AServer;
   FSocket := ASocket;
+  FSSL := nil;
   FWriteLock := TCriticalSection.Create;
   FHandshakeHeaders := TStringList.Create;
   FOpen := False;
@@ -424,6 +457,9 @@ end;
 destructor TTina4WSConnection.Destroy;
 begin
   FreeAndNil(FReadThread);
+  // SSL must be torn down before the socket — Shutdown sends a
+  // close_notify alert through the underlying fd.
+  FreeAndNil(FSSL);
   CloseSocket;
   FreeAndNil(FHandshakeHeaders);
   FreeAndNil(FWriteLock);
@@ -431,12 +467,26 @@ begin
 end;
 
 procedure TTina4WSConnection.RawSend(const AData: TBytes);
+var
+  Sent, Total, Ret: Integer;
 begin
   // Serialize writes — a publish from the broker can race a control
   // frame from the read thread, both writing to the same socket.
   FWriteLock.Enter;
   try
-    if FSocket <> nil then
+    if FSSL <> nil then
+    begin
+      // TLS path — loop because SSL_write may write less than asked.
+      Total := Length(AData);
+      Sent := 0;
+      while Sent < Total do
+      begin
+        Ret := FSSL.Write(@AData[Sent], Total - Sent);
+        if Ret <= 0 then Exit;  // peer gone or error
+        Inc(Sent, Ret);
+      end;
+    end
+    else if FSocket <> nil then
       FSocket.Send(AData);
   finally
     FWriteLock.Leave;
@@ -446,25 +496,39 @@ end;
 function TTina4WSConnection.RawRecv(ALen: Integer): TBytes;
 var
   Buf: TBytes;
-  Got, Want: Integer;
+  Got, Want, Ret: Integer;
 begin
   SetLength(Result, ALen);
   Got := 0;
   while Got < ALen do
   begin
     Want := ALen - Got;
-    // TSocket.Receive is a blocking short read — returns whatever is
-    // buffered (possibly less than requested). Loop until we have ALen.
-    Buf := FSocket.Receive(Want);
-    if Length(Buf) = 0 then
+    if FSSL <> nil then
     begin
-      // Peer closed or error — truncate and return what we got so the
-      // frame reader raises a clean "short read" error.
-      SetLength(Result, Got);
-      Exit;
+      // TLS path — SSL_read returns 0 on close, -1 on error.
+      Ret := FSSL.Read(@Result[Got], Want);
+      if Ret <= 0 then
+      begin
+        SetLength(Result, Got);
+        Exit;
+      end;
+      Inc(Got, Ret);
+    end
+    else
+    begin
+      // TSocket.Receive is a blocking short read — returns whatever is
+      // buffered (possibly less than requested). Loop until we have ALen.
+      Buf := FSocket.Receive(Want);
+      if Length(Buf) = 0 then
+      begin
+        // Peer closed or error — truncate and return what we got so the
+        // frame reader raises a clean "short read" error.
+        SetLength(Result, Got);
+        Exit;
+      end;
+      Move(Buf[0], Result[Got], Length(Buf));
+      Inc(Got, Length(Buf));
     end;
-    Move(Buf[0], Result[Got], Length(Buf));
-    Inc(Got, Length(Buf));
   end;
 end;
 
@@ -522,14 +586,33 @@ begin
   FConnections := TList<TTina4WSConnection>.Create;
   FConnectionsLock := TCriticalSection.Create;
   FRunning := False;
+  FSSLCtx := nil;
 end;
 
 destructor TTina4WebSocketServer.Destroy;
 begin
   Stop;
+  FreeAndNil(FSSLCtx);
   FreeAndNil(FConnections);
   FreeAndNil(FConnectionsLock);
   inherited;
+end;
+
+function TTina4WebSocketServer.UseCertificate(const ACertFile,
+  AKeyFile: string): Boolean;
+begin
+  // Lazy-create the SSL context on first use; we don't need OpenSSL
+  // at all for ws:// servers, so don't pay the load cost up front.
+  if FSSLCtx = nil then
+    FSSLCtx := TTina4SSLServerContext.Create;
+  Result := FSSLCtx.LoadCertificate(ACertFile, AKeyFile);
+  if not Result then
+    FreeAndNil(FSSLCtx);  // failed load — treat as no-TLS, no half-state
+end;
+
+function TTina4WebSocketServer.UsesTLS: Boolean;
+begin
+  Result := (FSSLCtx <> nil) and FSSLCtx.IsReady;
 end;
 
 procedure TTina4WebSocketServer.Listen(APort: Integer; const ABindHost: string);

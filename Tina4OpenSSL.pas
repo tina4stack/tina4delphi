@@ -41,6 +41,63 @@ type
     property HostName: string read FHostName write FHostName;
   end;
 
+  /// <summary>
+  /// Server-side TLS context. Loaded once with a cert and key, then
+  /// used to wrap each accepted connection's socket via Accept().
+  /// One context per listening server — share it across connections.
+  /// </summary>
+  TTina4SSLServerContext = class
+  private
+    FCtx: PSSL_CTX;
+    FCertPath: string;
+    FKeyPath: string;
+  public
+    constructor Create;
+    destructor Destroy; override;
+    /// <summary>
+    /// Load a PEM cert + private key from disk. Both are required.
+    /// Call once before accepting connections.
+    /// </summary>
+    function LoadCertificate(const ACertFile, AKeyFile: string): Boolean;
+    /// <summary>Get last SSL error as string</summary>
+    function GetLastError: string;
+    /// <summary>True once a valid cert+key have been loaded.</summary>
+    function IsReady: Boolean;
+    /// <summary>Path to the loaded cert PEM. Empty until LoadCertificate.</summary>
+    property CertPath: string read FCertPath;
+    /// <summary>Path to the loaded private key PEM. Empty until LoadCertificate.</summary>
+    property KeyPath: string read FKeyPath;
+    /// <summary>
+    /// Internal: returns the underlying SSL_CTX pointer for use by
+    /// TTina4SSLConnection.AcceptOn. Don't call from app code.
+    /// </summary>
+    function RawCtx: PSSL_CTX;
+  end;
+
+  /// <summary>
+  /// Server-side per-connection TLS wrapper. Pair with an accepted
+  /// socket fd; call Accept() to perform the handshake; then Read/Write.
+  /// </summary>
+  TTina4SSLConnection = class
+  private
+    FSSL: PSSL;
+    FAccepted: Boolean;
+  public
+    constructor Create;
+    destructor Destroy; override;
+    /// <summary>
+    /// Bind to a server context and a socket fd, then run SSL_accept.
+    /// Returns True on a successful TLS handshake.
+    /// </summary>
+    function AcceptOn(AServerCtx: TTina4SSLServerContext;
+      ASocketHandle: THandle): Boolean;
+    function Read(ABuf: PByte; ALen: Integer): Integer;
+    function Write(ABuf: PByte; ALen: Integer): Integer;
+    procedure Shutdown;
+    function GetLastError: string;
+    property Accepted: Boolean read FAccepted;
+  end;
+
 /// <summary>Load OpenSSL libraries. Returns True if already loaded or loads OK.</summary>
 function LoadOpenSSL: Boolean;
 /// <summary>True if OpenSSL libraries are loaded and ready</summary>
@@ -90,6 +147,9 @@ const
   SSL_ERROR_SYSCALL = 5;
   SSL_ERROR_ZERO_RETURN = 6;
 
+  // SSL_CTX_use_*_file file-type constants (from openssl/ssl.h).
+  SSL_FILETYPE_PEM = 1;
+
 { ---- Function pointer types ---- }
 
 type
@@ -113,6 +173,16 @@ type
   TSSL_CTX_set_verify = procedure(ctx: PSSL_CTX; mode: Integer; callback: Pointer); cdecl;
   TSSL_ctrl = function(ssl: PSSL; cmd: Integer; larg: NativeInt; parg: Pointer): NativeInt; cdecl;
 
+  // Server-side
+  TTLS_server_method = function: PSSL_METHOD; cdecl;
+  TSSLv23_server_method = function: PSSL_METHOD; cdecl;
+  TSSL_accept = function(ssl: PSSL): Integer; cdecl;
+  TSSL_CTX_use_certificate_file = function(ctx: PSSL_CTX;
+    file_: PAnsiChar; type_: Integer): Integer; cdecl;
+  TSSL_CTX_use_PrivateKey_file = function(ctx: PSSL_CTX;
+    file_: PAnsiChar; type_: Integer): Integer; cdecl;
+  TSSL_CTX_check_private_key = function(ctx: PSSL_CTX): Integer; cdecl;
+
 { ---- Global function pointers ---- }
 
 var
@@ -135,6 +205,13 @@ var
   _ERR_get_error: TERR_get_error = nil;
   _SSL_CTX_set_verify: TSSL_CTX_set_verify = nil;
   _SSL_ctrl: TSSL_ctrl = nil;
+
+  _TLS_server_method: TTLS_server_method = nil;
+  _SSLv23_server_method: TSSLv23_server_method = nil;
+  _SSL_accept: TSSL_accept = nil;
+  _SSL_CTX_use_certificate_file: TSSL_CTX_use_certificate_file = nil;
+  _SSL_CTX_use_PrivateKey_file: TSSL_CTX_use_PrivateKey_file = nil;
+  _SSL_CTX_check_private_key: TSSL_CTX_check_private_key = nil;
 
   FSSLLib: {$IFDEF MSWINDOWS}HMODULE{$ELSE}NativeUInt{$ENDIF} = 0;
   FCryptoLib: {$IFDEF MSWINDOWS}HMODULE{$ELSE}NativeUInt{$ENDIF} = 0;
@@ -301,6 +378,19 @@ begin
     @_ERR_error_string := InternalGetProc(FCryptoLib, 'ERR_error_string');
     @_ERR_get_error := InternalGetProc(FCryptoLib, 'ERR_get_error');
 
+    // Server-side entry points. Optional — wss:// server features
+    // need them, but ws:// and client-only consumers don't.
+    @_TLS_server_method := InternalGetProc(FSSLLib, 'TLS_server_method');
+    if not Assigned(_TLS_server_method) then
+      @_TLS_server_method := InternalGetProc(FSSLLib, 'SSLv23_server_method');
+    @_SSL_accept := InternalGetProc(FSSLLib, 'SSL_accept');
+    @_SSL_CTX_use_certificate_file :=
+      InternalGetProc(FSSLLib, 'SSL_CTX_use_certificate_file');
+    @_SSL_CTX_use_PrivateKey_file :=
+      InternalGetProc(FSSLLib, 'SSL_CTX_use_PrivateKey_file');
+    @_SSL_CTX_check_private_key :=
+      InternalGetProc(FSSLLib, 'SSL_CTX_check_private_key');
+
     // Validate critical function pointers
     SSLLog('TLS_client_method=' + BoolToStr(Assigned(_TLS_client_method), True));
     SSLLog('SSL_CTX_new=' + BoolToStr(Assigned(_SSL_CTX_new), True));
@@ -460,6 +550,204 @@ begin
 end;
 
 function TTina4SSLContext.GetLastError: string;
+var
+  ErrCode: Cardinal;
+  Buf: array[0..255] of AnsiChar;
+begin
+  Result := '';
+  if Assigned(_ERR_get_error) and Assigned(_ERR_error_string) then
+  begin
+    ErrCode := _ERR_get_error;
+    if ErrCode <> 0 then
+    begin
+      _ERR_error_string(ErrCode, @Buf[0]);
+      Result := string(AnsiString(Buf));
+    end;
+  end;
+end;
+
+{ ---- TTina4SSLServerContext ---- }
+
+constructor TTina4SSLServerContext.Create;
+begin
+  inherited Create;
+  FCtx := nil;
+end;
+
+destructor TTina4SSLServerContext.Destroy;
+begin
+  if Assigned(FCtx) and Assigned(_SSL_CTX_free) then
+    _SSL_CTX_free(FCtx);
+  inherited;
+end;
+
+function TTina4SSLServerContext.IsReady: Boolean;
+begin
+  Result := FCtx <> nil;
+end;
+
+function TTina4SSLServerContext.RawCtx: PSSL_CTX;
+begin
+  Result := FCtx;
+end;
+
+function TTina4SSLServerContext.LoadCertificate(const ACertFile,
+  AKeyFile: string): Boolean;
+var
+  Method: PSSL_METHOD;
+  CertA, KeyA: AnsiString;
+begin
+  Result := False;
+  if not LoadOpenSSL then Exit;
+
+  // The server-side entry points are optional in LoadOpenSSL — older
+  // OpenSSL builds and stripped distributions may not export them.
+  if not Assigned(_TLS_server_method)
+     or not Assigned(_SSL_CTX_use_certificate_file)
+     or not Assigned(_SSL_CTX_use_PrivateKey_file)
+     or not Assigned(_SSL_accept) then
+    Exit;
+
+  Method := _TLS_server_method;
+  if Method = nil then Exit;
+
+  // Free any previously loaded context — supports cert rotation.
+  if Assigned(FCtx) and Assigned(_SSL_CTX_free) then
+  begin
+    _SSL_CTX_free(FCtx);
+    FCtx := nil;
+  end;
+
+  FCtx := _SSL_CTX_new(Method);
+  if FCtx = nil then Exit;
+
+  // OpenSSL takes the C-style path; AnsiString keeps a stable PAnsiChar
+  // for the duration of each call.
+  CertA := AnsiString(ACertFile);
+  if _SSL_CTX_use_certificate_file(FCtx, PAnsiChar(CertA),
+       SSL_FILETYPE_PEM) <> 1 then
+  begin
+    _SSL_CTX_free(FCtx);
+    FCtx := nil;
+    Exit;
+  end;
+
+  KeyA := AnsiString(AKeyFile);
+  if _SSL_CTX_use_PrivateKey_file(FCtx, PAnsiChar(KeyA),
+       SSL_FILETYPE_PEM) <> 1 then
+  begin
+    _SSL_CTX_free(FCtx);
+    FCtx := nil;
+    Exit;
+  end;
+
+  // check_private_key is optional — verifies the key matches the cert.
+  if Assigned(_SSL_CTX_check_private_key) then
+  begin
+    if _SSL_CTX_check_private_key(FCtx) <> 1 then
+    begin
+      _SSL_CTX_free(FCtx);
+      FCtx := nil;
+      Exit;
+    end;
+  end;
+
+  FCertPath := ACertFile;
+  FKeyPath := AKeyFile;
+  Result := True;
+end;
+
+function TTina4SSLServerContext.GetLastError: string;
+var
+  ErrCode: Cardinal;
+  Buf: array[0..255] of AnsiChar;
+begin
+  Result := '';
+  if Assigned(_ERR_get_error) and Assigned(_ERR_error_string) then
+  begin
+    ErrCode := _ERR_get_error;
+    if ErrCode <> 0 then
+    begin
+      _ERR_error_string(ErrCode, @Buf[0]);
+      Result := string(AnsiString(Buf));
+    end;
+  end;
+end;
+
+{ ---- TTina4SSLConnection ---- }
+
+constructor TTina4SSLConnection.Create;
+begin
+  inherited Create;
+  FSSL := nil;
+  FAccepted := False;
+end;
+
+destructor TTina4SSLConnection.Destroy;
+begin
+  Shutdown;
+  if Assigned(FSSL) and Assigned(_SSL_free) then
+    _SSL_free(FSSL);
+  inherited;
+end;
+
+function TTina4SSLConnection.AcceptOn(AServerCtx: TTina4SSLServerContext;
+  ASocketHandle: THandle): Boolean;
+var
+  Ret: Integer;
+begin
+  Result := False;
+  if (AServerCtx = nil) or (not AServerCtx.IsReady) then Exit;
+  if not Assigned(_SSL_new) or not Assigned(_SSL_set_fd)
+     or not Assigned(_SSL_accept) then Exit;
+
+  FSSL := _SSL_new(AServerCtx.RawCtx);
+  if FSSL = nil then Exit;
+
+  if _SSL_set_fd(FSSL, Integer(ASocketHandle)) <> 1 then
+  begin
+    _SSL_free(FSSL);
+    FSSL := nil;
+    Exit;
+  end;
+
+  // SSL_accept blocks (the underlying socket is blocking) until the
+  // handshake completes or fails. Return value 1 = success.
+  Ret := _SSL_accept(FSSL);
+  if Ret = 1 then
+  begin
+    FAccepted := True;
+    Result := True;
+  end
+  else
+  begin
+    _SSL_free(FSSL);
+    FSSL := nil;
+  end;
+end;
+
+function TTina4SSLConnection.Read(ABuf: PByte; ALen: Integer): Integer;
+begin
+  if not FAccepted or not Assigned(FSSL) then Exit(-1);
+  Result := _SSL_read(FSSL, ABuf, ALen);
+end;
+
+function TTina4SSLConnection.Write(ABuf: PByte; ALen: Integer): Integer;
+begin
+  if not FAccepted or not Assigned(FSSL) then Exit(-1);
+  Result := _SSL_write(FSSL, ABuf, ALen);
+end;
+
+procedure TTina4SSLConnection.Shutdown;
+begin
+  if FAccepted and Assigned(FSSL) and Assigned(_SSL_shutdown) then
+  begin
+    _SSL_shutdown(FSSL);
+    FAccepted := False;
+  end;
+end;
+
+function TTina4SSLConnection.GetLastError: string;
 var
   ErrCode: Cardinal;
   Buf: array[0..255] of AnsiChar;

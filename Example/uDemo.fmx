@@ -501,4 +501,28 @@ object Form2: TForm2
     Left = 568
     Top = 473
   end
+  object Tina4HTMLPages1: TTina4HTMLPages
+    Pages = <
+      item
+      end
+      item
+      end
+      item
+      end
+      item
+      end>
+    Left = 160
+    Top = 416
+  end
+  object Tina4SocketServer1: TTina4SocketServer
+    Active = False
+    Port = 0
+    SocketType = TCP
+    Left = 400
+    Top = 473
+  end
+  object Tina4WebSocketClient2: TTina4WebSocketClient
+    Left = 664
+    Top = 473
+  end
 end

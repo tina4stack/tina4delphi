@@ -10,7 +10,8 @@ uses System.SysUtils, FMX.StdCtrls, FMX.Forms, FMX.Memo.Types, System.Rtti, FMX.
   Data.Bind.DBScope, Tina4JSONAdapter, Data.DB, FireDAC.Comp.DataSet,
   FireDAC.Comp.Client, Tina4RESTRequest, Tina4REST, FMX.Grid, FMX.ScrollBox,
   FMX.Memo, FMX.Dialogs, System.Classes, FMX.Types, FMX.Controls,
-  FMX.Controls.Presentation, Tina4Twig, Tina4WebSocketClient;
+  FMX.Controls.Presentation, Tina4Twig, Tina4WebSocketClient, Tina4HTMLPages,
+  Tina4SocketServer;
 
 
 type
@@ -37,6 +38,9 @@ type
     Tina4HTMLRender1: TTina4HTMLRender;
     Tina4WebSocketClient1: TTina4WebSocketClient;
     Button2: TButton;
+    Tina4HTMLPages1: TTina4HTMLPages;
+    Tina4SocketServer1: TTina4SocketServer;
+    Tina4WebSocketClient2: TTina4WebSocketClient;
     procedure HtPanel1Click(Sender: TObject);
     procedure btnRenderClick(Sender: TObject);
     procedure btnSaveClick(Sender: TObject);

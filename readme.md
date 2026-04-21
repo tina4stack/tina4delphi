@@ -7,8 +7,9 @@ This is not another framework for Delphi
 - Delphi 10.4+ (FireMonkey / FMX)
 - FireDAC components
 - Indy (for TTina4WebServer)
-- OpenSSL DLLs (for `TTina4WebServer`, `TTina4RESTRequest`, and `TTina4WebSocketClient`):
+- OpenSSL DLLs (for `TTina4WebServer`, `TTina4RESTRequest`, `TTina4WebSocketClient`, and the `TTina4WebSocketServer` TLS path):
   - **Bundled**: 32-bit and 64-bit OpenSSL 3.x DLLs are included in `lib/win32` and `lib/win64`
+  - **Alternative source**: signed, regularly-updated Windows builds of OpenSSL 3.x are available from the [TaurusTLS OpenSSL Distribution](https://github.com/TaurusTLS-Developers/OpenSSL-Distribution/releases) project — useful if you want newer point releases than the bundled version or prefer a reproducible upstream
   - Copy the appropriate DLLs next to your executable, or install system-wide:
     - **32-bit** DLLs (`libssl-3.dll`, `libcrypto-3.dll`) to `C:\Windows\SysWOW64` or next to your 32-bit exe
     - **64-bit** DLLs (`libssl-3-x64.dll`, `libcrypto-3-x64.dll`) to `C:\Windows\System32` or next to your 64-bit exe
@@ -1180,6 +1181,8 @@ The `Tina4OpenSSL` unit dynamically loads OpenSSL at runtime. No compile-time li
 | Linux | `libssl.so.3`, `libssl.so.1.1` |
 
 Pre-built OpenSSL 3.x DLLs are bundled in `lib/win32` and `lib/win64`. Copy the appropriate pair next to your executable if OpenSSL is not installed system-wide.
+
+For newer releases or signed Windows builds, the [TaurusTLS OpenSSL Distribution](https://github.com/TaurusTLS-Developers/OpenSSL-Distribution/releases) project publishes 32-bit and 64-bit OpenSSL 3.x DLLs that are drop-in compatible with `Tina4OpenSSL.pas`.
 
 ```delphi
 uses Tina4OpenSSL;

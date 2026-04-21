@@ -12,6 +12,7 @@ uses
   FMX.Types, FMX.Controls, FMX.Graphics, FMX.TextLayout,
   FMX.Edit, FMX.StdCtrls, FMX.Memo, FMX.ListBox, FMX.Layouts, FMX.Objects,
   FMX.DialogService, FMX.Dialogs, Fmx.Surfaces,
+  FMX.VirtualKeyboard, FMX.Platform,
   System.IOUtils;
 
 type
@@ -478,6 +479,7 @@ type
     procedure HandleFileInputClick(Sender: TObject);
     procedure HandleFormControlEnter(Sender: TObject);
     procedure HandleFormControlExit(Sender: TObject);
+    procedure ApplyHtmlInputAttrsToEdit(Box: TLayoutBox; Ed: TEdit);
     function GetFormControlNameValue(Control: TControl; out AName, AValue: string): Boolean;
     function ResolveOnClickParam(const Expr: string; ClickedTag: THTMLTag): string;
     procedure FireOnClick(ClickedTag: THTMLTag);
@@ -5756,20 +5758,145 @@ begin
   end;
 end;
 
+// Translate HTML input/textarea attributes into the native FMX edit's
+// keyboard, capitalization, return-key, length and password properties.
+// Called once per control at creation time. The platform reads these
+// when the virtual keyboard is summoned, so emails get '@' keys,
+// numeric inputs get a numpad, passwords disable predictive text, etc.
+procedure TTina4HTMLRender.ApplyHtmlInputAttrsToEdit(Box: TLayoutBox;
+  Ed: TEdit);
+var
+  InputType, InputMode, EnterKeyHint, AutoCap, MaxLenStr: string;
+  MaxLen: Integer;
+begin
+  if (Box = nil) or (Box.Tag = nil) or (Ed = nil) then Exit;
+
+  InputType    := Box.Tag.GetAttribute('type', 'text').ToLower;
+  InputMode    := Box.Tag.GetAttribute('inputmode', '').ToLower;
+  EnterKeyHint := Box.Tag.GetAttribute('enterkeyhint', '').ToLower;
+  AutoCap      := Box.Tag.GetAttribute('autocapitalize', '').ToLower;
+  MaxLenStr    := Box.Tag.GetAttribute('maxlength', '');
+
+  // Keyboard layout: prefer explicit inputmode (HTML spec's override)
+  // over the type attribute. E.g. type=text inputmode=numeric should
+  // get a numpad, which a bare type=text can't express.
+  if InputMode <> '' then
+  begin
+    if      InputMode = 'numeric' then Ed.KeyboardType := TVirtualKeyboardType.NumberPad
+    else if InputMode = 'decimal' then Ed.KeyboardType := TVirtualKeyboardType.NumbersAndPunctuation
+    else if InputMode = 'tel'     then Ed.KeyboardType := TVirtualKeyboardType.PhonePad
+    else if InputMode = 'email'   then Ed.KeyboardType := TVirtualKeyboardType.EmailAddress
+    else if InputMode = 'url'     then Ed.KeyboardType := TVirtualKeyboardType.URL
+    else if InputMode = 'search'  then Ed.KeyboardType := TVirtualKeyboardType.Alphabet
+    else if InputMode = 'none'    then Ed.ReadOnly := True  // suppress keyboard entirely
+    else                               Ed.KeyboardType := TVirtualKeyboardType.Default;
+  end
+  else
+  begin
+    if      InputType = 'number'   then Ed.KeyboardType := TVirtualKeyboardType.NumberPad
+    else if InputType = 'tel'      then Ed.KeyboardType := TVirtualKeyboardType.PhonePad
+    else if InputType = 'email'    then Ed.KeyboardType := TVirtualKeyboardType.EmailAddress
+    else if InputType = 'url'      then Ed.KeyboardType := TVirtualKeyboardType.URL
+    else if InputType = 'search'   then Ed.KeyboardType := TVirtualKeyboardType.Alphabet
+    else if InputType = 'password' then Ed.KeyboardType := TVirtualKeyboardType.Default
+    else                                Ed.KeyboardType := TVirtualKeyboardType.Default;
+  end;
+
+  // Capitalization. Default for a text field on mobile is Sentences;
+  // sensitive / structured fields should never auto-cap.
+  if (InputType = 'password') or (InputType = 'email') or
+     (InputType = 'url') or (InputType = 'tel') or
+     (InputMode = 'numeric') or (InputMode = 'decimal') then
+    Ed.KeyboardAutoCap := TAutoCapitalizationType.None
+  else if AutoCap = 'off'        then Ed.KeyboardAutoCap := TAutoCapitalizationType.None
+  else if AutoCap = 'none'       then Ed.KeyboardAutoCap := TAutoCapitalizationType.None
+  else if AutoCap = 'sentences'  then Ed.KeyboardAutoCap := TAutoCapitalizationType.Sentences
+  else if AutoCap = 'words'      then Ed.KeyboardAutoCap := TAutoCapitalizationType.Words
+  else if AutoCap = 'characters' then Ed.KeyboardAutoCap := TAutoCapitalizationType.AllCharacters
+  else                                Ed.KeyboardAutoCap := TAutoCapitalizationType.Sentences;
+
+  // Return-key label on the soft keyboard. HTML 'enterkeyhint' maps
+  // cleanly onto FMX's TReturnKeyType.
+  if      EnterKeyHint = 'done'     then Ed.ReturnKeyType := TReturnKeyType.Done
+  else if EnterKeyHint = 'go'       then Ed.ReturnKeyType := TReturnKeyType.Go
+  else if EnterKeyHint = 'next'     then Ed.ReturnKeyType := TReturnKeyType.Next
+  else if EnterKeyHint = 'search'   then Ed.ReturnKeyType := TReturnKeyType.Search
+  else if EnterKeyHint = 'send'     then Ed.ReturnKeyType := TReturnKeyType.Send
+  else if EnterKeyHint = 'previous' then Ed.ReturnKeyType := TReturnKeyType.Default
+  else                                   Ed.ReturnKeyType := TReturnKeyType.Default;
+
+  if (MaxLenStr <> '') and TryStrToInt(MaxLenStr, MaxLen) and (MaxLen > 0) then
+    Ed.MaxLength := MaxLen;
+
+  // Native platform control on mobile: gives us OS autofill, password
+  // managers, dictation, emoji picker, and the real keyboard types we
+  // just set. Styled controls ignore most of these hints.
+  {$IF defined(ANDROID) or defined(IOS)}
+  Ed.ControlType := TControlType.Platform;
+  {$ENDIF}
+end;
+
 procedure TTina4HTMLRender.HandleFormControlEnter(Sender: TObject);
-var N, V: string;
+var
+  N, V: string;
+  {$IF defined(ANDROID) or defined(IOS)}
+  KbSvc: IFMXVirtualKeyboardService;
+  {$ENDIF}
 begin
   if Assigned(FOnEnter) and (Sender is TControl) and
      GetFormControlNameValue(TControl(Sender), N, V) then
     FOnEnter(Sender, N, V);
+
+  // FMX usually auto-shows the VK when a native edit gains focus, but
+  // behaviour has historically been flaky on Android when focus moves
+  // between controls without a tap (e.g. programmatic SetFocus from
+  // autofocus=""). Ask the service to show explicitly — idempotent.
+  {$IF defined(ANDROID) or defined(IOS)}
+  if Sender is TControl then
+  begin
+    if TPlatformServices.Current.SupportsPlatformService(
+         IFMXVirtualKeyboardService, IInterface(KbSvc)) and (KbSvc <> nil) then
+      KbSvc.ShowVirtualKeyboard(TControl(Sender));
+  end;
+  {$ENDIF}
 end;
 
 procedure TTina4HTMLRender.HandleFormControlExit(Sender: TObject);
-var N, V: string;
+var
+  N, V: string;
+  {$IF defined(ANDROID) or defined(IOS)}
+  KbSvc: IFMXVirtualKeyboardService;
+  {$ENDIF}
 begin
   if Assigned(FOnExit) and (Sender is TControl) and
      GetFormControlNameValue(TControl(Sender), N, V) then
     FOnExit(Sender, N, V);
+
+  // Hide the VK when focus leaves an input and isn't landing on
+  // another form control. Without this, tapping outside the render
+  // leaves a stranded keyboard on Android.
+  {$IF defined(ANDROID) or defined(IOS)}
+  if TPlatformServices.Current.SupportsPlatformService(
+       IFMXVirtualKeyboardService, IInterface(KbSvc)) and (KbSvc <> nil) then
+  begin
+    // Give the next control's OnEnter a chance to run first; if it did,
+    // the keyboard is still needed and the service is a no-op.
+    TThread.ForceQueue(nil,
+      procedure
+      var
+        Svc: IFMXVirtualKeyboardService;
+      begin
+        if TPlatformServices.Current.SupportsPlatformService(
+             IFMXVirtualKeyboardService, IInterface(Svc)) and (Svc <> nil) then
+        begin
+          // Only hide if no native control currently has keyboard focus.
+          if (TVirtualKeyboardState.Visible in Svc.VirtualKeyBoardState) and
+             (Screen <> nil) and (Screen.FocusControl = nil) then
+            Svc.HideVirtualKeyboard;
+        end;
+      end);
+  end;
+  {$ENDIF}
 end;
 
 function TTina4HTMLRender.CreateStyledButton(Box: TLayoutBox; const BtnText: string): TControl;
@@ -5958,6 +6085,10 @@ begin
         Ed.OnChange := HandleFormControlChange;
         Ed.OnEnter := HandleFormControlEnter;
         Ed.OnExit := HandleFormControlExit;
+        // Translate HTML attributes (type / inputmode / enterkeyhint /
+        // autocapitalize / maxlength) into FMX keyboard properties so
+        // the mobile soft keyboard comes up with the right layout.
+        ApplyHtmlInputAttrsToEdit(Box, Ed);
         Ctl := Ed;
       end;
     end
@@ -5965,6 +6096,15 @@ begin
     begin
       var Mem := TMemo.Create(Self);
       Mem.OnChange := HandleFormControlChange;
+      Mem.OnEnter  := HandleFormControlEnter;
+      Mem.OnExit   := HandleFormControlExit;
+      // TMemo shares keyboard properties with TEdit on mobile. Default
+      // to sentence-case + regular alphabet; enterkeyhint still applies
+      // even though Enter on a textarea usually inserts a newline.
+      Mem.KeyboardAutoCap := TAutoCapitalizationType.Sentences;
+      {$IF defined(ANDROID) or defined(IOS)}
+      Mem.ControlType := TControlType.Platform;
+      {$ENDIF}
       Ctl := Mem;
     end
     else if TN = 'select' then

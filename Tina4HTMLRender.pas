@@ -8,7 +8,7 @@ uses
   System.UITypes, System.UIConsts,
   System.NetEncoding, System.Net.HttpClient,
   System.Hash, System.Rtti, System.Character,
-  System.Math.Vectors,
+  System.Math.Vectors, System.Messaging,
   FMX.Types, FMX.Controls, FMX.Graphics, FMX.TextLayout,
   FMX.Edit, FMX.StdCtrls, FMX.Memo, FMX.ListBox, FMX.Layouts, FMX.Objects,
   FMX.DialogService, FMX.Dialogs, Fmx.Surfaces,
@@ -453,6 +453,13 @@ type
     FFrond: TStringList;
     FFrondEngine: TObject;        // TTina4Frond (declared in implementation uses)
     FFrondTemplatePath: string;
+    // Virtual-keyboard state — set by VKStateChangeHandler when FMX
+    // broadcasts TVKStateChangeMessage. Used to scroll the focused
+    // input above the keyboard on iOS (Android adjustResize already
+    // shrinks Self.Height so the math falls through naturally).
+    FKeyboardVisible: Boolean;
+    FKeyboardBounds: TRect;
+    FVKSubscriptionId: Integer;
     procedure ScrollbarFadeTimerTick(Sender: TObject);
     procedure BumpScrollbarVisibility;
     function GetScrollbarOpacity: Single;
@@ -479,7 +486,20 @@ type
     procedure HandleFileInputClick(Sender: TObject);
     procedure HandleFormControlEnter(Sender: TObject);
     procedure HandleFormControlExit(Sender: TObject);
+    procedure HandleFormControlKeyDown(Sender: TObject; var Key: Word;
+      var KeyChar: WideChar; Shift: TShiftState);
     procedure ApplyHtmlInputAttrsToEdit(Box: TLayoutBox; Ed: TEdit);
+    function CollectFormData(FormTag: THTMLTag): TStringList;
+    procedure SubmitFormFor(Ctl: TControl);
+    function FindNextFocusableFormControl(Ctl: TControl): TControl;
+    procedure HideVirtualKeyboardIfAny;
+    // Virtual keyboard state listener — updates FKeyboardVisible /
+    // FKeyboardBounds and scrolls the focused input into the visible
+    // area when the keyboard comes up.
+    procedure VKStateChangeHandler(const Sender: TObject;
+      const M: System.Messaging.TMessage);
+    procedure ScrollFocusedControlAboveKeyboard;
+    function GetKeyboardOverlapHeight: Single;
     function GetFormControlNameValue(Control: TControl; out AName, AValue: string): Boolean;
     function ResolveOnClickParam(const Expr: string; ClickedTag: THTMLTag): string;
     procedure FireOnClick(ClickedTag: THTMLTag);
@@ -4593,6 +4613,14 @@ begin
   // On mobile (Android/iOS), FMX routes touch events through its gesture
   // system. We handle pan via CMGesture override — no need to set
   // InteractiveGestures here as it can trigger unwanted keyboard overlays.
+
+  // Subscribe to virtual-keyboard state changes so we can scroll the
+  // focused input above the keyboard. Returns a subscription id that
+  // we unsubscribe from in the destructor.
+  FKeyboardVisible := False;
+  FKeyboardBounds := TRect.Empty;
+  FVKSubscriptionId := TMessageManager.DefaultManager.SubscribeToMessage(
+    TVKStateChangeMessage, VKStateChangeHandler);
 end;
 
 procedure TTina4HTMLRender.BumpScrollbarVisibility;
@@ -4683,6 +4711,12 @@ end;
 
 destructor TTina4HTMLRender.Destroy;
 begin
+  // Unsubscribe from the VK message bus before anything else — if a
+  // keyboard event fires between here and inherited Destroy we must
+  // not touch half-freed state.
+  if FVKSubscriptionId <> 0 then
+    TMessageManager.DefaultManager.Unsubscribe(
+      TVKStateChangeMessage, FVKSubscriptionId);
   if Assigned(FScrollbarFadeTimer) then
     FScrollbarFadeTimer.Enabled := False;
   ClearFormControls;
@@ -5631,61 +5665,9 @@ begin
       if Assigned(FormTag) then
         FormName := FormTag.GetAttribute('name', FormTag.GetAttribute('id', '')).Trim;
 
-      // Collect all form control values that belong to this form
-      var FormData := TStringList.Create;
+      // Collect all form control values that belong to this form.
+      var FormData := CollectFormData(FormTag);
       try
-        for var FRec in FFormControls do
-        begin
-          if not Assigned(FRec.Box.Tag) then Continue;
-          var CtlName := FRec.Box.Tag.GetAttribute('name', '').Trim;
-          if CtlName = '' then Continue;
-
-          // Skip submit/button/reset inputs — they are triggers, not data
-          var CtlTagName := FRec.Box.Tag.TagName.ToLower;
-          if CtlTagName = 'button' then Continue;
-          if CtlTagName = 'input' then
-          begin
-            var CtlType := FRec.Box.Tag.GetAttribute('type', 'text').ToLower.Trim;
-            if (CtlType = 'submit') or (CtlType = 'button') or (CtlType = 'reset') then
-              Continue;
-          end;
-
-          // Check this control belongs to the same form
-          var CtlForm: THTMLTag := FRec.Box.Tag.Parent;
-          while Assigned(CtlForm) and not SameText(CtlForm.TagName, 'form') do
-            CtlForm := CtlForm.Parent;
-          if CtlForm <> FormTag then Continue;
-
-          // Get the value
-          var CtlValue := '';
-          if FRec.Control is TEdit then
-            CtlValue := TEdit(FRec.Control).Text.Trim
-          else if FRec.Control is TMemo then
-            CtlValue := TMemo(FRec.Control).Lines.Text.Trim
-          else if FRec.Control is TCheckBox then
-          begin
-            if not TCheckBox(FRec.Control).IsChecked then Continue;
-            CtlValue := FRec.Box.Tag.GetAttribute('value', 'on').Trim;
-          end
-          else if FRec.Control is TRadioButton then
-          begin
-            if not TRadioButton(FRec.Control).IsChecked then Continue;
-            CtlValue := FRec.Box.Tag.GetAttribute('value', 'on').Trim;
-          end
-          else if FRec.Control is TComboBox then
-          begin
-            if TComboBox(FRec.Control).Selected <> nil then
-              CtlValue := TComboBox(FRec.Control).Selected.Text.Trim;
-          end
-          else if FRec.Control is TLayout then
-          begin
-            // File input: selected filename stored in TagString
-            CtlValue := TLayout(FRec.Control).TagString.Trim;
-          end;
-
-          FormData.Add(CtlName + '=' + CtlValue);
-        end;
-
         FOnSubmit(Sender, FormName, FormData);
       finally
         FormData.Free;
@@ -5693,6 +5675,299 @@ begin
       Break;
     end;
   end;
+end;
+
+// Collects name=value pairs for every form control whose nearest
+// <form> ancestor is AFormTag. Skips submit/button/reset triggers and
+// unchecked checkbox/radio. Caller owns the returned TStringList.
+function TTina4HTMLRender.CollectFormData(FormTag: THTMLTag): TStringList;
+begin
+  Result := TStringList.Create;
+  for var FRec in FFormControls do
+  begin
+    if not Assigned(FRec.Box.Tag) then Continue;
+    var CtlName := FRec.Box.Tag.GetAttribute('name', '').Trim;
+    if CtlName = '' then Continue;
+
+    // Skip submit/button/reset inputs — they are triggers, not data
+    var CtlTagName := FRec.Box.Tag.TagName.ToLower;
+    if CtlTagName = 'button' then Continue;
+    if CtlTagName = 'input' then
+    begin
+      var CtlType := FRec.Box.Tag.GetAttribute('type', 'text').ToLower.Trim;
+      if (CtlType = 'submit') or (CtlType = 'button') or (CtlType = 'reset') then
+        Continue;
+    end;
+
+    // Check this control belongs to the same form
+    var CtlForm: THTMLTag := FRec.Box.Tag.Parent;
+    while Assigned(CtlForm) and not SameText(CtlForm.TagName, 'form') do
+      CtlForm := CtlForm.Parent;
+    if CtlForm <> FormTag then Continue;
+
+    // Get the value
+    var CtlValue := '';
+    if FRec.Control is TEdit then
+      CtlValue := TEdit(FRec.Control).Text.Trim
+    else if FRec.Control is TMemo then
+      CtlValue := TMemo(FRec.Control).Lines.Text.Trim
+    else if FRec.Control is TCheckBox then
+    begin
+      if not TCheckBox(FRec.Control).IsChecked then Continue;
+      CtlValue := FRec.Box.Tag.GetAttribute('value', 'on').Trim;
+    end
+    else if FRec.Control is TRadioButton then
+    begin
+      if not TRadioButton(FRec.Control).IsChecked then Continue;
+      CtlValue := FRec.Box.Tag.GetAttribute('value', 'on').Trim;
+    end
+    else if FRec.Control is TComboBox then
+    begin
+      if TComboBox(FRec.Control).Selected <> nil then
+        CtlValue := TComboBox(FRec.Control).Selected.Text.Trim;
+    end
+    else if FRec.Control is TLayout then
+    begin
+      // File input: selected filename stored in TagString
+      CtlValue := TLayout(FRec.Control).TagString.Trim;
+    end;
+
+    Result.Add(CtlName + '=' + CtlValue);
+  end;
+end;
+
+// Walks up the DOM from Ctl's element to find the enclosing <form>,
+// then fires OnFormSubmit with that form's data. No-op if Ctl is not
+// a form control, isn't inside a <form>, or no OnFormSubmit is wired.
+procedure TTina4HTMLRender.SubmitFormFor(Ctl: TControl);
+var
+  SrcTag, FormTag: THTMLTag;
+  FormName: string;
+  FormData: TStringList;
+begin
+  if not Assigned(FOnSubmit) then Exit;
+  if Ctl = nil then Exit;
+
+  SrcTag := nil;
+  for var Rec in FFormControls do
+    if Rec.Control = Ctl then
+    begin
+      if Assigned(Rec.Box) and Assigned(Rec.Box.Tag) then SrcTag := Rec.Box.Tag;
+      Break;
+    end;
+  if SrcTag = nil then Exit;
+
+  FormTag := SrcTag.Parent;
+  while Assigned(FormTag) and not SameText(FormTag.TagName, 'form') do
+    FormTag := FormTag.Parent;
+  if not Assigned(FormTag) then Exit;
+
+  FormName := FormTag.GetAttribute('name', FormTag.GetAttribute('id', '')).Trim;
+  FormData := CollectFormData(FormTag);
+  try
+    FOnSubmit(Ctl, FormName, FormData);
+  finally
+    FormData.Free;
+  end;
+end;
+
+// Returns the next TEdit / TMemo / TComboBox in FFormControls after
+// the one currently holding focus. FFormControls is built by walking
+// the layout tree top-down during CreateFormControls, so the list
+// order matches DOM order — good enough for "Next" traversal.
+function TTina4HTMLRender.FindNextFocusableFormControl(
+  Ctl: TControl): TControl;
+var
+  I, StartIdx: Integer;
+  C: TControl;
+begin
+  Result := nil;
+  StartIdx := -1;
+  for I := 0 to FFormControls.Count - 1 do
+    if FFormControls[I].Control = Ctl then begin StartIdx := I; Break; end;
+  if StartIdx < 0 then Exit;
+
+  for I := StartIdx + 1 to FFormControls.Count - 1 do
+  begin
+    C := FFormControls[I].Control;
+    if (C is TEdit) or (C is TMemo) or (C is TComboBox) then
+    begin
+      if C.Visible and C.Enabled then Exit(C);
+    end;
+  end;
+end;
+
+// Asks the platform to dismiss the virtual keyboard. No-op on desktop
+// or when the service isn't available.
+procedure TTina4HTMLRender.HideVirtualKeyboardIfAny;
+var
+  Svc: IFMXVirtualKeyboardService;
+begin
+  if TPlatformServices.Current.SupportsPlatformService(
+       IFMXVirtualKeyboardService, IInterface(Svc)) and (Svc <> nil) then
+    Svc.HideVirtualKeyboard;
+end;
+
+// Dispatcher for the Enter/Return key on text inputs. The return-key
+// action is driven by the control's ReturnKeyType, which
+// ApplyHtmlInputAttrsToEdit sets from the HTML `enterkeyhint`
+// attribute. "Default" is left alone — TMemo inserts a newline,
+// TEdit does nothing, which matches standard form behaviour.
+procedure TTina4HTMLRender.HandleFormControlKeyDown(Sender: TObject;
+  var Key: Word; var KeyChar: WideChar; Shift: TShiftState);
+var
+  RK: TReturnKeyType;
+  Ctl, NextCtl: TControl;
+begin
+  // vkReturn fires for Enter on hardware keyboards AND for the "done"
+  // style button on the soft keyboard. Only act on it.
+  if Key <> vkReturn then Exit;
+  if not (Sender is TControl) then Exit;
+  Ctl := TControl(Sender);
+
+  RK := TReturnKeyType.Default;
+  if Ctl is TEdit then
+    RK := TEdit(Ctl).ReturnKeyType
+  else if Ctl is TMemo then
+    RK := TMemo(Ctl).ReturnKeyType;
+
+  case RK of
+    TReturnKeyType.Next:
+      begin
+        NextCtl := FindNextFocusableFormControl(Ctl);
+        if NextCtl <> nil then
+        begin
+          NextCtl.SetFocus;
+          // Suppress the key so TMemo doesn't also insert a newline.
+          Key := 0;
+          KeyChar := #0;
+        end;
+      end;
+
+    TReturnKeyType.Done:
+      begin
+        HideVirtualKeyboardIfAny;
+        Key := 0;
+        KeyChar := #0;
+      end;
+
+    TReturnKeyType.Go, TReturnKeyType.Send, TReturnKeyType.Search:
+      begin
+        // "Go", "Send" and "Search" are the soft-keyboard equivalents
+        // of pressing a submit button. Fire the form submission.
+        SubmitFormFor(Ctl);
+        HideVirtualKeyboardIfAny;
+        Key := 0;
+        KeyChar := #0;
+      end;
+    // TReturnKeyType.Default — let the control do its native thing
+    // (newline in memo, no-op in edit).
+  end;
+end;
+
+// Amount of the render's visible area covered by the soft keyboard,
+// in screen pixels. On Android with adjustResize the keyboard never
+// overlaps because the activity has shrunk; on iOS the activity keeps
+// its full size, so we compute the geometric overlap of our screen
+// rect with the keyboard's screen rect.
+function TTina4HTMLRender.GetKeyboardOverlapHeight: Single;
+var
+  MyAbsRect, KbRect: TRectF;
+begin
+  Result := 0;
+  if not FKeyboardVisible then Exit;
+  if (FKeyboardBounds.Width = 0) or (FKeyboardBounds.Height = 0) then Exit;
+
+  try
+    MyAbsRect := LocalToAbsolute(TPointF.Create(0, 0)).ToRect;
+    MyAbsRect.Width  := Width;
+    MyAbsRect.Height := Height;
+  except
+    Exit;
+  end;
+
+  KbRect := TRectF.Create(FKeyboardBounds);
+  if KbRect.Top >= MyAbsRect.Bottom then Exit;      // keyboard below us
+  if KbRect.Bottom <= MyAbsRect.Top then Exit;      // keyboard above us
+
+  if KbRect.Top < MyAbsRect.Top then
+    Result := MyAbsRect.Height
+  else
+    Result := MyAbsRect.Bottom - KbRect.Top;
+
+  if Result < 0 then Result := 0;
+end;
+
+// After the soft keyboard appears, make sure the currently focused
+// input is inside the remaining visible area. Walks the form-controls
+// list to find which one is focused (Screen.FocusControl points at it),
+// looks up its DOM id, then reuses ScrollToElement.
+procedure TTina4HTMLRender.ScrollFocusedControlAboveKeyboard;
+var
+  FocusedCtl: TControl;
+  Overlap, ExtraPad: Single;
+  TargetId: string;
+  Scr: TCommonCustomForm;
+begin
+  if not FKeyboardVisible then Exit;
+  Overlap := GetKeyboardOverlapHeight;
+  if Overlap <= 0 then Exit;  // nothing to do
+
+  FocusedCtl := nil;
+  Scr := nil;
+  if (Root <> nil) and (Root.GetObject is TCommonCustomForm) then
+    Scr := TCommonCustomForm(Root.GetObject);
+  if Scr <> nil then
+    FocusedCtl := TControl(Scr.Focused);  // may be nil
+  if FocusedCtl = nil then Exit;
+
+  // Walk our form-control list to find the focused one and grab its id.
+  TargetId := '';
+  for var Rec in FFormControls do
+    if Rec.Control = FocusedCtl then
+    begin
+      if Assigned(Rec.Box) and Assigned(Rec.Box.Tag) then
+        TargetId := Rec.Box.Tag.GetAttribute('id', '');
+      Break;
+    end;
+  if TargetId = '' then Exit;
+
+  // Nudge the viewport so the input sits above the keyboard. We use
+  // ScrollBy so we don't fight any inner-container scroll adjustments
+  // ScrollToElement already performs; the scroll-into-view logic in
+  // that method treats GetViewportHeight as the visible area, so we
+  // reduce the apparent height temporarily by scrolling down by the
+  // overlap before asking it to re-centre.
+  ScrollToElement(TargetId);
+  ExtraPad := Overlap;
+  // Tiny floor — a one-pixel offset under the keyboard still counts
+  // as "covered" and looks broken. Leave 8px of padding.
+  if ExtraPad > 0 then ScrollBy(0, ExtraPad + 8);
+end;
+
+// Invoked whenever FMX posts a virtual-keyboard state change.
+procedure TTina4HTMLRender.VKStateChangeHandler(const Sender: TObject;
+  const M: System.Messaging.TMessage);
+var
+  VKMsg: TVKStateChangeMessage;
+begin
+  if not (M is TVKStateChangeMessage) then Exit;
+  VKMsg := TVKStateChangeMessage(M);
+  FKeyboardVisible := VKMsg.KeyboardVisible;
+  if FKeyboardVisible then
+    FKeyboardBounds := VKMsg.KeyboardBounds
+  else
+    FKeyboardBounds := TRect.Empty;
+
+  // When the keyboard comes up, the focused input may be below it.
+  // Defer the scroll a tick so any layout triggered by adjustResize
+  // on Android has a chance to settle first.
+  if FKeyboardVisible then
+    TThread.ForceQueue(nil,
+      procedure
+      begin
+        ScrollFocusedControlAboveKeyboard;
+      end);
 end;
 
 procedure TTina4HTMLRender.HandleFileInputClick(Sender: TObject);
@@ -6082,9 +6357,10 @@ begin
         if InputType = 'password' then Ed.Password := True;
         Ed.TextPrompt := Placeholder;
         if Val <> '' then Ed.Text := Val;
-        Ed.OnChange := HandleFormControlChange;
-        Ed.OnEnter := HandleFormControlEnter;
-        Ed.OnExit := HandleFormControlExit;
+        Ed.OnChange  := HandleFormControlChange;
+        Ed.OnEnter   := HandleFormControlEnter;
+        Ed.OnExit    := HandleFormControlExit;
+        Ed.OnKeyDown := HandleFormControlKeyDown;
         // Translate HTML attributes (type / inputmode / enterkeyhint /
         // autocapitalize / maxlength) into FMX keyboard properties so
         // the mobile soft keyboard comes up with the right layout.
@@ -6095,9 +6371,10 @@ begin
     else if TN = 'textarea' then
     begin
       var Mem := TMemo.Create(Self);
-      Mem.OnChange := HandleFormControlChange;
-      Mem.OnEnter  := HandleFormControlEnter;
-      Mem.OnExit   := HandleFormControlExit;
+      Mem.OnChange  := HandleFormControlChange;
+      Mem.OnEnter   := HandleFormControlEnter;
+      Mem.OnExit    := HandleFormControlExit;
+      Mem.OnKeyDown := HandleFormControlKeyDown;
       // TMemo shares keyboard properties with TEdit on mobile. Default
       // to sentence-case + regular alphabet; enterkeyhint still applies
       // even though Enter on a textarea usually inserts a newline.

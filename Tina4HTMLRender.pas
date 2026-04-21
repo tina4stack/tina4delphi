@@ -10,7 +10,7 @@ uses
   System.Hash, System.Rtti, System.Character,
   System.Math.Vectors, System.Messaging,
   FMX.Types, FMX.Controls, FMX.Graphics, FMX.TextLayout,
-  FMX.Edit, FMX.StdCtrls, FMX.Memo, FMX.ListBox, FMX.Layouts, FMX.Objects,
+  FMX.Edit, FMX.StdCtrls, FMX.Memo, FMX.ListBox, FMX.Layouts, FMX.Objects, FMX.Forms,
   FMX.DialogService, FMX.Dialogs, Fmx.Surfaces,
   FMX.VirtualKeyboard, FMX.Platform,
   System.IOUtils;
@@ -5827,9 +5827,7 @@ begin
 
   RK := TReturnKeyType.Default;
   if Ctl is TEdit then
-    RK := TEdit(Ctl).ReturnKeyType
-  else if Ctl is TMemo then
-    RK := TMemo(Ctl).ReturnKeyType;
+    RK := TEdit(Ctl).ReturnKeyType;
 
   case RK of
     TReturnKeyType.Next:
@@ -5879,9 +5877,14 @@ begin
   if (FKeyboardBounds.Width = 0) or (FKeyboardBounds.Height = 0) then Exit;
 
   try
-    MyAbsRect := LocalToAbsolute(TPointF.Create(0, 0)).ToRect;
-    MyAbsRect.Width  := Width;
-    MyAbsRect.Height := Height;
+    // AbsoluteRect is the render's rect in the parent form's coordinate
+    // space. On a full-screen mobile app the form fills the screen, so
+    // this is effectively screen coordinates — the same frame of reference
+    // as FKeyboardBounds, which FMX reports in form/screen coords on
+    // Android and iOS. On desktop there's no real VK so we never reach
+    // here; the (0,0)-origin fallback used before was mathematically
+    // always outside the keyboard rect, so the overlap calc was a no-op.
+    MyAbsRect := AbsoluteRect;
   except
     Exit;
   end;
@@ -6077,18 +6080,18 @@ begin
     else                                Ed.KeyboardType := TVirtualKeyboardType.Default;
   end;
 
-  // Capitalization. Default for a text field on mobile is Sentences;
-  // sensitive / structured fields should never auto-cap.
-  if (InputType = 'password') or (InputType = 'email') or
-     (InputType = 'url') or (InputType = 'tel') or
-     (InputMode = 'numeric') or (InputMode = 'decimal') then
-    Ed.KeyboardAutoCap := TAutoCapitalizationType.None
-  else if AutoCap = 'off'        then Ed.KeyboardAutoCap := TAutoCapitalizationType.None
-  else if AutoCap = 'none'       then Ed.KeyboardAutoCap := TAutoCapitalizationType.None
-  else if AutoCap = 'sentences'  then Ed.KeyboardAutoCap := TAutoCapitalizationType.Sentences
-  else if AutoCap = 'words'      then Ed.KeyboardAutoCap := TAutoCapitalizationType.Words
-  else if AutoCap = 'characters' then Ed.KeyboardAutoCap := TAutoCapitalizationType.AllCharacters
-  else                                Ed.KeyboardAutoCap := TAutoCapitalizationType.Sentences;
+//  // Capitalization. Default for a text field on mobile is Sentences;
+//  // sensitive / structured fields should never auto-cap.
+//  if (InputType = 'password') or (InputType = 'email') or
+//     (InputType = 'url') or (InputType = 'tel') or
+//     (InputMode = 'numeric') or (InputMode = 'decimal') then
+//    Ed.KeyboardAutoCap := TAutoCapitalizationType.None
+//  else if AutoCap = 'off'        then Ed.KeyboardAutoCap := TAutoCapitalizationType.None
+//  else if AutoCap = 'none'       then Ed.KeyboardAutoCap := TAutoCapitalizationType.None
+//  else if AutoCap = 'sentences'  then Ed.KeyboardAutoCap := TAutoCapitalizationType.Sentences
+//  else if AutoCap = 'words'      then Ed.KeyboardAutoCap := TAutoCapitalizationType.Words
+//  else if AutoCap = 'characters' then Ed.KeyboardAutoCap := TAutoCapitalizationType.AllCharacters
+//  else                                Ed.KeyboardAutoCap := TAutoCapitalizationType.Sentences;
 
   // Return-key label on the soft keyboard. HTML 'enterkeyhint' maps
   // cleanly onto FMX's TReturnKeyType.
@@ -6378,7 +6381,7 @@ begin
       // TMemo shares keyboard properties with TEdit on mobile. Default
       // to sentence-case + regular alphabet; enterkeyhint still applies
       // even though Enter on a textarea usually inserts a newline.
-      Mem.KeyboardAutoCap := TAutoCapitalizationType.Sentences;
+      //Mem.KeyboardAutoCap := TAutoCapitalizationType.Sentences;
       {$IF defined(ANDROID) or defined(IOS)}
       Mem.ControlType := TControlType.Platform;
       {$ENDIF}

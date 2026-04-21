@@ -43,6 +43,93 @@ implementation
 
 {$R *.fmx}
 
+// Embedded keyboard-demo HTML. Kept inline (rather than shipping a .html
+// via the deployproj) so the APK picks it up without extra deploy config.
+// See Example/keyboard_demo.html for the canonical source; update both
+// in lockstep.
+const
+  KEYBOARD_DEMO_HTML =
+    '<div style="padding:18px;font-family:sans-serif;background:#f3f4f6">' +
+    '<h1 style="color:#1e40af;margin:0 0 8px 0">Tina4 Keyboard Demo</h1>' +
+    '<p style="color:#4b5563;margin:0 0 20px 0">' +
+    'Tap each field. Watch the Android soft-keyboard layout change, and ' +
+    'use the return-key to jump to the next field — the last field ' +
+    'submits the form.</p>' +
+    '<form name="demo" id="demo">' +
+
+    '<div style="margin-bottom:14px">' +
+    '<label style="display:block;font-weight:600;color:#111827;margin-bottom:4px">Full name</label>' +
+    '<input type="text" name="name" id="fName" autocapitalize="words" enterkeyhint="next" ' +
+    'placeholder="Auto-caps words" ' +
+    'style="width:100%;padding:12px;border:1px solid #d1d5db;border-radius:8px;font-size:16px">' +
+    '</div>' +
+
+    '<div style="margin-bottom:14px">' +
+    '<label style="display:block;font-weight:600;color:#111827;margin-bottom:4px">Email</label>' +
+    '<input type="email" name="email" id="fEmail" enterkeyhint="next" ' +
+    'placeholder="Email keyboard with @" ' +
+    'style="width:100%;padding:12px;border:1px solid #d1d5db;border-radius:8px;font-size:16px">' +
+    '</div>' +
+
+    '<div style="margin-bottom:14px">' +
+    '<label style="display:block;font-weight:600;color:#111827;margin-bottom:4px">Phone</label>' +
+    '<input type="tel" name="phone" id="fPhone" enterkeyhint="next" ' +
+    'placeholder="Phone pad (digits + symbols)" ' +
+    'style="width:100%;padding:12px;border:1px solid #d1d5db;border-radius:8px;font-size:16px">' +
+    '</div>' +
+
+    '<div style="margin-bottom:14px">' +
+    '<label style="display:block;font-weight:600;color:#111827;margin-bottom:4px">Quantity</label>' +
+    '<input type="number" name="qty" id="fQty" inputmode="numeric" enterkeyhint="next" maxlength="4" ' +
+    'placeholder="Number pad (max 4 digits)" ' +
+    'style="width:100%;padding:12px;border:1px solid #d1d5db;border-radius:8px;font-size:16px">' +
+    '</div>' +
+
+    '<div style="margin-bottom:14px">' +
+    '<label style="display:block;font-weight:600;color:#111827;margin-bottom:4px">Website</label>' +
+    '<input type="url" name="url" id="fUrl" enterkeyhint="next" ' +
+    'placeholder="URL keyboard with / and .com" ' +
+    'style="width:100%;padding:12px;border:1px solid #d1d5db;border-radius:8px;font-size:16px">' +
+    '</div>' +
+
+    '<div style="margin-bottom:14px">' +
+    '<label style="display:block;font-weight:600;color:#111827;margin-bottom:4px">Password</label>' +
+    '<input type="password" name="pw" id="fPw" enterkeyhint="next" ' +
+    'placeholder="Masked, no auto-cap" ' +
+    'style="width:100%;padding:12px;border:1px solid #d1d5db;border-radius:8px;font-size:16px">' +
+    '</div>' +
+
+    '<div style="margin-bottom:14px">' +
+    '<label style="display:block;font-weight:600;color:#111827;margin-bottom:4px">Search</label>' +
+    '<input type="search" name="q" id="fSearch" enterkeyhint="search" ' +
+    'placeholder="Return key shows as Search" ' +
+    'style="width:100%;padding:12px;border:1px solid #d1d5db;border-radius:8px;font-size:16px">' +
+    '</div>' +
+
+    '<div style="margin-bottom:14px">' +
+    '<label style="display:block;font-weight:600;color:#111827;margin-bottom:4px">Comments</label>' +
+    '<textarea name="comments" id="fComments" rows="3" ' +
+    'placeholder="Multi-line, auto-caps sentences" ' +
+    'style="width:100%;padding:12px;border:1px solid #d1d5db;border-radius:8px;font-size:16px"></textarea>' +
+    '</div>' +
+
+    '<div style="margin-bottom:14px">' +
+    '<label style="display:block;font-weight:600;color:#111827;margin-bottom:4px">Promo code</label>' +
+    '<input type="text" name="promo" id="fPromo" autocapitalize="characters" enterkeyhint="go" ' +
+    'placeholder="ALL CAPS — return key says Go" ' +
+    'style="width:100%;padding:12px;border:1px solid #d1d5db;border-radius:8px;font-size:16px">' +
+    '</div>' +
+
+    '<button type="submit" ' +
+    'style="background:#1e40af;color:white;padding:14px 24px;border:none;border-radius:8px;font-weight:600;font-size:16px;width:100%">' +
+    'Submit form</button>' +
+    '</form>' +
+
+    // Bottom spacer so we can verify scroll-into-view lifts the last
+    // two fields above the keyboard when they get focused.
+    '<div style="height:200px"></div>' +
+    '</div>';
+
 procedure TForm3.Button1Click(Sender: TObject);
 begin
   Tina4HTMLRender1.HTML.LoadFromFile('..\..\test_all_features.html')
@@ -54,23 +141,29 @@ begin
 end;
 
 procedure TForm3.FormCreate(Sender: TObject);
+{$IF not (defined(ANDROID) or defined(IOS))}
 var
   HtmlFile: string;
+{$ENDIF}
 begin
   //Tina4HTMLRender1.Align := TAlignLayout.Client;
   Tina4HTMLRender1.CacheEnabled := False;
   Tina4HTMLRender1.RegisterObject('Form3', Self);
 
-  // Load HTML from file next to the executable, or fall back to the project Example folder
-  HtmlFile := TPath.Combine(ExtractFilePath(ParamStr(0)), 'bootstrap_test.html');
+  {$IF defined(ANDROID) or defined(IOS)}
+  // On mobile, show the embedded keyboard demo — the .html files in
+  // Example/ aren't deployed into the APK, so we can't LoadFromFile.
+  Tina4HTMLRender1.HTML.Text := KEYBOARD_DEMO_HTML;
+  {$ELSE}
+  // Desktop: load a file next to the exe, or fall back to the Example folder.
+  HtmlFile := TPath.Combine(ExtractFilePath(ParamStr(0)), 'keyboard_demo.html');
   if not FileExists(HtmlFile) then
-    HtmlFile := TPath.Combine(ExtractFilePath(ParamStr(0)), '..\..\bootstrap_test.html');
-
+    HtmlFile := TPath.Combine(ExtractFilePath(ParamStr(0)), '..\..\keyboard_demo.html');
   if FileExists(HtmlFile) then
-    Tina4HTMLRender1.Twig.Text := TFile.ReadAllText(HtmlFile)
+    Tina4HTMLRender1.HTML.Text := TFile.ReadAllText(HtmlFile)
   else
-    Tina4HTMLRender1.HTML.Text := '<h1>bootstrap_test.html not found</h1>' +
-      '<p>Place bootstrap_test.html next to the executable or in the Example folder.</p>';
+    Tina4HTMLRender1.HTML.Text := KEYBOARD_DEMO_HTML;
+  {$ENDIF}
 end;
 
 procedure TForm3.ShowSomething(Name: String);

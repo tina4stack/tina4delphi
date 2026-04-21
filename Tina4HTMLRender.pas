@@ -654,7 +654,15 @@ type
     /// <summary>Scrolls so the element with the given id is visible in the viewport.</summary>
     /// <param name="Id">The HTML id attribute of the element to scroll into view.</param>
     /// <returns>True if the element was found and scrolled to, False otherwise.</returns>
-    function ScrollToElement(const Id: string): Boolean;
+    /// <summary>
+    /// Scrolls the element with the given id into the viewport.
+    /// BottomInset shrinks the effective viewport height during the
+    /// outer-scroll check — useful for keeping the element above the
+    /// on-screen keyboard without a second ScrollBy pass. Defaults
+    /// to 0 so existing callers behave identically.
+    /// </summary>
+    function ScrollToElement(const Id: string;
+      BottomInset: Single = 0): Boolean;
     /// <summary>Sets keyboard focus to a native form control (input, textarea, select)
     /// identified by its HTML id attribute. Returns True if the element was found
     /// and focused.</summary>
@@ -5299,7 +5307,8 @@ begin
   Result := Walk(FLayoutEngine.Root, 0, 0);
 end;
 
-function TTina4HTMLRender.ScrollToElement(const Id: string): Boolean;
+function TTina4HTMLRender.ScrollToElement(const Id: string;
+  BottomInset: Single): Boolean;
 
   // Walk from Root, produce the path of boxes from root down to Target.
   function FindPath(Box, Target: TLayoutBox; Path: TList<TLayoutBox>): Boolean;
@@ -5389,6 +5398,18 @@ begin
     begin
       VW := GetViewportWidth;
       VH := GetViewportHeight;
+      // BottomInset reduces the usable bottom of the viewport — lets
+      // callers reserve space for an on-screen keyboard or a pinned
+      // footer without needing a follow-up ScrollBy. Clamp to ≥ 1 so a
+      // pathological inset (bigger than the viewport) doesn't produce
+      // a negative effective height.
+      if BottomInset > 0 then
+      begin
+        if BottomInset >= VH - 1 then
+          VH := 1
+        else
+          VH := VH - BottomInset;
+      end;
       NewX := FScrollX;
       NewY := FScrollY;
       if AY < FScrollY then
@@ -5906,15 +5927,17 @@ end;
 // list to find which one is focused (Screen.FocusControl points at it),
 // looks up its DOM id, then reuses ScrollToElement.
 procedure TTina4HTMLRender.ScrollFocusedControlAboveKeyboard;
+const
+  KEYBOARD_PADDING_PX = 8;  // small gap between input bottom and kb top
 var
   FocusedCtl: TControl;
-  Overlap, ExtraPad: Single;
+  Overlap: Single;
   TargetId: string;
   Scr: TCommonCustomForm;
 begin
   if not FKeyboardVisible then Exit;
   Overlap := GetKeyboardOverlapHeight;
-  if Overlap <= 0 then Exit;  // nothing to do
+  if Overlap <= 0 then Exit;  // nothing to do — kb doesn't cover us
 
   FocusedCtl := nil;
   Scr := nil;
@@ -5925,6 +5948,10 @@ begin
   if FocusedCtl = nil then Exit;
 
   // Walk our form-control list to find the focused one and grab its id.
+  // If the author didn't give the input an id we can't address it in
+  // ScrollToElement; the keyboard will still come up, just without the
+  // scroll-above-kb assist. Document authors should set id="" on
+  // focusable inputs to get this behaviour.
   TargetId := '';
   for var Rec in FFormControls do
     if Rec.Control = FocusedCtl then
@@ -5935,17 +5962,13 @@ begin
     end;
   if TargetId = '' then Exit;
 
-  // Nudge the viewport so the input sits above the keyboard. We use
-  // ScrollBy so we don't fight any inner-container scroll adjustments
-  // ScrollToElement already performs; the scroll-into-view logic in
-  // that method treats GetViewportHeight as the visible area, so we
-  // reduce the apparent height temporarily by scrolling down by the
-  // overlap before asking it to re-centre.
-  ScrollToElement(TargetId);
-  ExtraPad := Overlap;
-  // Tiny floor — a one-pixel offset under the keyboard still counts
-  // as "covered" and looks broken. Leave 8px of padding.
-  if ExtraPad > 0 then ScrollBy(0, ExtraPad + 8);
+  // Single-pass scroll: tell ScrollToElement to treat the bottom
+  // portion of the viewport as "reserved for the keyboard" so the
+  // final resting position leaves KEYBOARD_PADDING_PX of gap between
+  // the input's bottom edge and the keyboard's top edge. No follow-up
+  // ScrollBy needed — the old version layered a ScrollBy on top of an
+  // already-valid scroll position and over-shot into the gutter.
+  ScrollToElement(TargetId, Overlap + KEYBOARD_PADDING_PX);
 end;
 
 // Invoked whenever FMX posts a virtual-keyboard state change.
@@ -6136,6 +6159,18 @@ begin
          IFMXVirtualKeyboardService, IInterface(KbSvc)) and (KbSvc <> nil) then
       KbSvc.ShowVirtualKeyboard(TControl(Sender));
   end;
+
+  // If the keyboard is already visible (focus moved via enterkeyhint
+  // Next, or the user tapped a different input while typing), the
+  // TVKStateChangeMessage won't fire again — so the new field could
+  // land under the keyboard. Re-scroll on every focus change to keep
+  // the focused input in view. Queued so any platform-level focus
+  // fallout settles first.
+  TThread.ForceQueue(nil,
+    procedure
+    begin
+      ScrollFocusedControlAboveKeyboard;
+    end);
   {$ENDIF}
 end;
 

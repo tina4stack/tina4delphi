@@ -603,6 +603,36 @@ type
     /// <param name="AttrValue">The new attribute value.</param>
     procedure SetElementAttribute(const Id, AttrName, AttrValue: string);
     /// <summary>
+    /// Returns True when the element's `class` attribute contains
+    /// ClassName as a whole token. Case-sensitive, matching browser
+    /// behaviour. Returns False if the element isn't found.
+    /// </summary>
+    function HasElementClass(const Id, ClassName: string): Boolean;
+    /// <summary>
+    /// Adds ClassName to the element's class attribute if it isn't
+    /// already there. No-op when already present. Triggers relayout.
+    /// </summary>
+    procedure AddElementClass(const Id, ClassName: string);
+    /// <summary>
+    /// Removes ClassName from the element's class attribute if present.
+    /// Other classes on the element are preserved. Triggers relayout.
+    /// </summary>
+    procedure RemoveElementClass(const Id, ClassName: string);
+    /// <summary>
+    /// Flips ClassName on the element: adds it if absent, removes it
+    /// if present. Returns the new state (True = now has the class).
+    /// Triggers relayout.
+    /// </summary>
+    function ToggleElementClass(const Id, ClassName: string): Boolean;
+    /// <summary>
+    /// "Single-select" pattern: removes ClassName from every element
+    /// whose tag matches TagName, then adds it to Id. Perfect for
+    /// highlighting one row / tab / nav item at a time from a single
+    /// call. TagName comparison is case-insensitive ('TR' = 'tr').
+    /// Triggers a single relayout at the end.
+    /// </summary>
+    procedure SetExclusiveClass(const Id, ClassName, TagName: string);
+    /// <summary>
     /// Enables or disables a native form control and adjusts its opacity.
     /// </summary>
     /// <param name="Id">The HTML id of the element.</param>
@@ -4863,6 +4893,17 @@ function TTina4HTMLRender.GetElementById(const Id: string): THTMLTag;
 
 begin
   Result := nil;
+  // Ensure the DOM reflects the current HTML.Text. Parsing is normally
+  // deferred to DoLayout at paint time, which means a consumer that
+  // queries GetElementById before the first paint (or in a headless
+  // test) would see a stale / empty tree. Parse on demand when dirty —
+  // cheap (HTML to DOM only; stylesheet loading still happens in
+  // DoLayout).
+  if FParserDirty and Assigned(FParser) then
+  begin
+    FParser.Parse(FHTML.Text);
+    FParserDirty := False;
+  end;
   if Assigned(FParser) and Assigned(FParser.Root) then
     Result := FindById(FParser.Root, Id);
 end;
@@ -4928,6 +4969,219 @@ begin
       Repaint;
     end;
   end;
+end;
+
+{ ─── Class-list helpers ───────────────────────────────────────────
+  SetElementAttribute('class', ...) replaces the whole class list,
+  which destroys any pre-existing classes (striped, even, etc.). The
+  helpers below mutate the list token-by-token using HTML's standard
+  whitespace-delimited semantics. Class names are case-sensitive to
+  match browser behaviour. }
+
+type
+  TClassListOp = (cloAdd, cloRemove, cloToggle);
+
+function SplitClassList(const S: string): TArray<string>;
+var
+  L: TList<string>;
+  Token: string;
+  I: Integer;
+  InToken: Boolean;
+begin
+  // Whitespace-separated tokens per HTML/DOM spec. Empty runs and
+  // trailing whitespace collapse.
+  L := TList<string>.Create;
+  try
+    Token := '';
+    InToken := False;
+    for I := 1 to Length(S) do
+    begin
+      if CharInSet(S[I], [' ', #9, #10, #13]) then
+      begin
+        if InToken then
+        begin
+          L.Add(Token);
+          Token := '';
+          InToken := False;
+        end;
+      end
+      else
+      begin
+        Token := Token + S[I];
+        InToken := True;
+      end;
+    end;
+    if InToken then L.Add(Token);
+    Result := L.ToArray;
+  finally
+    L.Free;
+  end;
+end;
+
+function JoinClassList(const Tokens: TArray<string>): string;
+var
+  I: Integer;
+begin
+  Result := '';
+  for I := 0 to High(Tokens) do
+  begin
+    if I > 0 then Result := Result + ' ';
+    Result := Result + Tokens[I];
+  end;
+end;
+
+// Returns the index of ClassName in Tokens, or -1 if absent.
+// Case-sensitive — matches how browsers match CSS selectors.
+function IndexOfClass(const Tokens: TArray<string>;
+  const ClassName: string): Integer;
+var
+  I: Integer;
+begin
+  for I := 0 to High(Tokens) do
+    if Tokens[I] = ClassName then Exit(I);
+  Result := -1;
+end;
+
+// Performs Op on Tag's class attribute. Returns True if the class
+// is PRESENT afterwards (useful for Toggle, informational for the
+// others). Tag.Attributes must not be nil.
+function MutateTagClass(Tag: THTMLTag; const ClassName: string;
+  Op: TClassListOp): Boolean;
+var
+  Tokens: TArray<string>;
+  Idx: Integer;
+  Changed: Boolean;
+begin
+  Tokens := SplitClassList(Tag.GetAttribute('class', ''));
+  Idx := IndexOfClass(Tokens, ClassName);
+  Changed := False;
+
+  case Op of
+    cloAdd:
+      if Idx < 0 then
+      begin
+        SetLength(Tokens, Length(Tokens) + 1);
+        Tokens[High(Tokens)] := ClassName;
+        Changed := True;
+      end;
+    cloRemove:
+      if Idx >= 0 then
+      begin
+        // Shift tail down over the removed slot.
+        for var I := Idx to Length(Tokens) - 2 do
+          Tokens[I] := Tokens[I + 1];
+        SetLength(Tokens, Length(Tokens) - 1);
+        Changed := True;
+      end;
+    cloToggle:
+      begin
+        if Idx < 0 then
+        begin
+          SetLength(Tokens, Length(Tokens) + 1);
+          Tokens[High(Tokens)] := ClassName;
+        end
+        else
+        begin
+          for var I := Idx to Length(Tokens) - 2 do
+            Tokens[I] := Tokens[I + 1];
+          SetLength(Tokens, Length(Tokens) - 1);
+        end;
+        Changed := True;
+      end;
+  end;
+
+  if Changed then
+    Tag.Attributes.AddOrSetValue('class', JoinClassList(Tokens));
+  Result := IndexOfClass(Tokens, ClassName) >= 0;
+end;
+
+function TTina4HTMLRender.HasElementClass(const Id, ClassName: string): Boolean;
+var
+  Tag: THTMLTag;
+begin
+  Result := False;
+  Tag := GetElementById(Id);
+  if (Tag = nil) or (Tag.Attributes = nil) then Exit;
+  Result := IndexOfClass(
+    SplitClassList(Tag.GetAttribute('class', '')), ClassName) >= 0;
+end;
+
+procedure TTina4HTMLRender.AddElementClass(const Id, ClassName: string);
+var
+  Tag: THTMLTag;
+begin
+  if ClassName = '' then Exit;
+  Tag := GetElementById(Id);
+  if (Tag = nil) or (Tag.Attributes = nil) then Exit;
+  MutateTagClass(Tag, ClassName, cloAdd);
+  FNeedRelayout := True;
+  Repaint;
+end;
+
+procedure TTina4HTMLRender.RemoveElementClass(const Id, ClassName: string);
+var
+  Tag: THTMLTag;
+begin
+  if ClassName = '' then Exit;
+  Tag := GetElementById(Id);
+  if (Tag = nil) or (Tag.Attributes = nil) then Exit;
+  MutateTagClass(Tag, ClassName, cloRemove);
+  FNeedRelayout := True;
+  Repaint;
+end;
+
+function TTina4HTMLRender.ToggleElementClass(const Id, ClassName: string): Boolean;
+var
+  Tag: THTMLTag;
+begin
+  Result := False;
+  if ClassName = '' then Exit;
+  Tag := GetElementById(Id);
+  if (Tag = nil) or (Tag.Attributes = nil) then Exit;
+  Result := MutateTagClass(Tag, ClassName, cloToggle);
+  FNeedRelayout := True;
+  Repaint;
+end;
+
+procedure TTina4HTMLRender.SetExclusiveClass(
+  const Id, ClassName, TagName: string);
+
+  // Walk the DOM, stripping ClassName from every tag whose name
+  // matches TagName. Case-insensitive on TagName, case-sensitive on
+  // ClassName (HTML tag names are case-insensitive; class names aren't).
+  procedure StripFromMatching(Tag: THTMLTag);
+  begin
+    if Tag = nil then Exit;
+    if SameText(Tag.TagName, TagName) and (Tag.Attributes <> nil) then
+      MutateTagClass(Tag, ClassName, cloRemove);
+    for var C in Tag.Children do
+      StripFromMatching(C);
+  end;
+
+var
+  Target: THTMLTag;
+begin
+  if (ClassName = '') or (TagName = '') then Exit;
+
+  // Force the lazy parse BEFORE we walk FParser.Root. GetElementById
+  // is what normally flushes FParserDirty — calling it first ensures
+  // StripFromMatching sees the up-to-date tree. Otherwise we'd mutate
+  // a stale DOM and the next parse would discard those mutations.
+  Target := GetElementById(Id);  // also primes the parse
+  if not Assigned(FParser) or not Assigned(FParser.Root) then Exit;
+
+  // One pass to clear the class everywhere matching TagName...
+  StripFromMatching(FParser.Root);
+
+  // ...then set it on the chosen element. If Id wasn't found we still
+  // de-selected everyone else — that's correct "select nothing"
+  // behaviour for a click-elsewhere.
+  if (Target <> nil) and (Target.Attributes <> nil) then
+    MutateTagClass(Target, ClassName, cloAdd);
+
+  // Single relayout for the whole batch of mutations.
+  FNeedRelayout := True;
+  Repaint;
 end;
 
 procedure TTina4HTMLRender.SetElementEnabled(const Id: string; Enabled: Boolean);

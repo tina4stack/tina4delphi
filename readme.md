@@ -884,6 +884,53 @@ var Tag := HTMLRender1.GetElementById('myElement');
 | `SetElementText(Id, Text)` | Updates inner text content and native control labels |
 | `SetElementStyle(Id, Prop, Value)` | Sets an inline style property, triggers relayout |
 | `RefreshElement(Id)` | Forces a full re-layout and repaint |
+| `HasElementClass(Id, ClassName)` | True if the element's `class` attribute contains `ClassName` as a whole token (case-sensitive) |
+| `AddElementClass(Id, ClassName)` | Adds a class if not already present; preserves other classes; triggers relayout |
+| `RemoveElementClass(Id, ClassName)` | Removes a single class from the list; other classes untouched |
+| `ToggleElementClass(Id, ClassName)` | Flips the class on/off. Returns the new state as `Boolean` |
+| `SetExclusiveClass(Id, ClassName, TagName)` | Single-select pattern — removes `ClassName` from every element matching `TagName`, then adds it to `Id`. One relayout for the whole batch |
+
+### Row highlight / single-select pattern
+
+Combine `onclick=` RTTI dispatch, a custom data attribute, and `SetExclusiveClass` for a POS-grid-style row selector:
+
+```html
+<style>
+  tr.selected { background:#fff3cd; font-weight:600; }
+  tr.selected td:first-child { border-left:3px solid #ffc107; }
+</style>
+
+<table>
+  <thead><tr><th>Description</th><th>Qty</th><th>Amount</th><th>Total</th></tr></thead>
+  <tbody>
+    <tr id="row-1" class="row" data-sku="R2"
+        onclick="Grid:SelectRow(this.id, this.data-sku)">
+      <td>R2 Vodago</td><td>1</td><td>2.00</td><td>2.00</td>
+    </tr>
+    <tr id="row-2" class="row" data-sku="R5"
+        onclick="Grid:SelectRow(this.id, this.data-sku)">
+      <td>R5 AirTime</td><td>1</td><td>5.00</td><td>5.00</td>
+    </tr>
+  </tbody>
+</table>
+```
+
+```delphi
+procedure TFormPOS.FormCreate(Sender: TObject);
+begin
+  HTMLRender1.RegisterObject('Grid', Self);
+end;
+
+procedure TFormPOS.SelectRow(const Id, Sku: String);
+begin
+  // Clears .selected on every <tr> and adds it to Id in a single pass.
+  // Pre-existing classes on the row (striped, even, etc.) are preserved.
+  HTMLRender1.SetExclusiveClass(Id, 'selected', 'tr');
+  lblInfo.Text := 'Selected ' + Sku;
+end;
+```
+
+Works for clicks on desktop and taps on mobile — FMX delivers touch events through the same code path.
 
 ### Image Loading and Caching
 

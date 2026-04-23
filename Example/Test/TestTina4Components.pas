@@ -7,7 +7,7 @@ uses
   FireDAC.Comp.Client, FireDAC.Stan.Def, FireDAC.Stan.Intf,
   FireDAC.Stan.Option, FireDAC.Phys.Intf, FireDAC.Comp.DataSet, Data.DB,
   Tina4Core, Tina4REST, Tina4RESTRequest, Tina4JSONAdapter, Tina4Route,
-  Tina4WebServer;
+  Tina4WebServer, Tina4HtmlRender;
 
 type
   TestTTina4Components = class(TTestCase)
@@ -25,6 +25,16 @@ type
     procedure TestJSONAdapterExecuteFromJSONData;
     procedure TestJSONAdapterExecuteSyncMode;
     procedure TestJSONAdapterExecuteEmptyJSON;
+
+    // TTina4HTMLRender class-list helpers
+    procedure TestAddElementClassAppends;
+    procedure TestAddElementClassIdempotent;
+    procedure TestAddElementClassPreservesExisting;
+    procedure TestRemoveElementClassMiddleToken;
+    procedure TestRemoveElementClassMissingIsNoOp;
+    procedure TestToggleElementClassFlips;
+    procedure TestHasElementClassCaseSensitive;
+    procedure TestSetExclusiveClassHighlightsSingleRow;
   end;
 
 implementation
@@ -200,6 +210,176 @@ begin
   finally
     Adapter.Free;
     MT.Free;
+  end;
+end;
+
+// ---------------------------------------------------------------------------
+// Class-list helpers on TTina4HTMLRender
+//
+// These work against the parsed DOM, not the native form controls, so the
+// render doesn't need a form parent to host the tests. Each test sets a
+// fragment of HTML, calls a helper, and inspects the tag's class attribute
+// via GetElementById.
+// ---------------------------------------------------------------------------
+
+function ClassOf(R: TTina4HTMLRender; const Id: string): string;
+var
+  Tag: Tina4HtmlRender.THTMLTag;
+begin
+  Tag := R.GetElementById(Id);
+  if Assigned(Tag) then
+    Result := Tag.GetAttribute('class', '')
+  else
+    Result := '';
+end;
+
+procedure TestTTina4Components.TestAddElementClassAppends;
+var
+  R: TTina4HTMLRender;
+begin
+  R := TTina4HTMLRender.Create(nil);
+  try
+    R.HTML.Text := '<div id="d"></div>';
+    R.AddElementClass('d', 'selected');
+    CheckEquals('selected', ClassOf(R, 'd'),
+      'AddElementClass on empty class attribute');
+  finally
+    R.Free;
+  end;
+end;
+
+procedure TestTTina4Components.TestAddElementClassIdempotent;
+var
+  R: TTina4HTMLRender;
+begin
+  R := TTina4HTMLRender.Create(nil);
+  try
+    R.HTML.Text := '<div id="d" class="selected"></div>';
+    R.AddElementClass('d', 'selected');
+    CheckEquals('selected', ClassOf(R, 'd'),
+      'Adding an already-present class must not duplicate');
+  finally
+    R.Free;
+  end;
+end;
+
+procedure TestTTina4Components.TestAddElementClassPreservesExisting;
+var
+  R: TTina4HTMLRender;
+  Got: string;
+begin
+  R := TTina4HTMLRender.Create(nil);
+  try
+    R.HTML.Text := '<div id="d" class="row striped"></div>';
+    R.AddElementClass('d', 'selected');
+    Got := ClassOf(R, 'd');
+    Check(Pos('row', Got) > 0,      'Existing class "row" must survive');
+    Check(Pos('striped', Got) > 0,  'Existing class "striped" must survive');
+    Check(Pos('selected', Got) > 0, 'New class "selected" must be present');
+  finally
+    R.Free;
+  end;
+end;
+
+procedure TestTTina4Components.TestRemoveElementClassMiddleToken;
+var
+  R: TTina4HTMLRender;
+  Got: string;
+begin
+  R := TTina4HTMLRender.Create(nil);
+  try
+    R.HTML.Text := '<div id="d" class="row selected striped"></div>';
+    R.RemoveElementClass('d', 'selected');
+    Got := ClassOf(R, 'd');
+    Check(Pos('row', Got) > 0,       'row must survive removal of middle token');
+    Check(Pos('striped', Got) > 0,   'striped must survive');
+    Check(Pos('selected', Got) = 0,  '"selected" must be gone');
+  finally
+    R.Free;
+  end;
+end;
+
+procedure TestTTina4Components.TestRemoveElementClassMissingIsNoOp;
+var
+  R: TTina4HTMLRender;
+begin
+  R := TTina4HTMLRender.Create(nil);
+  try
+    R.HTML.Text := '<div id="d" class="row striped"></div>';
+    R.RemoveElementClass('d', 'selected');  // not present
+    CheckEquals('row striped', ClassOf(R, 'd'),
+      'Removing an absent class must leave the list untouched');
+  finally
+    R.Free;
+  end;
+end;
+
+procedure TestTTina4Components.TestToggleElementClassFlips;
+var
+  R: TTina4HTMLRender;
+begin
+  R := TTina4HTMLRender.Create(nil);
+  try
+    R.HTML.Text := '<div id="d" class="row"></div>';
+    Check(R.ToggleElementClass('d', 'selected'),
+      'First toggle should report now-present');
+    Check(R.HasElementClass('d', 'selected'),
+      'HasElementClass should agree after first toggle');
+    Check(not R.ToggleElementClass('d', 'selected'),
+      'Second toggle should report now-absent');
+    Check(not R.HasElementClass('d', 'selected'),
+      'HasElementClass should agree after second toggle');
+  finally
+    R.Free;
+  end;
+end;
+
+procedure TestTTina4Components.TestHasElementClassCaseSensitive;
+var
+  R: TTina4HTMLRender;
+begin
+  R := TTina4HTMLRender.Create(nil);
+  try
+    R.HTML.Text := '<div id="d" class="Selected"></div>';
+    Check(R.HasElementClass('d', 'Selected'),
+      'HasElementClass must match exact casing');
+    Check(not R.HasElementClass('d', 'selected'),
+      'HasElementClass must reject different casing (browsers do the same)');
+  finally
+    R.Free;
+  end;
+end;
+
+procedure TestTTina4Components.TestSetExclusiveClassHighlightsSingleRow;
+var
+  R: TTina4HTMLRender;
+begin
+  R := TTina4HTMLRender.Create(nil);
+  try
+    R.HTML.Text :=
+      '<table><tbody>' +
+      '  <tr id="r1" class="row selected"></tr>' +  // previously selected
+      '  <tr id="r2" class="row"></tr>' +
+      '  <tr id="r3" class="row selected"></tr>' +  // stale extra
+      '</tbody></table>';
+
+    R.SetExclusiveClass('r2', 'selected', 'tr');
+
+    Check(not R.HasElementClass('r1', 'selected'),
+      'r1 must no longer be selected after SetExclusiveClass');
+    Check(R.HasElementClass('r2', 'selected'),
+      'r2 must BE selected');
+    Check(not R.HasElementClass('r3', 'selected'),
+      'r3 (stale) must no longer be selected');
+    // Base classes untouched
+    Check(R.HasElementClass('r1', 'row'),
+      'r1 base class "row" must survive');
+    Check(R.HasElementClass('r2', 'row'),
+      'r2 base class "row" must survive');
+    Check(R.HasElementClass('r3', 'row'),
+      'r3 base class "row" must survive');
+  finally
+    R.Free;
   end;
 end;
 

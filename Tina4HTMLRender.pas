@@ -5928,10 +5928,11 @@ end;
 // looks up its DOM id, then reuses ScrollToElement.
 procedure TTina4HTMLRender.ScrollFocusedControlAboveKeyboard;
 const
-  KEYBOARD_PADDING_PX = 8;  // small gap between input bottom and kb top
+  KEYBOARD_PADDING_PX  = 8;    // absolute floor below the native control
+  MIN_CLEARANCE_PX     = 48;   // Material touch-target min
 var
   FocusedCtl: TControl;
-  Overlap: Single;
+  Overlap, Clearance: Single;
   TargetId: string;
   Scr: TCommonCustomForm;
 begin
@@ -5962,13 +5963,22 @@ begin
     end;
   if TargetId = '' then Exit;
 
+  // Reserve enough bottom space that the ENTIRE focused control stays
+  // above the keyboard, not just the top edge of its HTML layout box.
+  // Android's native EditText has internal padding / min-height that
+  // can make the platform control taller than the HTML margin box,
+  // and some OEM keyboards report a slightly smaller height than they
+  // actually occupy. Use max(control height, MIN_CLEARANCE_PX) plus
+  // an 8px breathing gap.
+  Clearance := FocusedCtl.Height;
+  if Clearance < MIN_CLEARANCE_PX then Clearance := MIN_CLEARANCE_PX;
+
   // Single-pass scroll: tell ScrollToElement to treat the bottom
-  // portion of the viewport as "reserved for the keyboard" so the
-  // final resting position leaves KEYBOARD_PADDING_PX of gap between
-  // the input's bottom edge and the keyboard's top edge. No follow-up
-  // ScrollBy needed — the old version layered a ScrollBy on top of an
-  // already-valid scroll position and over-shot into the gutter.
-  ScrollToElement(TargetId, Overlap + KEYBOARD_PADDING_PX);
+  // portion of the viewport as "reserved for the keyboard + input".
+  // No follow-up ScrollBy — the old version layered a ScrollBy on
+  // top of an already-valid scroll position and over-shot into the
+  // gutter, which is why the keyboard kept dismissing itself.
+  ScrollToElement(TargetId, Overlap + Clearance + KEYBOARD_PADDING_PX);
 end;
 
 // Invoked whenever FMX posts a virtual-keyboard state change.

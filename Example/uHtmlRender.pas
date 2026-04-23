@@ -146,13 +146,22 @@ var
   HtmlFile: string;
 {$ENDIF}
 begin
-  //Tina4HTMLRender1.Align := TAlignLayout.Client;
   Tina4HTMLRender1.CacheEnabled := False;
   Tina4HTMLRender1.RegisterObject('Form3', Self);
 
   {$IF defined(ANDROID) or defined(IOS)}
-  // On mobile, show the embedded keyboard demo — the .html files in
-  // Example/ aren't deployed into the APK, so we can't LoadFromFile.
+  // On mobile the design-time Button1/Button2 and the Bottom-aligned
+  // Layout1 leave a giant empty strip at the top on high-res devices
+  // (the layout was sized 646 px tall for a small desktop window).
+  // Hide the test buttons and let the render fill the whole screen.
+  Button1.Visible := False;
+  Button2.Visible := False;
+  Layout1.Align := TAlignLayout.Client;
+  Layout1.Position.Y := 0;
+  Layout1.Margins.Top := 0;
+
+  // Show the embedded keyboard demo — the .html files in Example/
+  // aren't deployed into the APK so we can't LoadFromFile there.
   Tina4HTMLRender1.HTML.Text := KEYBOARD_DEMO_HTML;
   {$ELSE}
   // Desktop: load a file next to the exe, or fall back to the Example folder.

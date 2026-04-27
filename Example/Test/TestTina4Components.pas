@@ -48,6 +48,10 @@ type
     // margin:auto vertical centering inside fixed-height parent
     procedure TestMarginAutoVCentersInsideExplicitHeight;
     procedure TestTilePillCenterRepro;
+    // width: fit-content
+    procedure TestFitContentShrinksBlockToText;
+    procedure TestFitContentWithMarginAutoCenters;
+    procedure TestTilePillFitContentRepro;
   end;
 
 implementation
@@ -722,6 +726,121 @@ begin
     Check(Abs(Inner.X) < 2.0,
       Format('margin-right:auto: expected inner.X near 0, got %.1f',
              [Inner.X]));
+  finally
+    Engine.Free;
+    Parser.Free;
+  end;
+end;
+
+procedure TestTTina4Components.TestFitContentShrinksBlockToText;
+var
+  Parser: Tina4HtmlRender.THTMLParser;
+  Engine: Tina4HtmlRender.TLayoutEngine;
+  Inner: Tina4HtmlRender.TLayoutBox;
+begin
+  Parser := Tina4HtmlRender.THTMLParser.Create;
+  Engine := Tina4HtmlRender.TLayoutEngine.Create(nil);
+  try
+    // Block with width:fit-content should shrink to roughly the width of
+    // the text "R10" (~30px @ 14pt) — definitely less than the parent's
+    // 400px content area, and much less than 200px.
+    RunLayout(Parser, Engine,
+      '<div style="padding:0">' +
+      '  <div id="inner" style="display:block; width:fit-content; padding:0">R10</div>' +
+      '</div>',
+      400);
+
+    Inner := FindBoxById(Engine.Root, 'inner');
+    Check(Assigned(Inner), 'inner block must exist');
+    Check(Inner.ContentWidth > 0,
+      Format('fit-content width must be > 0, got %.1f', [Inner.ContentWidth]));
+    Check(Inner.ContentWidth < 200,
+      Format('fit-content should shrink-wrap "R10" well below 200px, got %.1f',
+             [Inner.ContentWidth]));
+  finally
+    Engine.Free;
+    Parser.Free;
+  end;
+end;
+
+procedure TestTTina4Components.TestFitContentWithMarginAutoCenters;
+var
+  Parser: Tina4HtmlRender.THTMLParser;
+  Engine: Tina4HtmlRender.TLayoutEngine;
+  Inner: Tina4HtmlRender.TLayoutBox;
+  ChildOuter, ExpectedX: Single;
+begin
+  Parser := Tina4HtmlRender.THTMLParser.Create;
+  Engine := Tina4HtmlRender.TLayoutEngine.Create(nil);
+  try
+    // The combo that the production tile uses: shrink-wrap with fit-content
+    // then horizontal centre with margin:auto. The shrunk box should sit
+    // dead-centre in its 400px parent.
+    RunLayout(Parser, Engine,
+      '<div style="padding:0; text-align:center">' +
+      '  <div id="inner" style="display:block; width:fit-content; ' +
+      '         margin:0 auto; padding:0">R10</div>' +
+      '</div>',
+      400);
+
+    Inner := FindBoxById(Engine.Root, 'inner');
+    Check(Assigned(Inner), 'inner block must exist');
+
+    ChildOuter := Inner.MarginBoxWidth;
+    ExpectedX := (400 - ChildOuter) / 2;
+    Check(Abs(Inner.X - ExpectedX) < 2.0,
+      Format('fit-content + margin:0 auto: expected inner.X near %.1f, got %.1f (outer=%.1f)',
+             [ExpectedX, Inner.X, ChildOuter]));
+  finally
+    Engine.Free;
+    Parser.Free;
+  end;
+end;
+
+procedure TestTTina4Components.TestTilePillFitContentRepro;
+var
+  Parser: Tina4HtmlRender.THTMLParser;
+  Engine: Tina4HtmlRender.TLayoutEngine;
+  Tile, Label_: Tina4HtmlRender.TLayoutBox;
+  CenterX, CenterY, TileCenterX, TileCenterY: Single;
+begin
+  Parser := Tina4HtmlRender.THTMLParser.Create;
+  Engine := Tina4HtmlRender.TLayoutEngine.Create(nil);
+  try
+    // Production tile + label using exactly the CSS the user posted:
+    //   .label { display:block; margin:auto; width:fit-content; ... }
+    // Pill must shrink-wrap the price, then sit dead-centre on both axes.
+    RunLayout(Parser, Engine,
+      '<div id="tile" style="display:inline-block; width:176px; height:98px; ' +
+      '       background:#c00; text-align:center; padding:0">' +
+      '  <span id="lbl" style="display:block; margin:auto; width:fit-content; ' +
+      '         line-height:18px; font-size:15px; padding:4px 10px; ' +
+      '         background:rgba(0,0,0,0.55); color:white">R10</span>' +
+      '</div>',
+      400);
+
+    Tile  := FindBoxById(Engine.Root, 'tile');
+    Label_ := FindBoxById(Engine.Root, 'lbl');
+    Check(Assigned(Tile) and Assigned(Label_), 'tile + label boxes must exist');
+
+    // Label must NOT span the full tile width — it should be the pill's
+    // intrinsic width (a few characters of "R10" + 10px h-padding either
+    // side). Empirically well below half the tile width.
+    Check(Label_.MarginBoxWidth < 80,
+      Format('fit-content label should shrink-wrap, got width %.1f',
+             [Label_.MarginBoxWidth]));
+
+    TileCenterX := Tile.ContentWidth  / 2;
+    TileCenterY := Tile.ContentHeight / 2;
+    CenterX := Label_.X + Label_.MarginBoxWidth  / 2;
+    CenterY := Label_.Y + Label_.MarginBoxHeight / 2;
+
+    Check(Abs(CenterX - TileCenterX) < 4.0,
+      Format('Tile pill X-centre: expected %.1f, got %.1f',
+             [TileCenterX, CenterX]));
+    Check(Abs(CenterY - TileCenterY) < 4.0,
+      Format('Tile pill Y-centre: expected %.1f, got %.1f',
+             [TileCenterY, CenterY]));
   finally
     Engine.Free;
     Parser.Free;

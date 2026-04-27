@@ -2246,6 +2246,14 @@ begin
   Str := S.Trim.ToLower;
   if Str = '' then Exit(0);
   if Str = 'auto' then Exit(-1);
+  // Shrink-to-fit width keywords. We collapse fit-content / min-content /
+  // max-content onto a single sentinel (-3); the layout pass treats it like
+  // an inline-block for width measurement (lay out at parent width, then
+  // shrink to the widest child / longest line). The sentinel is < -1.01 so
+  // it doesn't collide with the percentage range used by the layout engine,
+  // and < 0 so existing "no explicit width" branches keep working.
+  if (Str = 'fit-content') or (Str = 'min-content') or (Str = 'max-content') then
+    Exit(-3);
 
   // Handle calc() — sum all terms with units we support (rem, em, px, pt),
   // ignore viewport-relative units (vw, vh, vmin, vmax) we can't resolve.
@@ -3467,8 +3475,9 @@ end;
 function IsPercentageValue(Value: Single): Boolean; inline;
 begin
   // Percentages are stored as negative values < -1 (e.g., -100 = 100%, -50 = 50%)
-  // The sentinel -1 means 'auto' / unset, so only values below -1 are percentages
-  Result := Value < -1.01;
+  // The sentinel -1 means 'auto' / unset, so only values below -1 are percentages.
+  // Exclude the fit-content sentinel (-3) so it isn't mistaken for a 3% width.
+  Result := (Value < -1.01) and not ((Value >= -3.01) and (Value <= -2.99));
 end;
 
 function ResolvePercentage(Value, Reference: Single): Single;
@@ -3495,6 +3504,13 @@ end;
 function IsAutoMargin(Value: Single): Boolean; inline;
 begin
   Result := (Value >= -1.01) and (Value <= -0.99);
+end;
+
+// True when a width was specified as `fit-content` (or min/max-content).
+// Layout treats these as "shrink to widest child / longest text run".
+function IsFitContentWidth(Value: Single): Boolean; inline;
+begin
+  Result := (Value >= -3.01) and (Value <= -2.99);
 end;
 
 procedure TLayoutEngine.LayoutBlock(Box: TLayoutBox; AvailWidth: Single);
@@ -3543,6 +3559,17 @@ begin
 
   Box.ContentWidth := ContentW;
   CursorY := 0;
+
+  // For fit-content boxes, temporarily force text-align to leading during
+  // inline layout. Otherwise text fragments get centred to the *parent*
+  // available width — leaving them sitting in the middle of a 176px row,
+  // which makes the shrink-to-fit pass at the bottom of this routine
+  // pointless (ScrollWidth would still report ~176). We restore the
+  // original alignment before returning.
+  var FitContentSavedAlign := Box.Style.TextAlign;
+  var IsFitContentBox := IsFitContentWidth(Box.Style.ExplicitWidth);
+  if IsFitContentBox then
+    Box.Style.TextAlign := TTextAlign.Leading;
 
   // Block-level form controls (e.g. Bootstrap .form-control sets display:block; width:100%)
   // Size them using LayoutFormControl then return — they have no children to lay out.
@@ -3688,6 +3715,47 @@ begin
     var Right := Child.X + Child.MarginBoxWidth;
     if Right > Box.ScrollWidth then
       Box.ScrollWidth := Right;
+    // Text children carry their natural extent in Fragments — MarginBoxWidth
+    // would only reflect the (parent-derived) ContentWidth.
+    if Child.Kind = lbkText then
+    begin
+      for var FI := 0 to Child.Fragments.Count - 1 do
+      begin
+        var FragRight := Child.X + Child.Fragments[FI].X + Child.Fragments[FI].W;
+        if FragRight > Box.ScrollWidth then
+          Box.ScrollWidth := FragRight;
+      end;
+    end;
+  end;
+
+  // `width: fit-content` (also min-content/max-content) — shrink the box to
+  // the widest line / widest child. The children were laid out at the parent
+  // ContentW, so text already wrapped at that limit; here we recompute the
+  // *intrinsic* extent (max child right + max fragment right) from scratch
+  // — independent of ScrollWidth, which was pre-seeded to ContentWidth and
+  // therefore never goes below it — and clamp ContentWidth to that.
+  if IsFitContentBox then
+  begin
+    var IntrinsicW: Single := 0;
+    for var Child in Box.Children do
+    begin
+      var ChildRight := Child.X + Child.MarginBoxWidth;
+      if ChildRight > IntrinsicW then IntrinsicW := ChildRight;
+      if Child.Kind = lbkText then
+      begin
+        for var FI := 0 to Child.Fragments.Count - 1 do
+        begin
+          var FragRight := Child.X + Child.Fragments[FI].X + Child.Fragments[FI].W;
+          if FragRight > IntrinsicW then IntrinsicW := FragRight;
+        end;
+      end;
+    end;
+    if (IntrinsicW > 0) and (IntrinsicW < Box.ContentWidth) then
+    begin
+      Box.ContentWidth := IntrinsicW;
+      Box.ScrollWidth := IntrinsicW;
+    end;
+    Box.Style.TextAlign := FitContentSavedAlign;
   end;
 
   if Box.Style.ExplicitHeight > 0 then

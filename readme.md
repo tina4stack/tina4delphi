@@ -748,6 +748,7 @@ Tina4HTMLRender1.HTML.Text := '<h1>Hello</h1><p>This is <b>bold</b> and <i>itali
 - **Selectors**: tag, `.class`, `#id`, combined selectors, specificity-based cascade
 - **Custom properties**: `var()` resolution with `:root` and element-level scoping
 - **Box model**: `margin`, `padding`, `border`, `border-top`/`right`/`bottom`/`left`, `border-radius`, `width`, `height`, `box-sizing`, `min-width`, `max-width`, `min-height`, `max-height`, `box-shadow`
+- **Sizing keywords**: `width: fit-content` / `min-content` / `max-content` — shrink-wrap the box around its widest line / longest child. Combines naturally with `margin: auto` to centre a shrunk-to-fit pill inside its parent.
 - **Display modes**: `block`, `inline`, `inline-block`, `none`, `table`, `table-row`, `table-cell`, `list-item`
 - **Centering**:
   - `margin: 0 auto` — horizontal centering of a block child whose width is less than its parent's content width

@@ -749,6 +749,11 @@ Tina4HTMLRender1.HTML.Text := '<h1>Hello</h1><p>This is <b>bold</b> and <i>itali
 - **Custom properties**: `var()` resolution with `:root` and element-level scoping
 - **Box model**: `margin`, `padding`, `border`, `border-top`/`right`/`bottom`/`left`, `border-radius`, `width`, `height`, `box-sizing`, `min-width`, `max-width`, `min-height`, `max-height`, `box-shadow`
 - **Display modes**: `block`, `inline`, `inline-block`, `none`, `table`, `table-row`, `table-cell`, `list-item`
+- **Centering**:
+  - `margin: 0 auto` — horizontal centering of a block child whose width is less than its parent's content width
+  - `margin-left: auto` / `margin-right: auto` — push a block child to the right / left edge
+  - `margin: auto` (top + bottom auto) — vertical centering of a block child inside a parent that has an explicit `height` (Tina4 extension; strict CSS spec resolves vertical auto-margins to 0 outside flex containers)
+  - `vertical-align: top | middle | bottom` on `display: table-cell` — including the legacy `<td valign="...">` attribute
 - **Text**: `color`, `font-size`, `font-family`, `font-weight`, `font-style`, `text-align`, `line-height`, `text-decoration`, `white-space`, `text-transform`, `letter-spacing`, `text-indent`, `text-overflow`
 - **Background**: `background-color`, `opacity`
 - **Visibility**: `visibility` (`visible`, `hidden`), `overflow` (`visible`, `hidden`, `scroll`, `auto`)

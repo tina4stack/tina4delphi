@@ -35,6 +35,19 @@ type
     procedure TestToggleElementClassFlips;
     procedure TestHasElementClassCaseSensitive;
     procedure TestSetExclusiveClassHighlightsSingleRow;
+
+    // Vertical-align on display:table-cell
+    procedure TestVerticalAlignMiddleCentersCellChild;
+    procedure TestVerticalAlignBottomPushesChildDown;
+    procedure TestVerticalAlignTopStaysAtTop;
+    procedure TestValignAttributeMiddleCenters;
+    // margin:auto horizontal centering
+    procedure TestMarginAutoCentersBlock;
+    procedure TestMarginLeftAutoRightAligns;
+    procedure TestMarginRightAutoLeftAligns;
+    // margin:auto vertical centering inside fixed-height parent
+    procedure TestMarginAutoVCentersInsideExplicitHeight;
+    procedure TestTilePillCenterRepro;
   end;
 
 implementation
@@ -380,6 +393,338 @@ begin
       'r3 base class "row" must survive');
   finally
     R.Free;
+  end;
+end;
+
+// ---------------------------------------------------------------------------
+// Layout-positioning tests for centering primitives.
+//
+// These exercise the layout engine directly (not the FMX paint pipeline) so
+// we get deterministic numeric box positions to assert against. The pattern:
+//   1. Parse a snippet via THTMLParser.
+//   2. Run TLayoutEngine.Layout against the parsed DOM with a known width.
+//   3. Walk the resulting box tree by id and assert .X / .Y / .ContentHeight.
+//
+// We assert with a small tolerance because text / box heights end up in
+// fractional pixel space.
+// ---------------------------------------------------------------------------
+
+function FindBoxById(Box: Tina4HtmlRender.TLayoutBox; const Id: string): Tina4HtmlRender.TLayoutBox;
+var
+  Sub: Tina4HtmlRender.TLayoutBox;
+begin
+  Result := nil;
+  if Box = nil then Exit;
+  if Assigned(Box.Tag) and SameText(Box.Tag.GetAttribute('id', ''), Id) then
+    Exit(Box);
+  for var I := 0 to Box.Children.Count - 1 do
+  begin
+    Sub := FindBoxById(Box.Children[I], Id);
+    if Assigned(Sub) then Exit(Sub);
+  end;
+end;
+
+procedure RunLayout(Parser: Tina4HtmlRender.THTMLParser;
+                    Engine: Tina4HtmlRender.TLayoutEngine;
+                    const HTML: string; AvailWidth: Single);
+begin
+  Parser.Parse(HTML);
+  Engine.Layout(Parser.Root, AvailWidth, nil);
+end;
+
+procedure TestTTina4Components.TestVerticalAlignMiddleCentersCellChild;
+var
+  Parser: Tina4HtmlRender.THTMLParser;
+  Engine: Tina4HtmlRender.TLayoutEngine;
+  Cell, Child: Tina4HtmlRender.TLayoutBox;
+  Expected: Single;
+begin
+  Parser := Tina4HtmlRender.THTMLParser.Create;
+  Engine := Tina4HtmlRender.TLayoutEngine.Create(nil);
+  try
+    // 200px-tall cell, vertical-align:middle, with a short inner block.
+    // The inner block's natural height is small relative to the cell, so
+    // the slack should be split equally above/below.
+    RunLayout(Parser, Engine,
+      '<table><tr>' +
+      '<td id="c" style="height:200px; vertical-align:middle; padding:0">' +
+      '  <div id="inner" style="height:40px">x</div>' +
+      '</td></tr></table>',
+      400);
+
+    Cell := FindBoxById(Engine.Root, 'c');
+    Child := FindBoxById(Engine.Root, 'inner');
+    Check(Assigned(Cell),  'cell box must exist');
+    Check(Assigned(Child), 'inner box must exist');
+
+    // Child should be shifted down by (cell.ContentHeight - 40) / 2
+    Expected := (Cell.ContentHeight - 40) / 2;
+    Check(Abs(Child.Y - Expected) < 2.0,
+      Format('vertical-align:middle: expected child.Y near %.1f, got %.1f (cellH=%.1f)',
+             [Expected, Child.Y, Cell.ContentHeight]));
+  finally
+    Engine.Free;
+    Parser.Free;
+  end;
+end;
+
+procedure TestTTina4Components.TestVerticalAlignBottomPushesChildDown;
+var
+  Parser: Tina4HtmlRender.THTMLParser;
+  Engine: Tina4HtmlRender.TLayoutEngine;
+  Cell, Child: Tina4HtmlRender.TLayoutBox;
+  Expected: Single;
+begin
+  Parser := Tina4HtmlRender.THTMLParser.Create;
+  Engine := Tina4HtmlRender.TLayoutEngine.Create(nil);
+  try
+    RunLayout(Parser, Engine,
+      '<table><tr>' +
+      '<td id="c" style="height:200px; vertical-align:bottom; padding:0">' +
+      '  <div id="inner" style="height:40px">x</div>' +
+      '</td></tr></table>',
+      400);
+
+    Cell := FindBoxById(Engine.Root, 'c');
+    Child := FindBoxById(Engine.Root, 'inner');
+    Check(Assigned(Cell) and Assigned(Child), 'boxes must exist');
+
+    Expected := Cell.ContentHeight - 40;
+    Check(Abs(Child.Y - Expected) < 2.0,
+      Format('vertical-align:bottom: expected child.Y near %.1f, got %.1f',
+             [Expected, Child.Y]));
+  finally
+    Engine.Free;
+    Parser.Free;
+  end;
+end;
+
+procedure TestTTina4Components.TestVerticalAlignTopStaysAtTop;
+var
+  Parser: Tina4HtmlRender.THTMLParser;
+  Engine: Tina4HtmlRender.TLayoutEngine;
+  Child: Tina4HtmlRender.TLayoutBox;
+begin
+  Parser := Tina4HtmlRender.THTMLParser.Create;
+  Engine := Tina4HtmlRender.TLayoutEngine.Create(nil);
+  try
+    // Default top alignment — child stays at Y=0.
+    RunLayout(Parser, Engine,
+      '<table><tr>' +
+      '<td id="c" style="height:200px; padding:0">' +
+      '  <div id="inner" style="height:40px">x</div>' +
+      '</td></tr></table>',
+      400);
+
+    Child := FindBoxById(Engine.Root, 'inner');
+    Check(Assigned(Child), 'inner box must exist');
+    Check(Abs(Child.Y) < 2.0,
+      Format('default vertical-align (top): expected child.Y near 0, got %.1f',
+             [Child.Y]));
+  finally
+    Engine.Free;
+    Parser.Free;
+  end;
+end;
+
+procedure TestTTina4Components.TestValignAttributeMiddleCenters;
+var
+  Parser: Tina4HtmlRender.THTMLParser;
+  Engine: Tina4HtmlRender.TLayoutEngine;
+  Cell, Child: Tina4HtmlRender.TLayoutBox;
+  Expected: Single;
+begin
+  Parser := Tina4HtmlRender.THTMLParser.Create;
+  Engine := Tina4HtmlRender.TLayoutEngine.Create(nil);
+  try
+    // Legacy `valign="middle"` attribute should produce the same result as
+    // `vertical-align:middle` CSS.
+    RunLayout(Parser, Engine,
+      '<table><tr>' +
+      '<td id="c" valign="middle" style="height:200px; padding:0">' +
+      '  <div id="inner" style="height:40px">x</div>' +
+      '</td></tr></table>',
+      400);
+
+    Cell := FindBoxById(Engine.Root, 'c');
+    Child := FindBoxById(Engine.Root, 'inner');
+    Check(Assigned(Cell) and Assigned(Child), 'boxes must exist');
+
+    Expected := (Cell.ContentHeight - 40) / 2;
+    Check(Abs(Child.Y - Expected) < 2.0,
+      Format('valign="middle": expected child.Y near %.1f, got %.1f',
+             [Expected, Child.Y]));
+  finally
+    Engine.Free;
+    Parser.Free;
+  end;
+end;
+
+procedure TestTTina4Components.TestMarginAutoCentersBlock;
+var
+  Parser: Tina4HtmlRender.THTMLParser;
+  Engine: Tina4HtmlRender.TLayoutEngine;
+  Inner: Tina4HtmlRender.TLayoutBox;
+  Expected: Single;
+begin
+  Parser := Tina4HtmlRender.THTMLParser.Create;
+  Engine := Tina4HtmlRender.TLayoutEngine.Create(nil);
+  try
+    // Outer is 400px wide (fed via AvailWidth), inner is 200px with
+    // margin: 0 auto — so inner should sit at X = (400 - 200) / 2 = 100.
+    RunLayout(Parser, Engine,
+      '<div id="outer" style="padding:0">' +
+      '  <div id="inner" style="width:200px; margin:0 auto">x</div>' +
+      '</div>',
+      400);
+
+    Inner := FindBoxById(Engine.Root, 'inner');
+    Check(Assigned(Inner), 'inner block must exist');
+
+    Expected := (400 - 200) / 2;
+    Check(Abs(Inner.X - Expected) < 2.0,
+      Format('margin:0 auto: expected inner.X near %.1f, got %.1f',
+             [Expected, Inner.X]));
+  finally
+    Engine.Free;
+    Parser.Free;
+  end;
+end;
+
+procedure TestTTina4Components.TestMarginLeftAutoRightAligns;
+var
+  Parser: Tina4HtmlRender.THTMLParser;
+  Engine: Tina4HtmlRender.TLayoutEngine;
+  Inner: Tina4HtmlRender.TLayoutBox;
+  Expected: Single;
+begin
+  Parser := Tina4HtmlRender.THTMLParser.Create;
+  Engine := Tina4HtmlRender.TLayoutEngine.Create(nil);
+  try
+    // margin-left:auto with fixed margin-right pushes the box to the right.
+    RunLayout(Parser, Engine,
+      '<div id="outer" style="padding:0">' +
+      '  <div id="inner" style="width:200px; margin-left:auto; margin-right:0">x</div>' +
+      '</div>',
+      400);
+
+    Inner := FindBoxById(Engine.Root, 'inner');
+    Check(Assigned(Inner), 'inner block must exist');
+
+    Expected := 400 - 200;
+    Check(Abs(Inner.X - Expected) < 2.0,
+      Format('margin-left:auto: expected inner.X near %.1f, got %.1f',
+             [Expected, Inner.X]));
+  finally
+    Engine.Free;
+    Parser.Free;
+  end;
+end;
+
+procedure TestTTina4Components.TestMarginAutoVCentersInsideExplicitHeight;
+var
+  Parser: Tina4HtmlRender.THTMLParser;
+  Engine: Tina4HtmlRender.TLayoutEngine;
+  Outer, Inner: Tina4HtmlRender.TLayoutBox;
+  ExpectedY: Single;
+begin
+  Parser := Tina4HtmlRender.THTMLParser.Create;
+  Engine := Tina4HtmlRender.TLayoutEngine.Create(nil);
+  try
+    // Parent has explicit 200px height. Child has natural height ~26px and
+    // `margin: auto` (= top auto + bottom auto). Strict CSS would top-align
+    // it; Tina4 distributes the slack so the child sits dead-centre.
+    RunLayout(Parser, Engine,
+      '<div id="outer" style="height:200px; padding:0">' +
+      '  <div id="inner" style="height:40px; margin:auto; width:100px">x</div>' +
+      '</div>',
+      400);
+
+    Outer := FindBoxById(Engine.Root, 'outer');
+    Inner := FindBoxById(Engine.Root, 'inner');
+    Check(Assigned(Outer) and Assigned(Inner), 'boxes must exist');
+
+    ExpectedY := (Outer.ContentHeight - 40) / 2;
+    Check(Abs(Inner.Y - ExpectedY) < 2.0,
+      Format('margin:auto vertical: expected inner.Y near %.1f, got %.1f (parentH=%.1f)',
+             [ExpectedY, Inner.Y, Outer.ContentHeight]));
+  finally
+    Engine.Free;
+    Parser.Free;
+  end;
+end;
+
+procedure TestTTina4Components.TestTilePillCenterRepro;
+var
+  Parser: Tina4HtmlRender.THTMLParser;
+  Engine: Tina4HtmlRender.TLayoutEngine;
+  Tile, Label_: Tina4HtmlRender.TLayoutBox;
+  CenterX, CenterY: Single;
+  TileCenterX, TileCenterY: Single;
+begin
+  Parser := Tina4HtmlRender.THTMLParser.Create;
+  Engine := Tina4HtmlRender.TLayoutEngine.Create(nil);
+  try
+    // Verbatim repro of the production tile/label markup. The pill
+    // (display:block; margin:auto) must end up dead-centre inside the
+    // 176 x 98 inline-block tile — both axes.
+    RunLayout(Parser, Engine,
+      '<div id="tile" style="display:inline-block; width:176px; height:98px; ' +
+      '       background:#c00; text-align:center; padding:0">' +
+      '  <span id="lbl" style="display:block; margin:auto; width:60px; height:26px; ' +
+      '         line-height:18px; font-size:15px; padding:4px 10px; ' +
+      '         background:rgba(0,0,0,0.55); color:white">R10</span>' +
+      '</div>',
+      400);
+
+    Tile  := FindBoxById(Engine.Root, 'tile');
+    Label_ := FindBoxById(Engine.Root, 'lbl');
+    Check(Assigned(Tile) and Assigned(Label_), 'tile + label boxes must exist');
+
+    // Tile centre coordinates (within tile's content box)
+    TileCenterX := Tile.ContentWidth  / 2;
+    TileCenterY := Tile.ContentHeight / 2;
+    // Label centre = its own X/Y plus half its outer box
+    CenterX := Label_.X + Label_.MarginBoxWidth  / 2;
+    CenterY := Label_.Y + Label_.MarginBoxHeight / 2;
+
+    Check(Abs(CenterX - TileCenterX) < 4.0,
+      Format('Tile pill X-centre: expected near %.1f, got %.1f',
+             [TileCenterX, CenterX]));
+    Check(Abs(CenterY - TileCenterY) < 4.0,
+      Format('Tile pill Y-centre: expected near %.1f, got %.1f (tileH=%.1f, labelY=%.1f, labelH=%.1f)',
+             [TileCenterY, CenterY, Tile.ContentHeight, Label_.Y, Label_.MarginBoxHeight]));
+  finally
+    Engine.Free;
+    Parser.Free;
+  end;
+end;
+
+procedure TestTTina4Components.TestMarginRightAutoLeftAligns;
+var
+  Parser: Tina4HtmlRender.THTMLParser;
+  Engine: Tina4HtmlRender.TLayoutEngine;
+  Inner: Tina4HtmlRender.TLayoutBox;
+begin
+  Parser := Tina4HtmlRender.THTMLParser.Create;
+  Engine := Tina4HtmlRender.TLayoutEngine.Create(nil);
+  try
+    // margin-right:auto with fixed margin-left -> default flush-left behaviour.
+    RunLayout(Parser, Engine,
+      '<div id="outer" style="padding:0">' +
+      '  <div id="inner" style="width:200px; margin-left:0; margin-right:auto">x</div>' +
+      '</div>',
+      400);
+
+    Inner := FindBoxById(Engine.Root, 'inner');
+    Check(Assigned(Inner), 'inner block must exist');
+
+    Check(Abs(Inner.X) < 2.0,
+      Format('margin-right:auto: expected inner.X near 0, got %.1f',
+             [Inner.X]));
+  finally
+    Engine.Free;
+    Parser.Free;
   end;
 end;
 

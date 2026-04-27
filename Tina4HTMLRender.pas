@@ -3489,6 +3489,14 @@ begin
     Result := Value;
 end;
 
+// True when a margin value was specified as `auto` in CSS.
+// Used by block layout to distribute slack horizontally for `margin: 0 auto`
+// centering and right-shift for `margin-left: auto`.
+function IsAutoMargin(Value: Single): Boolean; inline;
+begin
+  Result := (Value >= -1.01) and (Value <= -0.99);
+end;
+
 procedure TLayoutEngine.LayoutBlock(Box: TLayoutBox; AvailWidth: Single);
 var
   ContentW, CursorY: Single;
@@ -3639,7 +3647,30 @@ begin
       else
         LayoutBlock(Child, ContentW);
       end;
-      Child.X := 0;
+      // Distribute auto margins horizontally:
+      //   margin: 0 auto       -> centered (slack split equally)
+      //   margin-left: auto    -> right-aligned (all slack on left)
+      //   margin-right: auto   -> left-aligned (default behaviour)
+      // The child's MarginBoxWidth uses ResolveMargin (auto -> 0), so the
+      // raw outer width below is what the box would occupy if we ignored
+      // any auto margin. Slack against the parent's content width is then
+      // distributed according to which side(s) are auto.
+      var AutoL := IsAutoMargin(Child.Style.Margin.Left);
+      var AutoR := IsAutoMargin(Child.Style.Margin.Right);
+      if AutoL or AutoR then
+      begin
+        var ChildOuterW := Child.MarginBoxWidth;
+        var Slack := ContentW - ChildOuterW;
+        if Slack < 0 then Slack := 0;
+        if AutoL and AutoR then
+          Child.X := Slack / 2
+        else if AutoL then
+          Child.X := Slack
+        else
+          Child.X := 0;
+      end
+      else
+        Child.X := 0;
       Child.Y := CursorY;
       CursorY := CursorY + Child.MarginBoxHeight;
     end;
@@ -3673,6 +3704,47 @@ begin
     Box.ContentHeight := Box.Style.MinHeight;
   if (Box.Style.MaxHeight >= 0) and (Box.ContentHeight > Box.Style.MaxHeight) then
     Box.ContentHeight := Box.Style.MaxHeight;
+
+  // Distribute auto margins vertically. Strict CSS spec resolves
+  // margin-top/bottom: auto in normal block flow to 0 — but Tina4 has the
+  // parent's resolved height and the children's intrinsic heights right here,
+  // so it's a pragmatic extension to actually centre. Each block child whose
+  // top AND bottom margins are both `auto` claims an equal share of the
+  // leftover vertical slack: top absorbs Share/2, bottom absorbs Share/2,
+  // and subsequent children shift down by the full Share. Children before
+  // an auto-margin child are unaffected.
+  //
+  // Practical effect: a single child with `margin: auto` inside a parent
+  // with explicit `height` is vertically centred — which is what the
+  // tile/label pattern expects.
+  if (Box.ContentHeight > CursorY) and (CursorY > 0) then
+  begin
+    var VSlack := Box.ContentHeight - CursorY;
+    var AutoCount := 0;
+    for var Child in Box.Children do
+    begin
+      if (Child.Kind in [lbkBlock, lbkTable, lbkListItem, lbkHR, lbkInlineBlock]) and
+         IsAutoMargin(Child.Style.Margin.Top) and
+         IsAutoMargin(Child.Style.Margin.Bottom) then
+        Inc(AutoCount);
+    end;
+    if AutoCount > 0 then
+    begin
+      var Share := VSlack / AutoCount;
+      var YOff: Single := 0;
+      for var Child in Box.Children do
+      begin
+        Child.Y := Child.Y + YOff;
+        if (Child.Kind in [lbkBlock, lbkTable, lbkListItem, lbkHR, lbkInlineBlock]) and
+           IsAutoMargin(Child.Style.Margin.Top) and
+           IsAutoMargin(Child.Style.Margin.Bottom) then
+        begin
+          Child.Y := Child.Y + Share / 2;  // top auto absorbs half
+          YOff := YOff + Share;            // bottom auto absorbs the other half
+        end;
+      end;
+    end;
+  end;
 
   // If the box is not scrollable, keep ScrollHeight/Width in lockstep with
   // the clamped ContentHeight/Width so NeedsScrollBar* never fires for
@@ -4323,11 +4395,44 @@ begin
         Inc(ColIdx, CS);
       end;
 
-      // Set uniform row height
+      // Set uniform row height, then apply vertical-align on each cell.
+      // Cells default to top alignment; explicit `vertical-align: middle`
+      // (CSS) or `valign="middle"` (legacy HTML attr) shifts the cell's
+      // direct children down by half the slack, `bottom`/`valign="bottom"`
+      // shifts by the full slack. Anything else (top/baseline/empty) is
+      // a no-op.
       for var Cell in Row.Children do
       begin
-        if Cell.Kind = lbkTableCell then
-          Cell.ContentHeight := RowH - Cell.Style.Padding.Top - Cell.Style.Padding.Bottom;
+        if Cell.Kind <> lbkTableCell then Continue;
+
+        var NaturalH := Cell.ContentHeight;
+        var StretchedH := RowH - Cell.Style.Padding.Top - Cell.Style.Padding.Bottom;
+        Cell.ContentHeight := StretchedH;
+
+        if StretchedH <= NaturalH then Continue;
+
+        var VA := Cell.Style.VerticalAlign;
+        // Fall back to legacy <td valign="..."> when no CSS is set
+        if (VA = '') or (VA = 'baseline') then
+        begin
+          var ValignAttr := '';
+          if Assigned(Cell.Tag) then
+            ValignAttr := Cell.Tag.GetAttribute('valign', '').ToLower;
+          if ValignAttr <> '' then
+            VA := ValignAttr;
+        end;
+
+        var Offset: Single := 0;
+        if (VA = 'middle') or (VA = 'center') then
+          Offset := (StretchedH - NaturalH) / 2
+        else if VA = 'bottom' then
+          Offset := StretchedH - NaturalH;
+
+        if Offset > 0 then
+        begin
+          for var CellChild in Cell.Children do
+            CellChild.Y := CellChild.Y + Offset;
+        end;
       end;
 
       Row.X := 0;

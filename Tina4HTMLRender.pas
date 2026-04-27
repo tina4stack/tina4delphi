@@ -390,6 +390,13 @@ type
     FCacheDir: string;
     FScrollX: Single;
     FScrollY: Single;
+    // Absolute Y of the nearest scroll-ancestor's content-top during paint.
+    // Sticky elements pin against this value plus their `top` offset, so a
+    // sticky <th> inside an `overflow-y:auto .cart` correctly sticks to the
+    // cart's visible top edge — not the viewport's Y=0. Threaded through
+    // PaintBox (saved/restored on entry to each scroll container) instead of
+    // an extra parameter, since most callers don't care.
+    FStickyAnchorY: Single;
     FContentWidth: Single;
     FContentHeight: Single;
     FNeedRelayout: Boolean;
@@ -7064,6 +7071,11 @@ begin
     Canvas.Fill.Color := TAlphaColors.White;
     Canvas.FillRect(LocalRect, 1.0);
 
+    // Reset the sticky anchor to the viewport top before each paint pass —
+    // it gets pushed/popped per scroll container during recursion, so a
+    // crash or early-exit could otherwise leave it pointing at a freed box.
+    FStickyAnchorY := 0;
+
     // Paint layout tree
     if Assigned(FLayoutEngine.Root) then
       PaintBox(Canvas, FLayoutEngine.Root, -FScrollX, -FScrollY);
@@ -7153,15 +7165,16 @@ begin
   AbsX := OffX + Box.X;
   AbsY := OffY + Box.Y;
 
-  // Sticky positioning: when a sticky element's normal position has scrolled
-  // above its `top` value, pin it at that offset relative to the viewport.
-  // This makes headers stick to the top of the visible area while scrolling.
+  // Sticky positioning: pin to the nearest scroll-ancestor's content top
+  // (FStickyAnchorY, in absolute paint coordinates) plus the element's
+  // CSS `top` offset. Falls back to the viewport (FStickyAnchorY = 0) for
+  // elements outside any internal scroll container — that's the "header
+  // sticks to top of page while page scrolls" case.
   if (Box.Style.CSSPosition = 'sticky') and (Box.Style.CSSTop > -9990) then
   begin
-    var StickyTop := Box.Style.CSSTop;
-    // If the element has scrolled above the sticky threshold, pin it
-    if AbsY < StickyTop then
-      AbsY := StickyTop;
+    var StickyAnchor := FStickyAnchorY + Box.Style.CSSTop;
+    if AbsY < StickyAnchor then
+      AbsY := StickyAnchor;
   end;
 
   // Viewport culling
@@ -7230,6 +7243,14 @@ begin
     // relayout that shrinks content doesn't leave the scroll past the end.
     Box.ClampOwnScroll;
     var SaveState := Canvas.SaveState;
+    // While painting *inside* this scroll container, sticky descendants
+    // anchor to its visible top edge (CY) instead of the outer viewport.
+    // Save and restore around the recursion so sibling subtrees don't see
+    // a stale anchor.
+    var SavedAnchor := FStickyAnchorY;
+    if (Box.Style.OverflowY = 'auto') or (Box.Style.OverflowY = 'scroll') or
+       (Box.Style.Overflow  = 'auto') or (Box.Style.Overflow  = 'scroll') then
+      FStickyAnchorY := CY;
     try
       Canvas.IntersectClipRect(RectF(CX, CY, CX + Box.ContentWidth, CY + Box.ContentHeight));
       // Paint non-sticky children first, then sticky on top
@@ -7285,6 +7306,7 @@ begin
       end;
     finally
       Canvas.RestoreState(SaveState);
+      FStickyAnchorY := SavedAnchor;
     end;
     // Paint scrollbars OUTSIDE the clip so they're always visible regardless
     // of how far the content has been scrolled.

@@ -57,6 +57,8 @@ type
     procedure TestOutlineLonghandsAndOffset;
     procedure TestOutlineNoneDisables;
     procedure TestTileInCartOutlineRepro;
+    // Sticky table header inside scrollable container
+    procedure TestStickyHeaderParsesInsideScrollContainer;
   end;
 
 implementation
@@ -949,6 +951,45 @@ begin
     // PaintOutline implementation added the outline-width to the layout).
     CheckEquals(176, Tile.ContentWidth,  'outline must not affect layout width');
     CheckEquals(98,  Tile.ContentHeight, 'outline must not affect layout height');
+  finally
+    Engine.Free;
+    Parser.Free;
+  end;
+end;
+
+procedure TestTTina4Components.TestStickyHeaderParsesInsideScrollContainer;
+var
+  Parser: Tina4HtmlRender.THTMLParser;
+  Engine: Tina4HtmlRender.TLayoutEngine;
+  Cart, Th: Tina4HtmlRender.TLayoutBox;
+begin
+  Parser := Tina4HtmlRender.THTMLParser.Create;
+  Engine := Tina4HtmlRender.TLayoutEngine.Create(nil);
+  try
+    // Verbatim repro of the cart-with-sticky-header pattern. We can't
+    // assert paint output here, but we can verify the parsed properties:
+    //   - the .cart container has overflow-y:auto and explicit height
+    //   - the <th> inherits position:sticky and top:0 through to the box
+    // Together these are the inputs the new FStickyAnchorY logic needs.
+    RunLayout(Parser, Engine,
+      '<div id="cart" style="height:160px; overflow-y:auto; position:relative">' +
+      '  <table style="width:100%">' +
+      '    <thead><tr>' +
+      '      <th id="hdr" style="position:sticky; top:0; background:#f1f5f9; ' +
+      '             padding:6px 8px">Description</th>' +
+      '    </tr></thead>' +
+      '    <tbody><tr><td>Row 1</td></tr></tbody>' +
+      '  </table>' +
+      '</div>',
+      400);
+
+    Cart := FindBoxById(Engine.Root, 'cart');
+    Th   := FindBoxById(Engine.Root, 'hdr');
+    Check(Assigned(Cart) and Assigned(Th), 'cart + th boxes must exist');
+    CheckEquals('auto', Cart.Style.OverflowY, 'cart must have overflow-y:auto');
+    CheckEquals(160, Cart.ContentHeight, 'cart explicit height must apply');
+    CheckEquals('sticky', Th.Style.CSSPosition, 'th must be position:sticky');
+    CheckEquals(0, Th.Style.CSSTop, 'th must have top:0');
   finally
     Engine.Free;
     Parser.Free;

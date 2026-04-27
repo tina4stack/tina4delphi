@@ -226,6 +226,14 @@ type
     CSSLeft: Single;
     CSSRight: Single;
     CSSBottom: Single;
+    // CSS `outline` — drawn on TOP of the border-box edge, doesn't affect
+    // layout. `outline-offset` shifts the rectangle outward (positive) or
+    // inward (negative). Negative offsets are useful for status indicators
+    // that want to stay inside a card's border-radius.
+    OutlineWidth: Single;
+    OutlineColor: TAlphaColor;
+    OutlineStyle: string;       // 'solid' | 'dashed' | 'dotted' | 'none'
+    OutlineOffset: Single;
     procedure SetBorderWidth(W: Single);
     procedure SetBorderColor(C: TAlphaColor);
     function BorderColor: TAlphaColor;  // returns Top color (legacy compat)
@@ -507,6 +515,7 @@ type
     procedure PaintBoxShadow(Canvas: TCanvas; Box: TLayoutBox; X, Y: Single);
     procedure PaintBackground(Canvas: TCanvas; Box: TLayoutBox; X, Y: Single);
     procedure PaintBorder(Canvas: TCanvas; Box: TLayoutBox; X, Y: Single);
+    procedure PaintOutline(Canvas: TCanvas; Box: TLayoutBox; X, Y: Single);
     procedure BuildRoundedRectPath(Path: TPathData; const R: TRectF;
       RTL, RTR, RBR, RBL: Single);
     procedure FillRoundedRect(Canvas: TCanvas; const R: TRectF;
@@ -2143,6 +2152,10 @@ begin
   Result.CSSLeft := -9999;
   Result.CSSRight := -9999;
   Result.CSSBottom := -9999;
+  Result.OutlineWidth := 0;
+  Result.OutlineColor := TAlphaColors.Null;
+  Result.OutlineStyle := 'none';
+  Result.OutlineOffset := 0;
 end;
 
 class function TComputedStyle.ParseColor(const S: string): TAlphaColor;
@@ -2392,6 +2405,10 @@ begin
   Result.CSSLeft := -9999;
   Result.CSSRight := -9999;
   Result.CSSBottom := -9999;
+  Result.OutlineWidth := 0;
+  Result.OutlineColor := TAlphaColors.Null;
+  Result.OutlineStyle := 'none';
+  Result.OutlineOffset := 0;
 
   if Tag = nil then Exit;
   TN := Tag.TagName.ToLower;
@@ -3032,6 +3049,52 @@ begin
       if Length(Nums) >= 4 then Style.BoxShadow.SpreadRadius := Nums[3] else Style.BoxShadow.SpreadRadius := 0;
     end;
   end;
+
+  // outline: <width> [<style>] <color>   (any order, space-separated)
+  // outline-width / outline-color / outline-style / outline-offset are also
+  // accepted as longhands. Outlines are painted on top of the border-box
+  // edge and don't affect layout. `outline-offset: -4px` pulls the rectangle
+  // inward — useful for status indicators that must stay inside a rounded
+  // card without escaping the corner radius.
+  if Decls.TryGetValue('outline', Temp) and not ShouldSkip(Temp) then
+  begin
+    var OutlineStr := Temp.Trim.ToLower;
+    if (OutlineStr = 'none') or (OutlineStr = '0') then
+    begin
+      Style.OutlineWidth := 0;
+      Style.OutlineStyle := 'none';
+    end
+    else
+    begin
+      // Default: solid, current color
+      Style.OutlineStyle := 'solid';
+      Style.OutlineColor := Style.Color;
+      Style.OutlineWidth := 0;
+      var OParts := OutlineStr.Split([' ']);
+      for var OP in OParts do
+      begin
+        var OT := OP.Trim;
+        if OT = '' then Continue;
+        if (OT = 'solid') or (OT = 'dashed') or (OT = 'dotted') or
+           (OT = 'double') or (OT = 'groove') or (OT = 'ridge') or
+           (OT = 'inset') or (OT = 'outset') then
+          Style.OutlineStyle := OT
+        else if (OT.EndsWith('px')) or (OT.EndsWith('em')) or (OT.EndsWith('rem')) or
+                (OT = '0') or (StrToFloatDef(OT, Single.MaxValue) <> Single.MaxValue) then
+          Style.OutlineWidth := ParseLength(OT, Style.FontSize)
+        else
+          Style.OutlineColor := ParseColor(OT);
+      end;
+    end;
+  end;
+  if Decls.TryGetValue('outline-width', Temp) and not ShouldSkip(Temp) then
+    Style.OutlineWidth := ParseLength(Temp, Style.FontSize);
+  if Decls.TryGetValue('outline-color', Temp) and not ShouldSkip(Temp) then
+    Style.OutlineColor := ParseColor(Temp);
+  if Decls.TryGetValue('outline-style', Temp) and not ShouldSkip(Temp) then
+    Style.OutlineStyle := Temp.Trim.ToLower;
+  if Decls.TryGetValue('outline-offset', Temp) and not ShouldSkip(Temp) then
+    Style.OutlineOffset := ParseLength(Temp, Style.FontSize);
 end;
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -7114,6 +7177,9 @@ begin
   // Border
   PaintBorder(Canvas, Box, AbsX, AbsY);
 
+  // Outline (drawn on top of the border edge; doesn't affect layout)
+  PaintOutline(Canvas, Box, AbsX, AbsY);
+
   // Record clickable regions for elements with onclick attribute or <a> with href
   if Assigned(Box.Tag) and (Box.Tag.TagName <> '#text') and
      ((Box.Tag.GetAttribute('onclick', '') <> '') or
@@ -7833,6 +7899,74 @@ begin
       Canvas.DrawLine(PointF(LX + BW.Left / 2, TY), PointF(LX + BW.Left / 2, BY), 1.0);
     end;
   end;
+end;
+
+procedure TTina4HTMLRender.PaintOutline(Canvas: TCanvas; Box: TLayoutBox; X, Y: Single);
+var
+  R: TRectF;
+  ML, MT, OW, OO: Single;
+  BW: TEdgeValues;
+  RT, RB: Single;
+begin
+  OW := Box.Style.OutlineWidth;
+  if (OW <= 0) or (Box.Style.OutlineStyle = 'none') then Exit;
+  if Box.Style.OutlineColor = TAlphaColors.Null then Exit;
+
+  ML := ResolveAutoMargin(Box.Style.Margin.Left);
+  MT := ResolveAutoMargin(Box.Style.Margin.Top);
+  BW := Box.Style.BorderWidths;
+  OO := Box.Style.OutlineOffset;
+
+  // Outline sits on the border-box edge, expanded outward by OutlineOffset
+  // (positive = away from the box, negative = inward — pulls the outline
+  // inside the border for status indicators on rounded cards).
+  R := RectF(
+    X + ML - OO,
+    Y + MT - OO,
+    X + ML + BW.Horz + Box.Style.Padding.Left + Box.ContentWidth + Box.Style.Padding.Right + OO,
+    Y + MT + BW.Vert + Box.Style.Padding.Top + Box.ContentHeight + Box.Style.Padding.Bottom + OO
+  );
+  // Inflate by half the outline width so DrawRect's centred stroke ends up
+  // flush against the desired edge (matches PaintBorder convention).
+  R.Inflate(-OW / 2, -OW / 2);
+
+  // Negative offset can collapse the rectangle — bail rather than draw garbage.
+  if (R.Width <= 0) or (R.Height <= 0) then Exit;
+
+  Canvas.Stroke.Kind := TBrushKind.Solid;
+  if Box.Style.OutlineStyle = 'dashed' then
+    Canvas.Stroke.Dash := TStrokeDash.Dash
+  else if Box.Style.OutlineStyle = 'dotted' then
+    Canvas.Stroke.Dash := TStrokeDash.Dot
+  else
+    Canvas.Stroke.Dash := TStrokeDash.Solid;
+  Canvas.Stroke.Color := Box.Style.OutlineColor;
+  Canvas.Stroke.Thickness := OW;
+
+  // Outlines follow the border-radius. With negative offset (inset look) the
+  // effective radius shrinks by the offset; with positive offset it grows.
+  if Box.Style.HasUniformRadius and (Box.Style.CornerRadius(0) > 0) then
+  begin
+    RT := Box.Style.CornerRadius(0) - OO;
+    if RT < 0 then RT := 0;
+    Canvas.DrawRect(R, RT, RT, AllCorners, 1.0);
+  end
+  else if Box.Style.MaxCornerRadius > 0 then
+  begin
+    // Per-corner radii — shrink each by the offset. PaintBorder uses the
+    // same StrokeRoundedRect helper so behaviour matches.
+    RT := Box.Style.CornerRadius(0) - OO;  if RT < 0 then RT := 0;
+    var RTR := Box.Style.CornerRadius(1) - OO; if RTR < 0 then RTR := 0;
+    var RBR := Box.Style.CornerRadius(2) - OO; if RBR < 0 then RBR := 0;
+    RB := Box.Style.CornerRadius(3) - OO;  if RB < 0 then RB := 0;
+    StrokeRoundedRect(Canvas, R, RT, RTR, RBR, RB, 1.0);
+  end
+  else
+  begin
+    Canvas.DrawRect(R, 0, 0, AllCorners, 1.0);
+  end;
+  // Restore solid for any subsequent stroke users.
+  Canvas.Stroke.Dash := TStrokeDash.Solid;
 end;
 
 procedure TTina4HTMLRender.PaintText(Canvas: TCanvas; Box: TLayoutBox; X, Y: Single);

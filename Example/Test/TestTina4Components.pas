@@ -52,6 +52,11 @@ type
     procedure TestFitContentShrinksBlockToText;
     procedure TestFitContentWithMarginAutoCenters;
     procedure TestTilePillFitContentRepro;
+    // CSS outline + outline-offset
+    procedure TestOutlineShorthandParses;
+    procedure TestOutlineLonghandsAndOffset;
+    procedure TestOutlineNoneDisables;
+    procedure TestTileInCartOutlineRepro;
   end;
 
 implementation
@@ -841,6 +846,109 @@ begin
     Check(Abs(CenterY - TileCenterY) < 4.0,
       Format('Tile pill Y-centre: expected %.1f, got %.1f',
              [TileCenterY, CenterY]));
+  finally
+    Engine.Free;
+    Parser.Free;
+  end;
+end;
+
+// ---------------------------------------------------------------------------
+// CSS outline tests — parsing only (we can't easily assert painted pixels in
+// DUnit, so we run layout and inspect Box.Style.Outline* directly).
+// ---------------------------------------------------------------------------
+
+procedure TestTTina4Components.TestOutlineShorthandParses;
+var
+  Parser: Tina4HtmlRender.THTMLParser;
+  Engine: Tina4HtmlRender.TLayoutEngine;
+  Box: Tina4HtmlRender.TLayoutBox;
+begin
+  Parser := Tina4HtmlRender.THTMLParser.Create;
+  Engine := Tina4HtmlRender.TLayoutEngine.Create(nil);
+  try
+    RunLayout(Parser, Engine,
+      '<div id="d" style="outline: 4px solid #16a34a">x</div>', 400);
+    Box := FindBoxById(Engine.Root, 'd');
+    Check(Assigned(Box), 'box must exist');
+    CheckEquals(4, Box.Style.OutlineWidth, 'outline width parsed from shorthand');
+    CheckEquals('solid', Box.Style.OutlineStyle, 'outline style parsed from shorthand');
+    Check(Box.Style.OutlineColor <> 0, 'outline color must be set (got null)');
+  finally
+    Engine.Free;
+    Parser.Free;
+  end;
+end;
+
+procedure TestTTina4Components.TestOutlineLonghandsAndOffset;
+var
+  Parser: Tina4HtmlRender.THTMLParser;
+  Engine: Tina4HtmlRender.TLayoutEngine;
+  Box: Tina4HtmlRender.TLayoutBox;
+begin
+  Parser := Tina4HtmlRender.THTMLParser.Create;
+  Engine := Tina4HtmlRender.TLayoutEngine.Create(nil);
+  try
+    RunLayout(Parser, Engine,
+      '<div id="d" style="outline-width: 2px; outline-style: dashed; ' +
+      '       outline-color: #ff0000; outline-offset: -4px">x</div>', 400);
+    Box := FindBoxById(Engine.Root, 'd');
+    Check(Assigned(Box), 'box must exist');
+    CheckEquals(2, Box.Style.OutlineWidth, 'outline-width longhand');
+    CheckEquals('dashed', Box.Style.OutlineStyle, 'outline-style longhand');
+    CheckEquals(-4, Box.Style.OutlineOffset, 'outline-offset (negative)');
+  finally
+    Engine.Free;
+    Parser.Free;
+  end;
+end;
+
+procedure TestTTina4Components.TestOutlineNoneDisables;
+var
+  Parser: Tina4HtmlRender.THTMLParser;
+  Engine: Tina4HtmlRender.TLayoutEngine;
+  Box: Tina4HtmlRender.TLayoutBox;
+begin
+  Parser := Tina4HtmlRender.THTMLParser.Create;
+  Engine := Tina4HtmlRender.TLayoutEngine.Create(nil);
+  try
+    RunLayout(Parser, Engine,
+      '<div id="d" style="outline: none">x</div>', 400);
+    Box := FindBoxById(Engine.Root, 'd');
+    Check(Assigned(Box), 'box must exist');
+    CheckEquals(0, Box.Style.OutlineWidth, 'outline:none -> width 0');
+    CheckEquals('none', Box.Style.OutlineStyle, 'outline:none -> style "none"');
+  finally
+    Engine.Free;
+    Parser.Free;
+  end;
+end;
+
+procedure TestTTina4Components.TestTileInCartOutlineRepro;
+var
+  Parser: Tina4HtmlRender.THTMLParser;
+  Engine: Tina4HtmlRender.TLayoutEngine;
+  Tile: Tina4HtmlRender.TLayoutBox;
+begin
+  Parser := Tina4HtmlRender.THTMLParser.Create;
+  Engine := Tina4HtmlRender.TLayoutEngine.Create(nil);
+  try
+    // Production .tile-in-cart CSS: 4px solid green outline pulled inward
+    // 4px so it sits flush with the card's inner edge.
+    RunLayout(Parser, Engine,
+      '<div id="t" style="display:inline-block; width:176px; height:98px; ' +
+      '       border-radius:8px; outline: 4px solid #16a34a; outline-offset: -4px">' +
+      '</div>', 400);
+    Tile := FindBoxById(Engine.Root, 't');
+    Check(Assigned(Tile), 'tile box must exist');
+    CheckEquals(4,  Tile.Style.OutlineWidth,  'in-cart outline width');
+    CheckEquals(-4, Tile.Style.OutlineOffset, 'in-cart outline offset (-4)');
+    CheckEquals('solid', Tile.Style.OutlineStyle, 'in-cart outline style');
+    Check(Tile.Style.OutlineColor <> 0, 'in-cart outline colour must be set');
+    // Outline must NOT inflate layout — the tile should still occupy its
+    // declared 176x98 box (this catches a regression where an over-eager
+    // PaintOutline implementation added the outline-width to the layout).
+    CheckEquals(176, Tile.ContentWidth,  'outline must not affect layout width');
+    CheckEquals(98,  Tile.ContentHeight, 'outline must not affect layout height');
   finally
     Engine.Free;
     Parser.Free;

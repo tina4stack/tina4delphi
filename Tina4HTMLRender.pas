@@ -4460,9 +4460,66 @@ begin
     var AvailForCols := TableContentW;
     if AvailForCols < 0 then AvailForCols := 0;
 
+    // Column widths: walk every row and pull explicit widths from cells.
+    // Percentages resolve against the table's content width (matching the
+    // browser's `table-layout: fixed` model, which is what we implement
+    // — Tina4 doesn't do content-aware auto sizing). The first cell that
+    // declares a width per column wins; remaining unsized columns share
+    // whatever space is left equally. Cells with colspan > 1 do not
+    // contribute their width to a single column (we don't know how to
+    // split it correctly without auto sizing).
     SetLength(ColWidths, NumCols);
     for var I := 0 to NumCols - 1 do
-      ColWidths[I] := AvailForCols / NumCols;
+      ColWidths[I] := -1;  // -1 = not yet assigned
+
+    for var Row in Rows do
+    begin
+      var ColIdxScan := 0;
+      for var Cell in Row.Children do
+      begin
+        if Cell.Kind <> lbkTableCell then Continue;
+        if ColIdxScan >= NumCols then Break;
+        var ScanCS := StrToIntDef(Cell.Tag.GetAttribute('colspan', '1'), 1);
+        if (ScanCS = 1) and (ColWidths[ColIdxScan] < 0) then
+        begin
+          var DeclW := Cell.Style.ExplicitWidth;
+          if IsPercentageValue(DeclW) then
+            ColWidths[ColIdxScan] := ResolvePercentage(DeclW, AvailForCols)
+          else if DeclW > 0 then
+            ColWidths[ColIdxScan] := DeclW;
+        end;
+        Inc(ColIdxScan, ScanCS);
+      end;
+    end;
+
+    // Sum declared widths; share remaining space among unsized columns.
+    var SizedTotal: Single := 0;
+    var UnsizedCount := 0;
+    for var I := 0 to NumCols - 1 do
+      if ColWidths[I] >= 0 then
+        SizedTotal := SizedTotal + ColWidths[I]
+      else
+        Inc(UnsizedCount);
+
+    if UnsizedCount > 0 then
+    begin
+      var PerCol := (AvailForCols - SizedTotal) / UnsizedCount;
+      if PerCol < 0 then PerCol := 0;
+      for var I := 0 to NumCols - 1 do
+        if ColWidths[I] < 0 then
+          ColWidths[I] := PerCol;
+    end
+    else if (SizedTotal > 0) and (Abs(SizedTotal - AvailForCols) > 0.5) then
+    begin
+      // All columns specified but they don't sum to the available width
+      // (e.g. percentages totalling 99% from rounding, or pixel widths
+      // shorter than the parent). Scale proportionally so the table still
+      // fills its declared width — that's what `table-layout: fixed`
+      // does in browsers.
+      var Scale := AvailForCols / SizedTotal;
+      for var I := 0 to NumCols - 1 do
+        ColWidths[I] := ColWidths[I] * Scale;
+    end;
 
     // Layout rows — no border offset needed with collapsed borders
     CursorY := 0;

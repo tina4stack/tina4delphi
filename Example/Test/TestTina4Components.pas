@@ -59,6 +59,10 @@ type
     procedure TestTileInCartOutlineRepro;
     // Sticky table header inside scrollable container
     procedure TestStickyHeaderParsesInsideScrollContainer;
+    // Per-column width on table cells
+    procedure TestTablePercentageColumnWidthsRespected;
+    procedure TestTablePixelColumnWidthsRespected;
+    procedure TestTableUnsizedColumnsShareRemaining;
   end;
 
 implementation
@@ -990,6 +994,110 @@ begin
     CheckEquals(160, Cart.ContentHeight, 'cart explicit height must apply');
     CheckEquals('sticky', Th.Style.CSSPosition, 'th must be position:sticky');
     CheckEquals(0, Th.Style.CSSTop, 'th must have top:0');
+  finally
+    Engine.Free;
+    Parser.Free;
+  end;
+end;
+
+// ---------------------------------------------------------------------------
+// Per-column table widths
+// ---------------------------------------------------------------------------
+
+procedure TestTTina4Components.TestTablePercentageColumnWidthsRespected;
+var
+  Parser: Tina4HtmlRender.THTMLParser;
+  Engine: Tina4HtmlRender.TLayoutEngine;
+  Th1, Th2, Th3, Th4: Tina4HtmlRender.TLayoutBox;
+begin
+  Parser := Tina4HtmlRender.THTMLParser.Create;
+  Engine := Tina4HtmlRender.TLayoutEngine.Create(nil);
+  try
+    // The user's cart-table column distribution: 68 / 5 / 13 / 14 = 100%.
+    // The table is 400px wide so the columns should be ~272 / 20 / 52 / 56 px.
+    RunLayout(Parser, Engine,
+      '<table style="width:400px"><tr>' +
+      '  <th id="h1" style="width:68%; padding:0">D</th>' +
+      '  <th id="h2" style="width:5%;  padding:0">Q</th>' +
+      '  <th id="h3" style="width:13%; padding:0">A</th>' +
+      '  <th id="h4" style="width:14%; padding:0">T</th>' +
+      '</tr></table>',
+      400);
+
+    Th1 := FindBoxById(Engine.Root, 'h1');
+    Th2 := FindBoxById(Engine.Root, 'h2');
+    Th3 := FindBoxById(Engine.Root, 'h3');
+    Th4 := FindBoxById(Engine.Root, 'h4');
+    Check(Assigned(Th1) and Assigned(Th2) and Assigned(Th3) and Assigned(Th4),
+      'all four header cells must exist');
+
+    // ContentWidth = column width (no padding in this test). Allow 1px
+    // tolerance for accumulated rounding.
+    Check(Abs(Th1.ContentWidth - 272) < 2, Format('h1 expected ~272, got %.1f', [Th1.ContentWidth]));
+    Check(Abs(Th2.ContentWidth -  20) < 2, Format('h2 expected ~20, got %.1f',  [Th2.ContentWidth]));
+    Check(Abs(Th3.ContentWidth -  52) < 2, Format('h3 expected ~52, got %.1f',  [Th3.ContentWidth]));
+    Check(Abs(Th4.ContentWidth -  56) < 2, Format('h4 expected ~56, got %.1f',  [Th4.ContentWidth]));
+  finally
+    Engine.Free;
+    Parser.Free;
+  end;
+end;
+
+procedure TestTTina4Components.TestTablePixelColumnWidthsRespected;
+var
+  Parser: Tina4HtmlRender.THTMLParser;
+  Engine: Tina4HtmlRender.TLayoutEngine;
+  Th1, Th2: Tina4HtmlRender.TLayoutBox;
+begin
+  Parser := Tina4HtmlRender.THTMLParser.Create;
+  Engine := Tina4HtmlRender.TLayoutEngine.Create(nil);
+  try
+    // Pixel widths summing to less than table width get scaled up to fill
+    // the table (matches table-layout:fixed in browsers).
+    RunLayout(Parser, Engine,
+      '<table style="width:400px"><tr>' +
+      '  <th id="a" style="width:100px; padding:0">A</th>' +
+      '  <th id="b" style="width:100px; padding:0">B</th>' +
+      '</tr></table>', 400);
+
+    Th1 := FindBoxById(Engine.Root, 'a');
+    Th2 := FindBoxById(Engine.Root, 'b');
+    Check(Assigned(Th1) and Assigned(Th2), 'cells must exist');
+
+    // Each takes half (100/200 of 400 = 200).
+    Check(Abs(Th1.ContentWidth - 200) < 2, Format('a expected 200, got %.1f', [Th1.ContentWidth]));
+    Check(Abs(Th2.ContentWidth - 200) < 2, Format('b expected 200, got %.1f', [Th2.ContentWidth]));
+  finally
+    Engine.Free;
+    Parser.Free;
+  end;
+end;
+
+procedure TestTTina4Components.TestTableUnsizedColumnsShareRemaining;
+var
+  Parser: Tina4HtmlRender.THTMLParser;
+  Engine: Tina4HtmlRender.TLayoutEngine;
+  Sized, U1, U2: Tina4HtmlRender.TLayoutBox;
+begin
+  Parser := Tina4HtmlRender.THTMLParser.Create;
+  Engine := Tina4HtmlRender.TLayoutEngine.Create(nil);
+  try
+    // One column at 50%, two unsized → remaining 50% split equally → 25% each.
+    RunLayout(Parser, Engine,
+      '<table style="width:400px"><tr>' +
+      '  <th id="s" style="width:50%; padding:0">S</th>' +
+      '  <th id="u1" style="padding:0">U1</th>' +
+      '  <th id="u2" style="padding:0">U2</th>' +
+      '</tr></table>', 400);
+
+    Sized := FindBoxById(Engine.Root, 's');
+    U1    := FindBoxById(Engine.Root, 'u1');
+    U2    := FindBoxById(Engine.Root, 'u2');
+    Check(Assigned(Sized) and Assigned(U1) and Assigned(U2), 'cells must exist');
+
+    Check(Abs(Sized.ContentWidth - 200) < 2, Format('sized=%.1f, expected ~200', [Sized.ContentWidth]));
+    Check(Abs(U1.ContentWidth -    100) < 2, Format('u1=%.1f, expected ~100',    [U1.ContentWidth]));
+    Check(Abs(U2.ContentWidth -    100) < 2, Format('u2=%.1f, expected ~100',    [U2.ContentWidth]));
   finally
     Engine.Free;
     Parser.Free;

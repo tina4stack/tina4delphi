@@ -518,7 +518,19 @@ type
     function GetFormControlNameValue(Control: TControl; out AName, AValue: string): Boolean;
     function ResolveOnClickParam(const Expr: string; ClickedTag: THTMLTag): string;
     procedure FireOnClick(ClickedTag: THTMLTag);
-    procedure PaintBox(Canvas: TCanvas; Box: TLayoutBox; OffX, OffY: Single);
+    procedure PaintBox(Canvas: TCanvas; Box: TLayoutBox; OffX, OffY: Single;
+      AStickyMode: Integer = 0);
+      // 0 = normal (paint everything in DOM order with sticky-last
+      //     among direct siblings — used outside scroll containers and as
+      //     the inner mode once inside a sticky subtree)
+      // 1 = non-sticky pass: paint everything except sticky elements; if
+      //     this box is sticky, return immediately. Used by scroll
+      //     containers to do background pass before pinning sticky on top.
+      // 2 = sticky pass: don't paint non-sticky boxes themselves but still
+      //     recurse to find sticky descendants. When a sticky descendant
+      //     is found, paint it (with pinning) and switch its subtree to
+      //     normal mode. Skip nested scroll containers (they handle their
+      //     own sticky descendants internally).
     procedure PaintBoxShadow(Canvas: TCanvas; Box: TLayoutBox; X, Y: Single);
     procedure PaintBackground(Canvas: TCanvas; Box: TLayoutBox; X, Y: Single);
     procedure PaintBorder(Canvas: TCanvas; Box: TLayoutBox; X, Y: Single);
@@ -7117,12 +7129,21 @@ begin
   PositionFormControls;
 end;
 
-procedure TTina4HTMLRender.PaintBox(Canvas: TCanvas; Box: TLayoutBox; OffX, OffY: Single);
+procedure TTina4HTMLRender.PaintBox(Canvas: TCanvas; Box: TLayoutBox; OffX, OffY: Single;
+  AStickyMode: Integer);
 var
   AbsX, AbsY, CX, CY: Single;
+  IsSticky: Boolean;
+  ChildStickyMode: Integer;
 begin
   if Box.Style.Display = 'none' then Exit;
   if Box.Style.Visibility = 'hidden' then Exit;
+
+  IsSticky := (Box.Style.CSSPosition = 'sticky') and (Box.Style.CSSTop > -9990);
+
+  // Mode 1 (non-sticky pass): a sticky element and its entire subtree are
+  // skipped — they get painted in mode 2 on top of the background pass.
+  if (AStickyMode = 1) and IsSticky then Exit;
 
   // Apply opacity by modifying alpha channels on background and border.
   // Text color keeps full alpha so it remains legible against the faded
@@ -7180,52 +7201,67 @@ begin
   // Viewport culling
   if (AbsY + Box.MarginBoxHeight < 0) or (AbsY > Height) then Exit;
 
-  // Box shadow (painted before background so it appears behind)
-  if Box.Style.BoxShadow.Active then
-    PaintBoxShadow(Canvas, Box, AbsX, AbsY);
+  // Sticky-paint mode gating:
+  //   mode 2 (sticky-only pass) paints box content only when this box is
+  //   sticky; non-sticky boxes are walked purely to reach sticky descendants.
+  //   Mode 0 / 1 always paint self (mode 1 already returned for sticky).
+  var ShouldPaintSelf := (AStickyMode <> 2) or IsSticky;
 
-  // Background
-  PaintBackground(Canvas, Box, AbsX, AbsY);
-
-  // Border
-  PaintBorder(Canvas, Box, AbsX, AbsY);
-
-  // Outline (drawn on top of the border edge; doesn't affect layout)
-  PaintOutline(Canvas, Box, AbsX, AbsY);
-
-  // Record clickable regions for elements with onclick attribute or <a> with href
-  if Assigned(Box.Tag) and (Box.Tag.TagName <> '#text') and
-     ((Box.Tag.GetAttribute('onclick', '') <> '') or
-      ((Box.Tag.TagName = 'a') and (Box.Tag.GetAttribute('href', '') <> ''))) then
+  if ShouldPaintSelf then
   begin
-    var ML := ResolveAutoMargin(Box.Style.Margin.Left);
-    var MT := ResolveAutoMargin(Box.Style.Margin.Top);
-    var Region: TClickableRegion;
-    Region.Tag := Box.Tag;
-    Region.Rect := RectF(
-      AbsX + ML,
-      AbsY + MT,
-      AbsX + ML + Box.Style.BorderWidths.Horz +
-        Box.Style.Padding.Left + Box.ContentWidth + Box.Style.Padding.Right,
-      AbsY + MT + Box.Style.BorderWidths.Vert +
-        Box.Style.Padding.Top + Box.ContentHeight + Box.Style.Padding.Bottom);
-    FClickableRegions.Add(Region);
+    // Box shadow (painted before background so it appears behind)
+    if Box.Style.BoxShadow.Active then
+      PaintBoxShadow(Canvas, Box, AbsX, AbsY);
+
+    // Background
+    PaintBackground(Canvas, Box, AbsX, AbsY);
+
+    // Border
+    PaintBorder(Canvas, Box, AbsX, AbsY);
+
+    // Outline (drawn on top of the border edge; doesn't affect layout)
+    PaintOutline(Canvas, Box, AbsX, AbsY);
+
+    // Record clickable regions for elements with onclick attribute or <a> with href
+    if Assigned(Box.Tag) and (Box.Tag.TagName <> '#text') and
+       ((Box.Tag.GetAttribute('onclick', '') <> '') or
+        ((Box.Tag.TagName = 'a') and (Box.Tag.GetAttribute('href', '') <> ''))) then
+    begin
+      var ML := ResolveAutoMargin(Box.Style.Margin.Left);
+      var MT := ResolveAutoMargin(Box.Style.Margin.Top);
+      var Region: TClickableRegion;
+      Region.Tag := Box.Tag;
+      Region.Rect := RectF(
+        AbsX + ML,
+        AbsY + MT,
+        AbsX + ML + Box.Style.BorderWidths.Horz +
+          Box.Style.Padding.Left + Box.ContentWidth + Box.Style.Padding.Right,
+        AbsY + MT + Box.Style.BorderWidths.Vert +
+          Box.Style.Padding.Top + Box.ContentHeight + Box.Style.Padding.Bottom);
+      FClickableRegions.Add(Region);
+    end;
+
+    // Content-specific rendering
+    case Box.Kind of
+      lbkText:
+        PaintText(Canvas, Box, AbsX, AbsY);
+      lbkImage:
+        PaintImage(Canvas, Box, AbsX + Box.ContentLeft, AbsY + Box.ContentTop);
+      lbkHR:
+        PaintHR(Canvas, Box, AbsX, AbsY);
+      lbkListItem:
+        PaintListMarker(Canvas, Box, AbsX, AbsY);
+      lbkTable:
+        if Box.Style.BorderWidths.Any then
+          PaintTableCellBorders(Canvas, Box, AbsX + Box.ContentLeft, AbsY + Box.ContentTop);
+    end;
   end;
 
-  // Content-specific rendering
-  case Box.Kind of
-    lbkText:
-      PaintText(Canvas, Box, AbsX, AbsY);
-    lbkImage:
-      PaintImage(Canvas, Box, AbsX + Box.ContentLeft, AbsY + Box.ContentTop);
-    lbkHR:
-      PaintHR(Canvas, Box, AbsX, AbsY);
-    lbkListItem:
-      PaintListMarker(Canvas, Box, AbsX, AbsY);
-    lbkTable:
-      if Box.Style.BorderWidths.Any then
-        PaintTableCellBorders(Canvas, Box, AbsX + Box.ContentLeft, AbsY + Box.ContentTop);
-  end;
+  // Mode the recursion uses for *this* box's children. Sticky subtrees
+  // paint normally inside themselves (so their text/icons render once).
+  ChildStickyMode := AStickyMode;
+  if (AStickyMode = 2) and IsSticky then
+    ChildStickyMode := 0;
 
   // Recurse children
   CX := AbsX + Box.ContentLeft;
@@ -7238,6 +7274,12 @@ begin
                         (Box.Style.Overflow = 'auto');
   if HasAnyOverflow then
   begin
+    // In the outer sticky-only pass we don't recurse into nested scroll
+    // containers — each container handles its own sticky descendants
+    // internally via the same two-pass below, and we'd otherwise paint
+    // them twice (the second time outside this container's clip).
+    if (AStickyMode = 2) and (not IsSticky) then Exit;
+
     // If the box is scrollable (auto/scroll), apply its ScrollX/ScrollY
     // offset to the painting of its children. ClampOwnScroll first, so a
     // relayout that shrinks content doesn't leave the scroll past the end.
@@ -7253,13 +7295,17 @@ begin
       FStickyAnchorY := CY;
     try
       Canvas.IntersectClipRect(RectF(CX, CY, CX + Box.ContentWidth, CY + Box.ContentHeight));
-      // Paint non-sticky children first, then sticky on top
+      // Two-pass deep paint:
+      //   pass 1 walks the entire subtree painting everything that is NOT
+      //          sticky (any sticky element + its subtree is skipped),
+      //   pass 2 walks the same subtree painting ONLY sticky elements.
+      // This is what lets a sticky <th> nested four levels deep paint on
+      // top of its <tbody> siblings — the sibling-level segregation that
+      // applied previously couldn't reach across `<thead>` vs `<tbody>`.
       for var Child in Box.Children do
-        if Child.Style.CSSPosition <> 'sticky' then
-          PaintBox(Canvas, Child, CX - Box.ScrollX, CY - Box.ScrollY);
+        PaintBox(Canvas, Child, CX - Box.ScrollX, CY - Box.ScrollY, 1);
       for var Child in Box.Children do
-        if Child.Style.CSSPosition = 'sticky' then
-          PaintBox(Canvas, Child, CX - Box.ScrollX, CY - Box.ScrollY);
+        PaintBox(Canvas, Child, CX - Box.ScrollX, CY - Box.ScrollY, 2);
 
       // text-overflow: ellipsis — paint "..." at right edge when content overflows
       if (Box.Style.TextOverflow = 'ellipsis') and (Box.Style.WhiteSpace = 'nowrap') then
@@ -7314,13 +7360,26 @@ begin
   end
   else
   begin
-    // Paint non-sticky children first, then sticky on top
-    for var Child in Box.Children do
-      if Child.Style.CSSPosition <> 'sticky' then
-        PaintBox(Canvas, Child, CX, CY);
-    for var Child in Box.Children do
-      if Child.Style.CSSPosition = 'sticky' then
-        PaintBox(Canvas, Child, CX, CY);
+    // Non-overflow box: propagate the sticky mode unchanged. Local
+    // sticky-last segregation among direct children is still applied for
+    // mode 0 (the default outer-viewport case), so a sticky child painted
+    // alongside non-sticky siblings stays on top.
+    if ChildStickyMode = 0 then
+    begin
+      for var Child in Box.Children do
+        if Child.Style.CSSPosition <> 'sticky' then
+          PaintBox(Canvas, Child, CX, CY, 0);
+      for var Child in Box.Children do
+        if Child.Style.CSSPosition = 'sticky' then
+          PaintBox(Canvas, Child, CX, CY, 0);
+    end
+    else
+    begin
+      // Mode 1 / 2: just walk children with the same mode — the gating at
+      // the top of PaintBox decides what actually paints.
+      for var Child in Box.Children do
+        PaintBox(Canvas, Child, CX, CY, ChildStickyMode);
+    end;
   end;
 end;
 

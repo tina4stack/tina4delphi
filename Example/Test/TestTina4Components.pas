@@ -63,6 +63,12 @@ type
     procedure TestTablePercentageColumnWidthsRespected;
     procedure TestTablePixelColumnWidthsRespected;
     procedure TestTableUnsizedColumnsShareRemaining;
+    // Bug report repros — every column-width declaration form
+    procedure TestBugReportHtml4WidthAttribute;
+    procedure TestBugReportInlineStyleWidth;
+    procedure TestBugReportColgroupColWidth;
+    procedure TestBugReportColgroupColWidthPercentage;
+    procedure TestBugReportColSpanAttribute;
   end;
 
 implementation
@@ -1098,6 +1104,195 @@ begin
     Check(Abs(Sized.ContentWidth - 200) < 2, Format('sized=%.1f, expected ~200', [Sized.ContentWidth]));
     Check(Abs(U1.ContentWidth -    100) < 2, Format('u1=%.1f, expected ~100',    [U1.ContentWidth]));
     Check(Abs(U2.ContentWidth -    100) < 2, Format('u2=%.1f, expected ~100',    [U2.ContentWidth]));
+  finally
+    Engine.Free;
+    Parser.Free;
+  end;
+end;
+
+// ---------------------------------------------------------------------------
+// Bug-report regression tests — verbatim repros from
+// D:\projects\cuttlefishmobile\TINA4_BUG_TABLE_COLUMN_WIDTHS.md
+// ---------------------------------------------------------------------------
+
+procedure TestTTina4Components.TestBugReportHtml4WidthAttribute;
+var
+  Parser: Tina4HtmlRender.THTMLParser;
+  Engine: Tina4HtmlRender.TLayoutEngine;
+  T1, T2, T3, T4: Tina4HtmlRender.TLayoutBox;
+begin
+  Parser := Tina4HtmlRender.THTMLParser.Create;
+  Engine := Tina4HtmlRender.TLayoutEngine.Create(nil);
+  try
+    // Bug report case 3: <th width="520"> — declared "WORKS" before, must
+    // still work after the fix.
+    RunLayout(Parser, Engine,
+      '<table style="width:720px"><tr>' +
+      '  <th id="d" width="520">D</th>' +
+      '  <th id="q" width="36">Q</th>' +
+      '  <th id="a" width="78">A</th>' +
+      '  <th id="t" width="84">T</th>' +
+      '</tr></table>', 720);
+
+    T1 := FindBoxById(Engine.Root, 'd');
+    T2 := FindBoxById(Engine.Root, 'q');
+    T3 := FindBoxById(Engine.Root, 'a');
+    T4 := FindBoxById(Engine.Root, 't');
+    Check(Assigned(T1) and Assigned(T2) and Assigned(T3) and Assigned(T4),
+      'all four cells must exist');
+
+    // 520+36+78+84 = 718 → scaled to fill 720. Each cell's content width
+    // is the column width minus its own 8px (4+4) default <th> padding.
+    Check(Abs(T1.ContentWidth + 8 - 521.4) < 2,
+      Format('description content width = %.1f', [T1.ContentWidth]));
+    Check(Abs(T2.ContentWidth + 8 -  36.1) < 2,
+      Format('qty content width = %.1f', [T2.ContentWidth]));
+  finally
+    Engine.Free;
+    Parser.Free;
+  end;
+end;
+
+procedure TestTTina4Components.TestBugReportInlineStyleWidth;
+var
+  Parser: Tina4HtmlRender.THTMLParser;
+  Engine: Tina4HtmlRender.TLayoutEngine;
+  T1, T2: Tina4HtmlRender.TLayoutBox;
+begin
+  Parser := Tina4HtmlRender.THTMLParser.Create;
+  Engine := Tina4HtmlRender.TLayoutEngine.Create(nil);
+  try
+    // Bug report case 2: style="width:520px" — declared broken before
+    // f35d857. After the fix, must lay out the same as the HTML4 attribute.
+    RunLayout(Parser, Engine,
+      '<table style="width:720px"><tr>' +
+      '  <th id="d" style="width:520px">D</th>' +
+      '  <th id="q" style="width:36px">Q</th>' +
+      '  <th id="a" style="width:78px">A</th>' +
+      '  <th id="t" style="width:84px">T</th>' +
+      '</tr></table>', 720);
+
+    T1 := FindBoxById(Engine.Root, 'd');
+    T2 := FindBoxById(Engine.Root, 'q');
+    Check(Assigned(T1) and Assigned(T2), 'cells must exist');
+
+    // First column should get its declared 520px share (-padding -scaling).
+    // Big check: it must NOT have collapsed to "Description" header text width.
+    Check(T1.ContentWidth > 400,
+      Format('inline style width must claim wide column, got %.1f', [T1.ContentWidth]));
+    Check(T2.ContentWidth < 60,
+      Format('qty must stay narrow, got %.1f', [T2.ContentWidth]));
+  finally
+    Engine.Free;
+    Parser.Free;
+  end;
+end;
+
+procedure TestTTina4Components.TestBugReportColgroupColWidth;
+var
+  Parser: Tina4HtmlRender.THTMLParser;
+  Engine: Tina4HtmlRender.TLayoutEngine;
+  C1, C2: Tina4HtmlRender.TLayoutBox;
+begin
+  Parser := Tina4HtmlRender.THTMLParser.Create;
+  Engine := Tina4HtmlRender.TLayoutEngine.Create(nil);
+  try
+    // Bug report case 1: <colgroup><col style="width:..."> — declared
+    // "silently dropped" before. Must now apply column widths from <col>.
+    RunLayout(Parser, Engine,
+      '<table style="width:720px">' +
+      '  <colgroup>' +
+      '    <col style="width:520px">' +
+      '    <col style="width:200px">' +
+      '  </colgroup>' +
+      '  <tr><th id="c1" style="padding:0">D</th><th id="c2" style="padding:0">Q</th></tr>' +
+      '</table>', 720);
+
+    C1 := FindBoxById(Engine.Root, 'c1');
+    C2 := FindBoxById(Engine.Root, 'c2');
+    Check(Assigned(C1) and Assigned(C2), 'cells must exist');
+
+    Check(Abs(C1.ContentWidth - 520) < 2,
+      Format('colgroup col 520px: got %.1f', [C1.ContentWidth]));
+    Check(Abs(C2.ContentWidth - 200) < 2,
+      Format('colgroup col 200px: got %.1f', [C2.ContentWidth]));
+  finally
+    Engine.Free;
+    Parser.Free;
+  end;
+end;
+
+procedure TestTTina4Components.TestBugReportColgroupColWidthPercentage;
+var
+  Parser: Tina4HtmlRender.THTMLParser;
+  Engine: Tina4HtmlRender.TLayoutEngine;
+  C1, C2, C3, C4: Tina4HtmlRender.TLayoutBox;
+begin
+  Parser := Tina4HtmlRender.THTMLParser.Create;
+  Engine := Tina4HtmlRender.TLayoutEngine.Create(nil);
+  try
+    RunLayout(Parser, Engine,
+      '<table style="width:720px">' +
+      '  <colgroup>' +
+      '    <col style="width:68%">' +
+      '    <col style="width:5%">' +
+      '    <col style="width:13%">' +
+      '    <col style="width:14%">' +
+      '  </colgroup>' +
+      '  <tr>' +
+      '    <th id="d" style="padding:0">Description</th>' +
+      '    <th id="q" style="padding:0">Qty</th>' +
+      '    <th id="a" style="padding:0">Amount</th>' +
+      '    <th id="t" style="padding:0">Total</th>' +
+      '  </tr></table>', 720);
+
+    C1 := FindBoxById(Engine.Root, 'd');
+    C2 := FindBoxById(Engine.Root, 'q');
+    C3 := FindBoxById(Engine.Root, 'a');
+    C4 := FindBoxById(Engine.Root, 't');
+    Check(Assigned(C1) and Assigned(C2) and Assigned(C3) and Assigned(C4), 'cells exist');
+
+    Check(Abs(C1.ContentWidth - 489.6) < 2,
+      Format('68%% of 720 ≈ 489.6, got %.1f', [C1.ContentWidth]));
+    Check(Abs(C2.ContentWidth -  36)   < 2,
+      Format(' 5%% of 720 = 36, got %.1f', [C2.ContentWidth]));
+    Check(Abs(C3.ContentWidth -  93.6) < 2,
+      Format('13%% of 720 ≈ 93.6, got %.1f', [C3.ContentWidth]));
+    Check(Abs(C4.ContentWidth - 100.8) < 2,
+      Format('14%% of 720 ≈ 100.8, got %.1f', [C4.ContentWidth]));
+  finally
+    Engine.Free;
+    Parser.Free;
+  end;
+end;
+
+procedure TestTTina4Components.TestBugReportColSpanAttribute;
+var
+  Parser: Tina4HtmlRender.THTMLParser;
+  Engine: Tina4HtmlRender.TLayoutEngine;
+  C1, C2, C3: Tina4HtmlRender.TLayoutBox;
+begin
+  Parser := Tina4HtmlRender.THTMLParser.Create;
+  Engine := Tina4HtmlRender.TLayoutEngine.Create(nil);
+  try
+    // <col span="2"> applies the same width to two columns.
+    RunLayout(Parser, Engine,
+      '<table style="width:600px">' +
+      '  <col span="2" style="width:100px">' +
+      '  <col style="width:400px">' +
+      '  <tr><th id="a" style="padding:0">A</th>' +
+      '      <th id="b" style="padding:0">B</th>' +
+      '      <th id="c" style="padding:0">C</th></tr>' +
+      '</table>', 600);
+
+    C1 := FindBoxById(Engine.Root, 'a');
+    C2 := FindBoxById(Engine.Root, 'b');
+    C3 := FindBoxById(Engine.Root, 'c');
+    Check(Assigned(C1) and Assigned(C2) and Assigned(C3), 'cells exist');
+
+    Check(Abs(C1.ContentWidth - 100) < 2, Format('span col 0 = %.1f', [C1.ContentWidth]));
+    Check(Abs(C2.ContentWidth - 100) < 2, Format('span col 1 = %.1f', [C2.ContentWidth]));
+    Check(Abs(C3.ContentWidth - 400) < 2, Format('lone col = %.1f',  [C3.ContentWidth]));
   finally
     Engine.Free;
     Parser.Free;

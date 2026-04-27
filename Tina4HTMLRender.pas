@@ -4460,18 +4460,64 @@ begin
     var AvailForCols := TableContentW;
     if AvailForCols < 0 then AvailForCols := 0;
 
-    // Column widths: walk every row and pull explicit widths from cells.
-    // Percentages resolve against the table's content width (matching the
-    // browser's `table-layout: fixed` model, which is what we implement
-    // — Tina4 doesn't do content-aware auto sizing). The first cell that
-    // declares a width per column wins; remaining unsized columns share
-    // whatever space is left equally. Cells with colspan > 1 do not
-    // contribute their width to a single column (we don't know how to
-    // split it correctly without auto sizing).
+    // Column widths: read declarations in priority order
+    //   1. <colgroup>/<col> children of the table (highest — CSS spec)
+    //   2. First cell in each column to declare a width via
+    //      `style="width:..."`, `width="..."` HTML attr, or any CSS rule
+    //      (all flow through Cell.Style.ExplicitWidth)
+    //   3. Equal share of whatever space remains
+    // Percentages resolve against the table's content width. We implement
+    // the browser's `table-layout: fixed` model — no content-aware auto
+    // sizing.
     SetLength(ColWidths, NumCols);
     for var I := 0 to NumCols - 1 do
       ColWidths[I] := -1;  // -1 = not yet assigned
 
+    // Pass 1: <colgroup>/<col> on the source DOM. <col> is a void element
+    // and never appears in the layout box tree as a table-cell — we have
+    // to walk Box.Tag directly. Both forms are supported:
+    //   <table><col style="width:50%"><col style="width:50%">...</table>
+    //   <table><colgroup><col span="2" width="100"/></colgroup>...</table>
+    if Assigned(Box.Tag) then
+    begin
+      var ColAccumIdx := 0;
+      var WalkColTags: TProc<THTMLTag>;
+      WalkColTags := procedure(ParentTag: THTMLTag)
+      begin
+        if ParentTag = nil then Exit;
+        for var SubTag in ParentTag.Children do
+        begin
+          if SameText(SubTag.TagName, 'colgroup') then
+            WalkColTags(SubTag)
+          else if SameText(SubTag.TagName, 'col') then
+          begin
+            var Span := StrToIntDef(SubTag.GetAttribute('span', '1'), 1);
+            if Span < 1 then Span := 1;
+            // Compute the col's style — picks up `style="width:..."`,
+            // `width="..."` HTML attr, and any CSS rule targeting <col>.
+            var ColStyle := TComputedStyle.ForTag(SubTag, Box.Style, FStyleSheet);
+            var ColW := ColStyle.ExplicitWidth;
+            var Resolved: Single := -1;
+            if IsPercentageValue(ColW) then
+              Resolved := ResolvePercentage(ColW, AvailForCols)
+            else if ColW > 0 then
+              Resolved := ColW;
+            for var SI := 0 to Span - 1 do
+            begin
+              if ColAccumIdx >= NumCols then Break;
+              if (Resolved >= 0) and (ColWidths[ColAccumIdx] < 0) then
+                ColWidths[ColAccumIdx] := Resolved;
+              Inc(ColAccumIdx);
+            end;
+          end;
+        end;
+      end;
+      WalkColTags(Box.Tag);
+    end;
+
+    // Pass 2: per-cell declarations from any row. First decl per column
+    // wins. Cells with colspan > 1 don't contribute (would need
+    // content-aware splitting we don't implement).
     for var Row in Rows do
     begin
       var ColIdxScan := 0;

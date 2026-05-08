@@ -488,6 +488,7 @@ type
     FDebugLastMouseX, FDebugLastMouseY: Single;
     FDebugMouseHit: Boolean;
     FDebugOverlay: Boolean;
+    FDebugBoxOverlay: Boolean;
     // Scrollbar fade — scrollbars are fully visible for a short window after
     // any scroll activity, then fade out. Mobile-friendly default so bars
     // don't clutter the content when idle. FScrollbarLastActivity is a tick
@@ -582,6 +583,7 @@ type
     procedure PaintBackground(Canvas: TCanvas; Box: TLayoutBox; X, Y: Single);
     procedure PaintBorder(Canvas: TCanvas; Box: TLayoutBox; X, Y: Single);
     procedure PaintOutline(Canvas: TCanvas; Box: TLayoutBox; X, Y: Single);
+    procedure PaintBoxOverlay(Canvas: TCanvas; Box: TLayoutBox; OffX, OffY: Single);
     procedure BuildRoundedRectPath(Path: TPathData; const R: TRectF;
       RTL, RTR, RBR, RBL: Single);
     procedure FillRoundedRect(Canvas: TCanvas; const R: TRectF;
@@ -869,6 +871,13 @@ type
     /// <summary>When True, shows a red dot at the last MouseDown position and
     /// debug info (Width, Height, ContentHeight, pan state). Off by default.</summary>
     property DebugOverlay: Boolean read FDebugOverlay write FDebugOverlay default False;
+    /// <summary>
+    /// When True, paints a translucent box-model overlay on every laid-out
+    /// box: blue border outline, green padding band, orange margin band.
+    /// Triggers a full repaint on toggle. Cheap force-multiplier when
+    /// debugging "why is this 122px instead of 100px" puzzles.
+    /// </summary>
+    property DebugBoxOverlay: Boolean read FDebugBoxOverlay write FDebugBoxOverlay default False;
     property Align;
     property Anchors;
     property ClipChildren;
@@ -5676,6 +5685,7 @@ begin
   FScrollBarsVisible := True;
   FScrollBarOverlay := False;
   FDebugOverlay := False;
+  FDebugBoxOverlay := False;
   FScrollbarLastActivity := 0;
   FScrollbarFadeTimer := TTimer.Create(Self);
   FScrollbarFadeTimer.Interval := 33;  // ~30 fps while fading
@@ -7975,6 +7985,12 @@ begin
     if Assigned(FLayoutEngine.Root) then
       PaintBox(Canvas, FLayoutEngine.Root, -FScrollX, -FScrollY);
 
+    // Box-model overlay — orange margin band, green padding band, blue
+    // content outline. Useful for "why is this box 122px instead of 100"
+    // diagnoses without firing up a Delphi debugger.
+    if FDebugBoxOverlay and Assigned(FLayoutEngine.Root) then
+      PaintBoxOverlay(Canvas, FLayoutEngine.Root, -FScrollX, -FScrollY);
+
     // Scrollbar
     if ScrollBarVisible then
       PaintScrollBar(Canvas);
@@ -8913,6 +8929,79 @@ begin
       Canvas.DrawLine(PointF(LX + BW.Left / 2, TY), PointF(LX + BW.Left / 2, BY), 1.0);
     end;
   end;
+end;
+
+procedure TTina4HTMLRender.PaintBoxOverlay(Canvas: TCanvas; Box: TLayoutBox;
+  OffX, OffY: Single);
+// Translucent box-model overlay. Walks the same tree as PaintBox but paints
+// only diagnostic strokes. Margin = orange band, padding = green band,
+// content = thin blue rectangle. Skips display:none and zero-size boxes.
+var
+  AbsX, AbsY: Single;
+  ML, MT: Single;
+  BorderL, BorderT, BorderR, BorderB: Single;
+  PadL, PadT, PadR, PadB: Single;
+  CW, CH: Single;
+begin
+  if Box.Style.Display = 'none' then Exit;
+  if Box.Style.Visibility = 'hidden' then Exit;
+
+  AbsX := OffX + Box.X;
+  AbsY := OffY + Box.Y;
+  ML := ResolveAutoMargin(Box.Style.Margin.Left);
+  MT := ResolveAutoMargin(Box.Style.Margin.Top);
+  BorderL := Box.Style.BorderWidths.Left;
+  BorderT := Box.Style.BorderWidths.Top;
+  BorderR := Box.Style.BorderWidths.Right;
+  BorderB := Box.Style.BorderWidths.Bottom;
+  PadL := Box.Style.Padding.Left;
+  PadT := Box.Style.Padding.Top;
+  PadR := Box.Style.Padding.Right;
+  PadB := Box.Style.Padding.Bottom;
+  CW := Box.ContentWidth;
+  CH := Box.ContentHeight;
+
+  if (CW > 0) or (CH > 0) then
+  begin
+    // Margin band — orange, very translucent
+    Canvas.Fill.Kind := TBrushKind.Solid;
+    Canvas.Fill.Color := $30FFA500;  // alpha=0x30 over orange
+    Canvas.FillRect(RectF(AbsX, AbsY,
+      AbsX + ML + BorderL + PadL + CW + PadR + BorderR + ResolveAutoMargin(Box.Style.Margin.Right),
+      AbsY + MT + BorderT + PadT + CH + PadB + BorderB + ResolveAutoMargin(Box.Style.Margin.Bottom)),
+      1.0);
+
+    // Padding band — green
+    Canvas.Fill.Color := $3000FF00;
+    Canvas.FillRect(RectF(
+      AbsX + ML + BorderL,
+      AbsY + MT + BorderT,
+      AbsX + ML + BorderL + PadL + CW + PadR,
+      AbsY + MT + BorderT + PadT + CH + PadB), 1.0);
+
+    // Content outline — solid blue 1px stroke
+    Canvas.Stroke.Kind := TBrushKind.Solid;
+    Canvas.Stroke.Color := TAlphaColors.Blue;
+    Canvas.Stroke.Thickness := 1;
+    Canvas.Stroke.Dash := TStrokeDash.Solid;
+    Canvas.DrawRect(RectF(
+      AbsX + ML + BorderL + PadL,
+      AbsY + MT + BorderT + PadT,
+      AbsX + ML + BorderL + PadL + CW,
+      AbsY + MT + BorderT + PadT + CH), 0, 0, AllCorners, 1.0);
+  end;
+
+  // Recurse into children, applying scroll offsets the same way PaintBox does.
+  var CX := AbsX + Box.ContentLeft;
+  var CY := AbsY + Box.ContentTop;
+  var ScrX: Single := 0; var ScrY: Single := 0;
+  if (Box.Style.OverflowY = 'auto') or (Box.Style.OverflowY = 'scroll') or
+     (Box.Style.Overflow  = 'auto') or (Box.Style.Overflow  = 'scroll') then
+  begin
+    ScrX := Box.ScrollX; ScrY := Box.ScrollY;
+  end;
+  for var Child in Box.Children do
+    PaintBoxOverlay(Canvas, Child, CX - ScrX, CY - ScrY);
 end;
 
 procedure TTina4HTMLRender.PaintOutline(Canvas: TCanvas; Box: TLayoutBox; X, Y: Single);

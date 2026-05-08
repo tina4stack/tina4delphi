@@ -100,6 +100,12 @@ type
     procedure TestFlexGapBetweenItems;
     procedure TestFlexColumnDirectionStacksVertically;
     procedure TestFlexShorthandOneSetsGrowShrinkBasis;
+    // CSS position (absolute / fixed / relative)
+    procedure TestPositionAbsoluteOutOfFlowSiblingsUnaffected;
+    procedure TestPositionAbsoluteTopLeftAnchored;
+    procedure TestPositionAbsoluteRightBottomAnchored;
+    procedure TestPositionAbsoluteLeftAndRightDerivesWidth;
+    procedure TestPositionRelativeShiftsButLeavesSiblings;
   end;
 
 implementation
@@ -2168,6 +2174,146 @@ begin
       Format('A=150, got %.1f', [A.MarginBoxWidth]));
     Check(Abs(B.MarginBoxWidth - 150) < 2,
       Format('B=150, got %.1f', [B.MarginBoxWidth]));
+  finally
+    Engine.Free;
+    Parser.Free;
+  end;
+end;
+
+// ---------------------------------------------------------------------------
+// CSS position (absolute / fixed / relative)
+// ---------------------------------------------------------------------------
+
+procedure TestTTina4Components.TestPositionAbsoluteOutOfFlowSiblingsUnaffected;
+var
+  Parser: Tina4HtmlRender.THTMLParser;
+  Engine: Tina4HtmlRender.TLayoutEngine;
+  P, A, B: Tina4HtmlRender.TLayoutBox;
+begin
+  Parser := Tina4HtmlRender.THTMLParser.Create;
+  Engine := Tina4HtmlRender.TLayoutEngine.Create(nil);
+  try
+    // Two siblings: A is absolutely positioned, B follows in normal flow.
+    // The parent's content height should reflect ONLY B (since A is
+    // out-of-flow). B's Y is 0, not below A.
+    RunLayout(Parser, Engine,
+      '<div id="p" style="width:200px; padding:0">' +
+      '  <div id="a" style="position:absolute; top:10px; left:20px; width:50px; height:50px; padding:0">A</div>' +
+      '  <div id="b" style="height:30px; padding:0">B</div>' +
+      '</div>', 400);
+
+    P := FindBoxById(Engine.Root, 'p');
+    A := FindBoxById(Engine.Root, 'a');
+    B := FindBoxById(Engine.Root, 'b');
+    Check(Assigned(P) and Assigned(A) and Assigned(B), 'boxes must exist');
+    Check(Abs(B.Y) < 1, Format('B should sit at Y=0 (A is out of flow), got %.1f', [B.Y]));
+    Check(Abs(P.ContentHeight - 30) < 2,
+      Format('parent height should reflect only B (30), got %.1f', [P.ContentHeight]));
+  finally
+    Engine.Free;
+    Parser.Free;
+  end;
+end;
+
+procedure TestTTina4Components.TestPositionAbsoluteTopLeftAnchored;
+var
+  Parser: Tina4HtmlRender.THTMLParser;
+  Engine: Tina4HtmlRender.TLayoutEngine;
+  A: Tina4HtmlRender.TLayoutBox;
+begin
+  Parser := Tina4HtmlRender.THTMLParser.Create;
+  Engine := Tina4HtmlRender.TLayoutEngine.Create(nil);
+  try
+    RunLayout(Parser, Engine,
+      '<div style="width:200px; height:100px; padding:0">' +
+      '  <div id="a" style="position:absolute; top:10px; left:20px; width:50px; height:30px; padding:0">A</div>' +
+      '</div>', 400);
+    A := FindBoxById(Engine.Root, 'a');
+    Check(Assigned(A), 'A exists');
+    Check(Abs(A.X - 20) < 1, Format('A.X should be left:20, got %.1f', [A.X]));
+    Check(Abs(A.Y - 10) < 1, Format('A.Y should be top:10, got %.1f', [A.Y]));
+  finally
+    Engine.Free;
+    Parser.Free;
+  end;
+end;
+
+procedure TestTTina4Components.TestPositionAbsoluteRightBottomAnchored;
+var
+  Parser: Tina4HtmlRender.THTMLParser;
+  Engine: Tina4HtmlRender.TLayoutEngine;
+  A: Tina4HtmlRender.TLayoutBox;
+begin
+  Parser := Tina4HtmlRender.THTMLParser.Create;
+  Engine := Tina4HtmlRender.TLayoutEngine.Create(nil);
+  try
+    // Container 200x100, item 50x30 anchored right:5 bottom:8
+    // Expected X = 200 - 50 - 5 = 145, Y = 100 - 30 - 8 = 62.
+    RunLayout(Parser, Engine,
+      '<div style="width:200px; height:100px; padding:0">' +
+      '  <div id="a" style="position:absolute; right:5px; bottom:8px; width:50px; height:30px; padding:0">A</div>' +
+      '</div>', 400);
+    A := FindBoxById(Engine.Root, 'a');
+    Check(Assigned(A), 'A exists');
+    Check(Abs(A.X - 145) < 2, Format('A.X expected 145, got %.1f', [A.X]));
+    Check(Abs(A.Y - 62) < 2, Format('A.Y expected 62, got %.1f', [A.Y]));
+  finally
+    Engine.Free;
+    Parser.Free;
+  end;
+end;
+
+procedure TestTTina4Components.TestPositionAbsoluteLeftAndRightDerivesWidth;
+var
+  Parser: Tina4HtmlRender.THTMLParser;
+  Engine: Tina4HtmlRender.TLayoutEngine;
+  A: Tina4HtmlRender.TLayoutBox;
+begin
+  Parser := Tina4HtmlRender.THTMLParser.Create;
+  Engine := Tina4HtmlRender.TLayoutEngine.Create(nil);
+  try
+    // left:10 + right:20 in a 200px container → derived width 170.
+    RunLayout(Parser, Engine,
+      '<div style="width:200px; padding:0">' +
+      '  <div id="a" style="position:absolute; left:10px; right:20px; height:30px; padding:0">A</div>' +
+      '</div>', 400);
+    A := FindBoxById(Engine.Root, 'a');
+    Check(Assigned(A), 'A exists');
+    Check(Abs(A.ContentWidth - 170) < 2,
+      Format('width derived from left+right: expected 170, got %.1f', [A.ContentWidth]));
+    Check(Abs(A.X - 10) < 1, Format('A.X = left:10, got %.1f', [A.X]));
+  finally
+    Engine.Free;
+    Parser.Free;
+  end;
+end;
+
+procedure TestTTina4Components.TestPositionRelativeShiftsButLeavesSiblings;
+var
+  Parser: Tina4HtmlRender.THTMLParser;
+  Engine: Tina4HtmlRender.TLayoutEngine;
+  A, B: Tina4HtmlRender.TLayoutBox;
+begin
+  Parser := Tina4HtmlRender.THTMLParser.Create;
+  Engine := Tina4HtmlRender.TLayoutEngine.Create(nil);
+  try
+    // A: relative, top:5; B: in normal flow underneath.
+    // A's box stays at Y=0 (siblings see it there), only its paint shifts.
+    // We can't test paint coords easily — but B.Y must remain 30 (A's
+    // pre-relative height) regardless of A's CSSTop.
+    RunLayout(Parser, Engine,
+      '<div style="padding:0">' +
+      '  <div id="a" style="position:relative; top:5px; height:30px; padding:0">A</div>' +
+      '  <div id="b" style="height:20px; padding:0">B</div>' +
+      '</div>', 400);
+
+    A := FindBoxById(Engine.Root, 'a');
+    B := FindBoxById(Engine.Root, 'b');
+    Check(Assigned(A) and Assigned(B), 'boxes exist');
+    Check(Abs(A.Y) < 1,
+      Format('A is in flow, layout Y stays 0 (relative is paint-only), got %.1f', [A.Y]));
+    Check(Abs(B.Y - 30) < 1,
+      Format('B.Y should be 30 (after A''s 30px height), got %.1f', [B.Y]));
   finally
     Engine.Free;
     Parser.Free;

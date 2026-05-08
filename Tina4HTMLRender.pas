@@ -353,6 +353,7 @@ type
     procedure LayoutInlineChildren(Box: TLayoutBox; AvailWidth: Single);
     procedure LayoutTable(Box: TLayoutBox; AvailWidth: Single);
     procedure LayoutFlex(Box: TLayoutBox; AvailWidth: Single);
+    procedure LayoutAbsoluteChildren(Box: TLayoutBox);
     procedure LayoutListItem(Box: TLayoutBox; AvailWidth: Single);
     procedure LayoutImage(Box: TLayoutBox; AvailWidth: Single);
     procedure LayoutFormControl(Box: TLayoutBox; AvailWidth: Single);
@@ -3793,6 +3794,7 @@ begin
     end;
     Box.ScrollWidth := Box.ContentWidth;
     Box.ScrollHeight := Box.ContentHeight;
+    LayoutAbsoluteChildren(Box);
     Exit;
   end;
 
@@ -3908,6 +3910,13 @@ begin
 
     for var Child in Box.Children do
     begin
+      // Absolutely-positioned and fixed children are out-of-flow — defer
+      // layout until after the in-flow cursor has settled (we lay them
+      // out below using the parent's final ContentWidth/Height).
+      if (Child.Style.CSSPosition = 'absolute') or
+         (Child.Style.CSSPosition = 'fixed') then
+        Continue;
+
       var FloatKind := Child.Style.CSSFloat;
       var IsFloat := (FloatKind = 'left') or (FloatKind = 'right');
 
@@ -4113,6 +4122,10 @@ begin
     Box.ScrollHeight := Box.ContentHeight;
   if not Box.IsScrollableX then
     Box.ScrollWidth := Box.ContentWidth;
+
+  // Position any absolute / fixed children now that the containing block
+  // (this Box) has its final ContentWidth + ContentHeight.
+  LayoutAbsoluteChildren(Box);
 end;
 
 procedure TLayoutEngine.LayoutInlineChildren(Box: TLayoutBox; AvailWidth: Single);
@@ -5042,10 +5055,14 @@ begin
   Items := TList<TLayoutBox>.Create;
   try
     // Collect flex items. Skip floats (taken out of flow), display:none
-    // children (already filtered upstream), and empty whitespace text.
+    // children (already filtered upstream), absolute/fixed positioned
+    // children (laid out separately by LayoutAbsoluteChildren), and
+    // empty whitespace text.
     for var Child in Box.Children do
     begin
       if Child.Style.CSSFloat <> 'none' then Continue;
+      if (Child.Style.CSSPosition = 'absolute') or
+         (Child.Style.CSSPosition = 'fixed') then Continue;
       if (Child.Kind = lbkText) and Assigned(Child.Tag) and
          (Child.Tag.Text.Trim = '') then Continue;
       Items.Add(Child);
@@ -5250,6 +5267,72 @@ begin
     else Box.ContentWidth := CrossSize;
   finally
     Items.Free;
+  end;
+end;
+
+procedure TLayoutEngine.LayoutAbsoluteChildren(Box: TLayoutBox);
+// Position any absolute / fixed descendants of Box that haven't been laid
+// out yet. The containing block (the rectangle their `top/left/right/bottom`
+// resolve against) is THIS Box's content area. Real CSS uses the nearest
+// positioned ancestor — for the renderer's needs we treat the immediate
+// parent as the containing block, which covers the common cases (badge in
+// corner of a card, tooltip pinned to button) and stays explicit.
+//
+// Called from LayoutBlock and LayoutFlex after the in-flow cursor has
+// settled and ContentHeight is finalised, so left+right / top+bottom can
+// resolve against a known containing-block size.
+var
+  CW, CH: Single;
+begin
+  CW := Box.ContentWidth;
+  CH := Box.ContentHeight;
+  for var Child in Box.Children do
+  begin
+    if (Child.Style.CSSPosition <> 'absolute') and
+       (Child.Style.CSSPosition <> 'fixed') then Continue;
+
+    // If both `left` and `right` are set the width is derived (CSS spec).
+    var DerivedW: Single := -1;
+    if (Child.Style.CSSLeft > -9990) and (Child.Style.CSSRight > -9990) and
+       (Child.Style.ExplicitWidth <= 0) then
+    begin
+      DerivedW := CW - Child.Style.CSSLeft - Child.Style.CSSRight;
+      if DerivedW < 0 then DerivedW := 0;
+      Child.Style.ExplicitWidth := DerivedW;
+    end;
+
+    // Lay out the child at the containing-block width.
+    case Child.Kind of
+      lbkBlock, lbkInlineBlock: LayoutBlock(Child, CW);
+      lbkTable: LayoutTable(Child, CW);
+      lbkImage: LayoutImage(Child, CW);
+      lbkListItem: LayoutListItem(Child, CW);
+      lbkFormControl: LayoutFormControl(Child, CW);
+      lbkHR: LayoutHR(Child, CW);
+    else
+      LayoutBlock(Child, CW);
+    end;
+
+    // Resolve X.
+    if Child.Style.CSSLeft > -9990 then
+      Child.X := Child.Style.CSSLeft
+    else if Child.Style.CSSRight > -9990 then
+      Child.X := CW - Child.MarginBoxWidth - Child.Style.CSSRight
+    else
+      Child.X := 0;
+
+    // Resolve Y. left+bottom-anchored boxes count from the containing
+    // block's height; if no anchor is set, sit at top of containing block.
+    if Child.Style.CSSTop > -9990 then
+      Child.Y := Child.Style.CSSTop
+    else if Child.Style.CSSBottom > -9990 then
+      Child.Y := CH - Child.MarginBoxHeight - Child.Style.CSSBottom
+    else
+      Child.Y := 0;
+
+    // Recurse into descendants so a nested absolute element inside our
+    // absolute child also gets resolved against its own parent.
+    LayoutAbsoluteChildren(Child);
   end;
 end;
 
@@ -7845,6 +7928,27 @@ begin
   AbsX := OffX + Box.X;
   AbsY := OffY + Box.Y;
 
+  // position: relative — shift the element by top/left (or bottom/right)
+  // without removing it from normal flow. Siblings still see it at its
+  // pre-shift position; only the painted location changes.
+  if Box.Style.CSSPosition = 'relative' then
+  begin
+    if Box.Style.CSSLeft > -9990 then AbsX := AbsX + Box.Style.CSSLeft
+    else if Box.Style.CSSRight > -9990 then AbsX := AbsX - Box.Style.CSSRight;
+    if Box.Style.CSSTop > -9990 then AbsY := AbsY + Box.Style.CSSTop
+    else if Box.Style.CSSBottom > -9990 then AbsY := AbsY - Box.Style.CSSBottom;
+  end;
+
+  // position: fixed — pin to the viewport regardless of any ancestor
+  // scroll. The very first PaintBox call shifts by -FScrollX/-FScrollY
+  // so we cancel that out by using Box.X/Y directly (which were already
+  // resolved against the containing block during LayoutAbsoluteChildren).
+  if Box.Style.CSSPosition = 'fixed' then
+  begin
+    AbsX := Box.X;
+    AbsY := Box.Y;
+  end;
+
   // Sticky positioning: pin to the nearest scroll-ancestor's content edges
   // (FStickyAnchorX/Y, in absolute paint coordinates) plus the element's
   // `top` / `left` offsets. Both axes are independent — a sticky cell in a
@@ -8039,12 +8143,24 @@ begin
     // alongside non-sticky siblings stays on top.
     if ChildStickyMode = 0 then
     begin
+      // Pass 1: in-flow / static children only.
       for var Child in Box.Children do
-        if Child.Style.CSSPosition <> 'sticky' then
+      begin
+        var P := Child.Style.CSSPosition;
+        if (P = '') or (P = 'static') then
           PaintBox(Canvas, Child, CX, CY, 0);
+      end;
+      // Pass 2: any positioned child (relative / absolute / fixed / sticky)
+      // paints on top — gives positioned elements an implicit z-index lift,
+      // matching browsers' default stacking-context behaviour without our
+      // having to track z-index numerically.
       for var Child in Box.Children do
-        if Child.Style.CSSPosition = 'sticky' then
+      begin
+        var P := Child.Style.CSSPosition;
+        if (P = 'relative') or (P = 'absolute') or
+           (P = 'fixed') or (P = 'sticky') then
           PaintBox(Canvas, Child, CX, CY, 0);
+      end;
     end
     else
     begin

@@ -110,6 +110,11 @@ type
     procedure TestHoverPseudoClassAppliesWhenFlagSet;
     procedure TestActivePseudoClassAppliesWhenFlagSet;
     procedure TestPseudoClassNotMatchingDoesNotApply;
+    // Polish bundle: text-shadow / background-position / background-repeat / linear-gradient
+    procedure TestTextShadowParsed;
+    procedure TestBackgroundPositionKeywordsParsed;
+    procedure TestBackgroundRepeatParsed;
+    procedure TestLinearGradientFromBackgroundShorthand;
   end;
 
 implementation
@@ -2422,6 +2427,114 @@ begin
     end;
   finally
     StyleSheet.Free;
+    Parser.Free;
+  end;
+end;
+
+// ---------------------------------------------------------------------------
+// Polish bundle: text-shadow / background-position / background-repeat /
+// linear-gradient. We can't easily assert painted pixels in DUnit, so these
+// tests verify that the parser captures the values correctly into
+// Style.* fields. The paint code reads those fields verbatim.
+// ---------------------------------------------------------------------------
+
+procedure TestTTina4Components.TestTextShadowParsed;
+var
+  Parser: Tina4HtmlRender.THTMLParser;
+  Engine: Tina4HtmlRender.TLayoutEngine;
+  D: Tina4HtmlRender.TLayoutBox;
+begin
+  Parser := Tina4HtmlRender.THTMLParser.Create;
+  Engine := Tina4HtmlRender.TLayoutEngine.Create(nil);
+  try
+    RunLayout(Parser, Engine,
+      '<div id="d" style="text-shadow: 2px 3px 1px black">x</div>', 400);
+    D := FindBoxById(Engine.Root, 'd');
+    Check(D.Style.TextShadowActive, 'text-shadow active');
+    CheckEquals(2, D.Style.TextShadowOffsetX, 'OffsetX');
+    CheckEquals(3, D.Style.TextShadowOffsetY, 'OffsetY');
+    CheckEquals(1, D.Style.TextShadowBlur, 'Blur');
+    Check(D.Style.TextShadowColor <> 0, 'color set');
+  finally
+    Engine.Free;
+    Parser.Free;
+  end;
+end;
+
+procedure TestTTina4Components.TestBackgroundPositionKeywordsParsed;
+var
+  Parser: Tina4HtmlRender.THTMLParser;
+  Engine: Tina4HtmlRender.TLayoutEngine;
+  D1, D2, D3: Tina4HtmlRender.TLayoutBox;
+begin
+  Parser := Tina4HtmlRender.THTMLParser.Create;
+  Engine := Tina4HtmlRender.TLayoutEngine.Create(nil);
+  try
+    RunLayout(Parser, Engine,
+      '<div id="a" style="background-position: center center">x</div>' +
+      '<div id="b" style="background-position: right top">x</div>' +
+      '<div id="c" style="background-position: 10px 20px">x</div>', 400);
+
+    D1 := FindBoxById(Engine.Root, 'a');
+    D2 := FindBoxById(Engine.Root, 'b');
+    D3 := FindBoxById(Engine.Root, 'c');
+    // center center → -50% on each axis (negative-sentinel encoding).
+    CheckEquals(-50, D1.Style.BgPosX, 'center→-50');
+    CheckEquals(-50, D1.Style.BgPosY, 'center→-50');
+    CheckEquals(-100, D2.Style.BgPosX, 'right→-100');
+    CheckEquals(0, D2.Style.BgPosY, 'top→0');
+    CheckEquals(10, D3.Style.BgPosX, '10px');
+    CheckEquals(20, D3.Style.BgPosY, '20px');
+  finally
+    Engine.Free;
+    Parser.Free;
+  end;
+end;
+
+procedure TestTTina4Components.TestBackgroundRepeatParsed;
+var
+  Parser: Tina4HtmlRender.THTMLParser;
+  Engine: Tina4HtmlRender.TLayoutEngine;
+  D1, D2, D3: Tina4HtmlRender.TLayoutBox;
+begin
+  Parser := Tina4HtmlRender.THTMLParser.Create;
+  Engine := Tina4HtmlRender.TLayoutEngine.Create(nil);
+  try
+    RunLayout(Parser, Engine,
+      '<div id="a" style="background-repeat: repeat">x</div>' +
+      '<div id="b" style="background-repeat: repeat-x">x</div>' +
+      '<div id="c" style="background-repeat: no-repeat">x</div>', 400);
+    D1 := FindBoxById(Engine.Root, 'a');
+    D2 := FindBoxById(Engine.Root, 'b');
+    D3 := FindBoxById(Engine.Root, 'c');
+    CheckEquals('repeat',    D1.Style.BgRepeat, 'repeat');
+    CheckEquals('repeat-x',  D2.Style.BgRepeat, 'repeat-x');
+    CheckEquals('no-repeat', D3.Style.BgRepeat, 'no-repeat');
+  finally
+    Engine.Free;
+    Parser.Free;
+  end;
+end;
+
+procedure TestTTina4Components.TestLinearGradientFromBackgroundShorthand;
+var
+  Parser: Tina4HtmlRender.THTMLParser;
+  Engine: Tina4HtmlRender.TLayoutEngine;
+  D: Tina4HtmlRender.TLayoutBox;
+begin
+  Parser := Tina4HtmlRender.THTMLParser.Create;
+  Engine := Tina4HtmlRender.TLayoutEngine.Create(nil);
+  try
+    RunLayout(Parser, Engine,
+      '<div id="d" style="background: linear-gradient(to bottom, #ff0000, #0000ff)">x</div>',
+      400);
+    D := FindBoxById(Engine.Root, 'd');
+    Check(D.Style.BgGradientActive, 'gradient active');
+    CheckEquals(180, D.Style.BgGradientAngle, 'to bottom = 180deg');
+    Check(D.Style.BgGradientStart <> 0, 'start colour set');
+    Check(D.Style.BgGradientEnd <> 0, 'end colour set');
+  finally
+    Engine.Free;
     Parser.Free;
   end;
 end;

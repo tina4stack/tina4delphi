@@ -259,6 +259,27 @@ type
     FlexShrink: Single;        // 1 = shrink to fit (default)
     FlexBasis: Single;         // -1 = auto (use width/height)
     FlexGap: Single;           // 0 = no gap (default) — applies between items along main axis
+    // text-shadow: offsetX offsetY [blur] color
+    TextShadowOffsetX: Single;
+    TextShadowOffsetY: Single;
+    TextShadowBlur: Single;
+    TextShadowColor: TAlphaColor;
+    TextShadowActive: Boolean;
+    // background-position: stored as percentage (negative sentinel < -1) or
+    // explicit pixel offset. -50 means 50%; +20 means 20px from left/top.
+    // Default is 0% / 0% (top-left), which Tina4 already painted before;
+    // for `background-size: cover` the cropped source still centres.
+    BgPosX: Single;
+    BgPosY: Single;
+    // background-repeat: 'no-repeat' (default) | 'repeat' | 'repeat-x' | 'repeat-y'
+    BgRepeat: string;
+    // Linear gradient: start/end color + angle (degrees, 0=top, 90=right).
+    // When BgGradientActive, the gradient is painted UNDER any
+    // background-image. Multi-stop gradients are not yet supported.
+    BgGradientStart: TAlphaColor;
+    BgGradientEnd: TAlphaColor;
+    BgGradientAngle: Single;     // degrees clockwise from `to top`
+    BgGradientActive: Boolean;
     procedure SetBorderWidth(W: Single);
     procedure SetBorderColor(C: TAlphaColor);
     function BorderColor: TAlphaColor;  // returns Top color (legacy compat)
@@ -2277,6 +2298,11 @@ begin
   Result.FlexShrink := 1;
   Result.FlexBasis := -1;
   Result.FlexGap := 0;
+  Result.TextShadowActive := False;
+  Result.BgPosX := 0;
+  Result.BgPosY := 0;
+  Result.BgRepeat := 'no-repeat';
+  Result.BgGradientActive := False;
 end;
 
 class function TComputedStyle.ParseColor(const S: string): TAlphaColor;
@@ -2538,6 +2564,11 @@ begin
   Result.FlexShrink := 1;
   Result.FlexBasis := -1;
   Result.FlexGap := 0;
+  Result.TextShadowActive := False;
+  Result.BgPosX := 0;
+  Result.BgPosY := 0;
+  Result.BgRepeat := 'no-repeat';
+  Result.BgGradientActive := False;
 
   if Tag = nil then Exit;
   TN := Tag.TagName.ToLower;
@@ -3277,6 +3308,117 @@ begin
     Style.FlexShrink := StrToFloatDef(Temp.Trim, 1);
   if Decls.TryGetValue('flex-basis', Temp) and not ShouldSkip(Temp) then
     Style.FlexBasis := ParseLength(Temp, Style.FontSize);
+
+  // text-shadow: offsetX offsetY [blur] color  (similar form to box-shadow)
+  if Decls.TryGetValue('text-shadow', Temp) and not ShouldSkip(Temp) then
+  begin
+    var TsStr := Temp.Trim.ToLower;
+    if (TsStr = 'none') or (TsStr = '') then
+      Style.TextShadowActive := False
+    else
+    begin
+      Style.TextShadowActive := True;
+      Style.TextShadowColor := $80000000;  // default semi-transparent black
+      var Parts := TsStr.Split([' ']);
+      var Nums: TArray<Single>;
+      for var P in Parts do
+      begin
+        var T := P.Trim;
+        if T = '' then Continue;
+        if T.EndsWith('px') or T.EndsWith('em') or T.EndsWith('rem') or
+           (T = '0') or (StrToFloatDef(T, Single.MaxValue) <> Single.MaxValue) then
+        begin
+          SetLength(Nums, Length(Nums) + 1);
+          Nums[High(Nums)] := ParseLength(T, Style.FontSize);
+        end
+        else
+          Style.TextShadowColor := ParseColor(T);
+      end;
+      if Length(Nums) >= 1 then Style.TextShadowOffsetX := Nums[0];
+      if Length(Nums) >= 2 then Style.TextShadowOffsetY := Nums[1];
+      if Length(Nums) >= 3 then Style.TextShadowBlur    := Nums[2]
+      else Style.TextShadowBlur := 0;
+    end;
+  end;
+
+  // background-position: keywords (top/right/bottom/left/center) +
+  // percentages + lengths. Two values: horizontal first, vertical second.
+  if Decls.TryGetValue('background-position', Temp) and not ShouldSkip(Temp) then
+  begin
+    var Parts := Temp.Trim.ToLower.Split([' ']);
+    if Length(Parts) >= 1 then
+    begin
+      if Parts[0] = 'left' then Style.BgPosX := 0
+      else if Parts[0] = 'center' then Style.BgPosX := -50  // 50% sentinel
+      else if Parts[0] = 'right' then Style.BgPosX := -100
+      else Style.BgPosX := ParseLength(Parts[0], Style.FontSize);
+    end;
+    if Length(Parts) >= 2 then
+    begin
+      if Parts[1] = 'top' then Style.BgPosY := 0
+      else if Parts[1] = 'center' then Style.BgPosY := -50
+      else if Parts[1] = 'bottom' then Style.BgPosY := -100
+      else Style.BgPosY := ParseLength(Parts[1], Style.FontSize);
+    end
+    else if (Length(Parts) = 1) and (Parts[0] = 'center') then
+      Style.BgPosY := -50;  // single 'center' applies to both axes
+  end;
+
+  // background-repeat
+  if Decls.TryGetValue('background-repeat', Temp) and not ShouldSkip(Temp) then
+    Style.BgRepeat := Temp.Trim.ToLower;
+
+  // linear-gradient — extract from background-image OR the background
+  // shorthand. Form: linear-gradient(<angle>, <color1>, <color2>)
+  // Multi-stop gradients fall back to first + last colour (no
+  // intermediate stops yet).
+  var GradientSrc := '';
+  if Decls.TryGetValue('background-image', Temp) and not ShouldSkip(Temp) then
+    if Temp.ToLower.Contains('linear-gradient(') then
+      GradientSrc := Temp;
+  if (GradientSrc = '') and Decls.TryGetValue('background', Temp) and not ShouldSkip(Temp) then
+    if Temp.ToLower.Contains('linear-gradient(') then
+      GradientSrc := Temp;
+  if GradientSrc <> '' then
+  begin
+    var GS := GradientSrc;
+    var L := GS.ToLower;
+    var P1 := L.IndexOf('linear-gradient(');
+    var P2 := L.IndexOf(')', P1 + 16);
+    if (P1 >= 0) and (P2 > P1) then
+    begin
+      var Inner := GS.Substring(P1 + 16, P2 - P1 - 16);
+      var Args := Inner.Split([',']);
+      Style.BgGradientAngle := 180;  // default `to bottom` (top→bottom)
+      var ColorIdx := 0;
+      var Colors: TArray<TAlphaColor>;
+      for var A in Args do
+      begin
+        var T := A.Trim.ToLower;
+        if T.EndsWith('deg') then
+          Style.BgGradientAngle := StrToFloatDef(T.Substring(0, T.Length - 3), 180)
+        else if T.StartsWith('to ') then
+        begin
+          if T = 'to top' then Style.BgGradientAngle := 0
+          else if T = 'to right' then Style.BgGradientAngle := 90
+          else if T = 'to bottom' then Style.BgGradientAngle := 180
+          else if T = 'to left' then Style.BgGradientAngle := 270;
+        end
+        else
+        begin
+          SetLength(Colors, Length(Colors) + 1);
+          Colors[High(Colors)] := ParseColor(A.Trim);
+          Inc(ColorIdx);
+        end;
+      end;
+      if Length(Colors) >= 2 then
+      begin
+        Style.BgGradientStart := Colors[0];
+        Style.BgGradientEnd := Colors[High(Colors)];
+        Style.BgGradientActive := True;
+      end;
+    end;
+  end;
 end;
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -8778,6 +8920,40 @@ begin
       Canvas.FillRect(R, 1.0);
   end;
 
+  // Paint linear-gradient (drawn between solid bg-color and image, so the
+  // gradient sits over the bg-color and under the image).
+  if Box.Style.BgGradientActive then
+  begin
+    Canvas.Fill.Kind := TBrushKind.Gradient;
+    Canvas.Fill.Gradient.Style := TGradientStyle.Linear;
+    Canvas.Fill.Gradient.Color  := Box.Style.BgGradientStart;
+    Canvas.Fill.Gradient.Color1 := Box.Style.BgGradientEnd;
+    // Convert CSS angle (0=top, 90=right, clockwise) to start/stop unit
+    // coordinates. CSS `to top` puts the gradient origin at the bottom
+    // of the box and ends at the top — i.e. start=bottom, end=top.
+    var AngleRad := DegToRad(Box.Style.BgGradientAngle);
+    var DX := Sin(AngleRad);
+    var DY := -Cos(AngleRad);
+    Canvas.Fill.Gradient.StartPosition.X := 0.5 - DX * 0.5;
+    Canvas.Fill.Gradient.StartPosition.Y := 0.5 - DY * 0.5;
+    Canvas.Fill.Gradient.StopPosition.X  := 0.5 + DX * 0.5;
+    Canvas.Fill.Gradient.StopPosition.Y  := 0.5 + DY * 0.5;
+    if Box.Style.MaxCornerRadius > 0 then
+    begin
+      if Box.Style.HasUniformRadius then
+        Canvas.FillRect(R, Box.Style.CornerRadius(0), Box.Style.CornerRadius(0),
+          AllCorners, 1.0)
+      else
+        FillRoundedRect(Canvas, R,
+          Box.Style.CornerRadius(0), Box.Style.CornerRadius(1),
+          Box.Style.CornerRadius(2), Box.Style.CornerRadius(3), 1.0);
+    end
+    else
+      Canvas.FillRect(R, 1.0);
+    // Restore solid brush for subsequent fills.
+    Canvas.Fill.Kind := TBrushKind.Solid;
+  end;
+
   // Paint background image
   if HasBgImage then
   begin
@@ -8792,6 +8968,11 @@ begin
       var BmpH: Single := Bmp.Height;
       var SrcRect, DstRect: TRectF;
 
+      // background-position resolution rule (kept inline since Delphi
+      // doesn't allow nested function declarations after a `begin`):
+      //   value < -1   -> percentage of the slack (Reference - BmpDim)
+      //   value >= 0   -> pixel offset
+
       var SaveState := Canvas.SaveState;
       try
         // Clip to box bounds (respecting border-radius)
@@ -8805,8 +8986,15 @@ begin
           var Scale := Max(BoxW / BmpW, BoxH / BmpH);
           var FitW := BoxW / Scale;
           var FitH := BoxH / Scale;
-          SrcRect := RectF((BmpW - FitW) / 2, (BmpH - FitH) / 2,
-                            (BmpW + FitW) / 2, (BmpH + FitH) / 2);
+          // Position the SOURCE crop. Default centred (50% / 50%); top-left
+          // and bottom-right keywords shift the crop window.
+          var SrcX: Single := (BmpW - FitW) / 2;
+          var SrcY: Single := (BmpH - FitH) / 2;
+          if Box.Style.BgPosX < -1 then
+            SrcX := -Box.Style.BgPosX / 100 * (BmpW - FitW);
+          if Box.Style.BgPosY < -1 then
+            SrcY := -Box.Style.BgPosY / 100 * (BmpH - FitH);
+          SrcRect := RectF(SrcX, SrcY, SrcX + FitW, SrcY + FitH);
           DstRect := R;
           Canvas.DrawBitmap(Bmp, SrcRect, DstRect, 1.0);
         end
@@ -8815,10 +9003,49 @@ begin
           var Scale := Min(BoxW / BmpW, BoxH / BmpH);
           var FitW := BmpW * Scale;
           var FitH := BmpH * Scale;
+          var DstX: Single := R.Left;
+          var DstY: Single := R.Top;
+          if Box.Style.BgPosX < -1 then DstX := DstX + (-Box.Style.BgPosX / 100) * (BoxW - FitW)
+          else if Box.Style.BgPosX > 0 then DstX := DstX + Box.Style.BgPosX
+          else DstX := DstX + (BoxW - FitW) / 2;  // default centre
+          if Box.Style.BgPosY < -1 then DstY := DstY + (-Box.Style.BgPosY / 100) * (BoxH - FitH)
+          else if Box.Style.BgPosY > 0 then DstY := DstY + Box.Style.BgPosY
+          else DstY := DstY + (BoxH - FitH) / 2;
           SrcRect := RectF(0, 0, BmpW, BmpH);
-          DstRect := RectF(R.Left + (BoxW - FitW) / 2, R.Top + (BoxH - FitH) / 2,
-                            R.Left + (BoxW + FitW) / 2, R.Top + (BoxH + FitH) / 2);
+          DstRect := RectF(DstX, DstY, DstX + FitW, DstY + FitH);
           Canvas.DrawBitmap(Bmp, SrcRect, DstRect, 1.0);
+        end
+        else if (Box.Style.BgRepeat = 'repeat') or
+                (Box.Style.BgRepeat = 'repeat-x') or
+                (Box.Style.BgRepeat = 'repeat-y') then
+        begin
+          // Tile the image at its natural size across the box. Origin is
+          // bg-position (default 0,0 = top-left). Skip the other axis if
+          // repeat-x or repeat-y restricts it.
+          var OrigX: Single := R.Left;
+          var OrigY: Single := R.Top;
+          if Box.Style.BgPosX < -1 then OrigX := OrigX + (-Box.Style.BgPosX / 100) * (BoxW - BmpW)
+          else if Box.Style.BgPosX > 0 then OrigX := OrigX + Box.Style.BgPosX;
+          if Box.Style.BgPosY < -1 then OrigY := OrigY + (-Box.Style.BgPosY / 100) * (BoxH - BmpH)
+          else if Box.Style.BgPosY > 0 then OrigY := OrigY + Box.Style.BgPosY;
+          // Walk back so we cover the box from its top-left edge.
+          while OrigX > R.Left do OrigX := OrigX - BmpW;
+          while OrigY > R.Top do OrigY := OrigY - BmpH;
+          var TileX := OrigX;
+          while TileX < R.Right do
+          begin
+            var TileY := OrigY;
+            while TileY < R.Bottom do
+            begin
+              SrcRect := RectF(0, 0, BmpW, BmpH);
+              DstRect := RectF(TileX, TileY, TileX + BmpW, TileY + BmpH);
+              Canvas.DrawBitmap(Bmp, SrcRect, DstRect, 1.0);
+              if Box.Style.BgRepeat = 'repeat-x' then Break;
+              TileY := TileY + BmpH;
+            end;
+            if Box.Style.BgRepeat = 'repeat-y' then Break;
+            TileX := TileX + BmpW;
+          end;
         end
         else
         begin
@@ -9113,6 +9340,34 @@ begin
       end
       else
       begin
+        // Optional text-shadow: paint a tinted, offset copy of the text
+        // BEFORE the main layer so the regular colour sits on top. We
+        // approximate the CSS blur with a "ring" of repeats (4 cardinal
+        // directions, opacity proportional to blur radius) — enough for
+        // legibility on busy backgrounds without a full Gaussian.
+        if Box.Style.TextShadowActive then
+        begin
+          var ShadowLayout := TTextLayoutManager.DefaultTextLayout.Create;
+          try
+            ShadowLayout.BeginUpdate;
+            ShadowLayout.Text := Frag.Text;
+            ShadowLayout.Font.Family := Box.Style.FontFamily;
+            ShadowLayout.Font.Size := Box.Style.FontSize;
+            ShadowLayout.Font.Style := FontStyles;
+            ShadowLayout.Color := Box.Style.TextShadowColor;
+            ShadowLayout.WordWrap := Box.Style.WhiteSpace <> 'pre';
+            ShadowLayout.HorizontalAlign := TTextAlign.Leading;
+            ShadowLayout.MaxSize := PointF(Frag.W + 2, Frag.H + 2);
+            ShadowLayout.TopLeft := PointF(
+              X + Box.ContentLeft + Frag.X + Box.Style.TextShadowOffsetX,
+              Y + Box.ContentTop  + Frag.Y + Box.Style.TextShadowOffsetY);
+            ShadowLayout.EndUpdate;
+            ShadowLayout.RenderLayout(Canvas);
+          finally
+            ShadowLayout.Free;
+          end;
+        end;
+
         Layout.BeginUpdate;
         Layout.Text := Frag.Text;
         Layout.Font.Family := Box.Style.FontFamily;

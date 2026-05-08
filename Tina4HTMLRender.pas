@@ -3527,7 +3527,11 @@ begin
     Kind := lbkTableCell
   else if Style.Display = 'list-item' then
     Kind := lbkListItem
-  else if Style.Display = 'block' then
+  else if (Style.Display = 'block') or (Style.Display = 'flow-root') then
+    // `flow-root` (CSS Display L3) establishes a new block-formatting
+    // context. Tina4's LayoutBlock already encloses overhanging floats
+    // so a plain block is functionally equivalent — accept the explicit
+    // opt-in keyword so authors don't need overflow:hidden hacks.
     Kind := lbkBlock
   else if Style.Display = 'inline-block' then
     Kind := lbkInlineBlock

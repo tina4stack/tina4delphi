@@ -3,7 +3,7 @@ unit TestTina4Components;
 interface
 
 uses
-  TestFramework, System.SysUtils, System.Classes, JSON,
+  TestFramework, System.SysUtils, System.Classes, System.Generics.Collections, JSON,
   FireDAC.Comp.Client, FireDAC.Stan.Def, FireDAC.Stan.Intf,
   FireDAC.Stan.Option, FireDAC.Phys.Intf, FireDAC.Comp.DataSet, Data.DB,
   Tina4Core, Tina4REST, Tina4RESTRequest, Tina4JSONAdapter, Tina4Route,
@@ -82,6 +82,11 @@ type
     // display: inline-table
     procedure TestInlineTableLaysOutCellsSideBySide;
     procedure TestInlineTableSiblingsFlowHorizontally;
+    // Bug-list regressions (cuttlefish bug list)
+    procedure TestBoxSizingBorderBoxKeepsOuterWidthConstant;
+    procedure TestTableCellWidthIsHardConstraint;
+    procedure TestNotPseudoClassDoesNotDropSiblingRules;
+    procedure TestDisplayFlowRootEnclosesFloats;
   end;
 
 implementation
@@ -1676,6 +1681,133 @@ begin
       Format('inline-tables must flow horizontally: t1.X=%.1f t2.X=%.1f', [T1.X, T2.X]));
     Check(Abs(T1.Y - T2.Y) < 2,
       Format('inline-tables on same line: t1.Y=%.1f t2.Y=%.1f', [T1.Y, T2.Y]));
+  finally
+    Engine.Free;
+    Parser.Free;
+  end;
+end;
+
+// ---------------------------------------------------------------------------
+// Bug-list regressions (cuttlefish html-render branch)
+// ---------------------------------------------------------------------------
+
+procedure TestTTina4Components.TestBoxSizingBorderBoxKeepsOuterWidthConstant;
+var
+  Parser: Tina4HtmlRender.THTMLParser;
+  Engine: Tina4HtmlRender.TLayoutEngine;
+  D: Tina4HtmlRender.TLayoutBox;
+begin
+  Parser := Tina4HtmlRender.THTMLParser.Create;
+  Engine := Tina4HtmlRender.TLayoutEngine.Create(nil);
+  try
+    // Verbatim Bug 3 repro: width:100 + padding:10 + border:1 + box-sizing:
+    // border-box must produce outer (margin-box) width of 100, with the
+    // content shrunk to 100 - 20 - 2 = 78.
+    RunLayout(Parser, Engine,
+      '<div id="d" style="width:100px; padding:10px; border:1px solid red; ' +
+      '       box-sizing:border-box">x</div>',
+      400);
+    D := FindBoxById(Engine.Root, 'd');
+    Check(Assigned(D), 'box must exist');
+    Check(Abs(D.ContentWidth - 78) < 0.5,
+      Format('content width should be 78 (100 - 20 padding - 2 border), got %.1f', [D.ContentWidth]));
+    Check(Abs(D.MarginBoxWidth - 100) < 0.5,
+      Format('outer width should be 100, got %.1f', [D.MarginBoxWidth]));
+  finally
+    Engine.Free;
+    Parser.Free;
+  end;
+end;
+
+procedure TestTTina4Components.TestTableCellWidthIsHardConstraint;
+var
+  Parser: Tina4HtmlRender.THTMLParser;
+  Engine: Tina4HtmlRender.TLayoutEngine;
+  A, B: Tina4HtmlRender.TLayoutBox;
+begin
+  Parser := Tina4HtmlRender.THTMLParser.Create;
+  Engine := Tina4HtmlRender.TLayoutEngine.Create(nil);
+  try
+    // Bug 5: explicit width on table-cell must NOT shrink/grow with
+    // sibling text length.
+    RunLayout(Parser, Engine,
+      '<div style="display:table; width:200px; padding:0">' +
+      '  <div id="a" style="display:table-cell; width:70px; padding:0">&nbsp;</div>' +
+      '  <div id="b" style="display:table-cell; padding:0">short text</div>' +
+      '</div>', 400);
+
+    A := FindBoxById(Engine.Root, 'a');
+    B := FindBoxById(Engine.Root, 'b');
+    Check(Assigned(A) and Assigned(B), 'cells must exist');
+    Check(Abs(A.ContentWidth - 70) < 2,
+      Format('a (with width:70px) should be 70, got %.1f', [A.ContentWidth]));
+    Check(Abs(B.ContentWidth - 130) < 2,
+      Format('b should take rest (130), got %.1f', [B.ContentWidth]));
+  finally
+    Engine.Free;
+    Parser.Free;
+  end;
+end;
+
+procedure TestTTina4Components.TestNotPseudoClassDoesNotDropSiblingRules;
+var
+  Parser: Tina4HtmlRender.THTMLParser;
+  Engine: Tina4HtmlRender.TLayoutEngine;
+  StyleSheet: Tina4HtmlRender.TCSSStyleSheet;
+begin
+  Parser := Tina4HtmlRender.THTMLParser.Create;
+  Engine := Tina4HtmlRender.TLayoutEngine.Create(nil);
+  StyleSheet := Tina4HtmlRender.TCSSStyleSheet.Create;
+  try
+    // Bug 2: a stylesheet that contains a :not() rule should still apply
+    // the rules that don't use it. Most direct test we can do without
+    // running paint: parse, then check the stylesheet's matching can
+    // find the simple `.x` rule. That proves the parser didn't drop it.
+    StyleSheet.AddCSS(
+      '.x { color: red; }' + sLineBreak +
+      '.button:not(.disabled) { background: blue; }' + sLineBreak +
+      '.y { color: green; }');
+    // Build a tiny DOM so we can ask the stylesheet what matches.
+    Parser.Parse('<div id="t" class="x">A</div>');
+    var Decls: TDictionary<string,string> := TDictionary<string,string>.Create;
+    try
+      StyleSheet.ApplyTo(Parser.Root.Children[0], Decls);
+      // If :not() dropped the whole sheet, there'd be NO `color` decl set.
+      Check(Decls.ContainsKey('color'),
+        ':not() rule should not drop unrelated `.x { color }` rule');
+    finally
+      Decls.Free;
+    end;
+  finally
+    StyleSheet.Free;
+    Engine.Free;
+    Parser.Free;
+  end;
+end;
+
+procedure TestTTina4Components.TestDisplayFlowRootEnclosesFloats;
+var
+  Parser: Tina4HtmlRender.THTMLParser;
+  Engine: Tina4HtmlRender.TLayoutEngine;
+  P: Tina4HtmlRender.TLayoutBox;
+begin
+  Parser := Tina4HtmlRender.THTMLParser.Create;
+  Engine := Tina4HtmlRender.TLayoutEngine.Create(nil);
+  try
+    // Bug 4: a parent with `display: flow-root` should enclose its
+    // floated children regardless of in-flow content height. Parent
+    // here has only one float (no in-flow content), so without
+    // flow-root semantics the parent height would collapse to 0.
+    // (Tina4 already always encloses overhanging floats — flow-root
+    // is supported as a synonym so authors get the explicit opt-in.)
+    RunLayout(Parser, Engine,
+      '<div id="p" style="display:flow-root; width:200px; padding:0">' +
+      '  <div style="float:left; width:64px; height:80px; padding:0">F</div>' +
+      '</div>', 400);
+    P := FindBoxById(Engine.Root, 'p');
+    Check(Assigned(P), 'flow-root box must exist');
+    Check(P.ContentHeight >= 80,
+      Format('flow-root parent must enclose 80px float, got %.1f', [P.ContentHeight]));
   finally
     Engine.Free;
     Parser.Free;

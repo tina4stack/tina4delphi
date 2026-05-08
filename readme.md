@@ -750,7 +750,7 @@ Tina4HTMLRender1.HTML.Text := '<h1>Hello</h1><p>This is <b>bold</b> and <i>itali
 - **Box model**: `margin`, `padding`, `border`, `border-top`/`right`/`bottom`/`left`, `border-radius`, `width`, `height`, `box-sizing`, `min-width`, `max-width`, `min-height`, `max-height`, `box-shadow`, `outline` (with `outline-color`, `outline-width`, `outline-style`, `outline-offset`)
 - **Sizing keywords**: `width: fit-content` / `min-content` / `max-content` — shrink-wrap the box around its widest line / longest child. Combines naturally with `margin: auto` to centre a shrunk-to-fit pill inside its parent.
 - **Float**: `float: left` / `right` on block-flow children. The float is positioned at the parent's left or right edge and removed from normal flow; subsequent in-flow siblings shift past it (with reduced effective width) for as long as their cursor Y sits inside the float's vertical span. Multiple left/right floats stack horizontally. The parent stretches vertically to enclose any overhanging float. Inline-content line-by-line wrap around floats is not yet implemented — siblings shift uniformly as full block boxes.
-- **Display modes**: `block`, `inline`, `inline-block`, `inline-table`, `none`, `table`, `table-row`, `table-cell`, `list-item`
+- **Display modes**: `block`, `inline`, `inline-block`, `inline-table`, `flow-root`, `none`, `table`, `table-row`, `table-cell`, `list-item`
 - **Centering**:
   - `margin: 0 auto` — horizontal centering of a block child whose width is less than its parent's content width
   - `margin-left: auto` / `margin-right: auto` — push a block child to the right / left edge

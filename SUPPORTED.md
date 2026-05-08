@@ -2,8 +2,6 @@
 
 A pragmatic, not-exhaustive map of what the FMX HTML renderer honours. If
 something isn't listed it's almost certainly a no-op or unimplemented.
-Entries marked **partial** behave correctly only in the scenarios called
-out in the notes column.
 
 ---
 
@@ -13,27 +11,25 @@ out in the notes column.
 
 | Property | Status | Notes |
 |---|---|---|
-| `width`, `height` | ✅ | px and `%` (resolved against parent). Also `auto` (treated as 0 / not-set). |
+| `width`, `height` | ✅ | px, `%`, `auto` |
 | `min-width`, `max-width`, `min-height`, `max-height` | ✅ | px |
 | `padding`, `padding-{top,right,bottom,left}` | ✅ | shorthand and longhands |
 | `margin`, `margin-{top,right,bottom,left}` | ✅ | shorthand and longhands |
 | `margin: 0 auto` (h-centre) | ✅ | block-flow context |
 | `margin-left: auto` / `margin-right: auto` | ✅ | right- / left-align block |
-| `margin: auto` (top + bottom auto) | ✅ | Tina4 extension — vertically centres a block child inside a fixed-height parent. CSS spec only does this in flex/grid; we do it because the parent height is already known at layout time. |
+| `margin: auto` (top + bottom auto) | ✅ | Tina4 extension — vertically centres a block child inside a fixed-height parent |
 | `border`, `border-{top,right,bottom,left}` | ✅ | shorthand parsing of `width style color` |
 | `border-radius`, four-corner longhands | ✅ | uniform + per-corner |
-| `border-style: solid` | ✅ | `dashed` / `dotted` honoured on outline only |
+| `border-style: solid` | ✅ | `dashed`/`dotted` honoured on outline |
 | `box-sizing: content-box` (default) / `border-box` | ✅ | |
 | `box-shadow` | ✅ | including `inset` |
-| `outline`, `outline-{color,width,style,offset}` | ✅ | drawn on top of the border edge; doesn't affect layout. Negative offsets pull inward. |
+| `outline`, `outline-{color,width,style,offset}` | ✅ | drawn on top of border edge; doesn't affect layout |
 
 ### Sizing keywords
 
-| Value | Status | Notes |
-|---|---|---|
-| `width: fit-content` | ✅ | shrink-wraps to widest line / longest child |
-| `width: min-content` | ✅ | aliased to fit-content |
-| `width: max-content` | ✅ | aliased to fit-content |
+| Value | Status |
+|---|---|
+| `width: fit-content` / `min-content` / `max-content` | ✅ |
 
 ### Display
 
@@ -45,24 +41,27 @@ out in the notes column.
 | `inline-table` | ✅ | outer-display:inline + inner-display:table |
 | `flow-root` | ✅ | aliased to block — Tina4's blocks already enclose floats |
 | `none` | ✅ | element + subtree skipped |
-| `table`, `table-row`, `table-cell` | ✅ | including anonymous-row wrapping for orphan cells (CSS 2.1 §17.2.1) |
+| `table`, `table-row`, `table-cell` | ✅ | including anonymous-row wrapping for orphan cells |
 | `list-item` | ✅ | with bullet/number marker |
-| `flex`, `grid` | ❌ | not implemented; on the roadmap |
+| **`flex`, `inline-flex`** | ✅ | row/column main axis, justify-content (start/end/center/space-between/space-around/space-evenly), align-items (start/end/center/stretch), flex-grow/shrink/basis, gap |
+| `grid` | ❌ | not implemented |
 
 ### Position
 
 | Value | Status | Notes |
 |---|---|---|
-| `static` (default) | ✅ | normal block flow |
-| `sticky` | ✅ | both axes — `top` pins to nearest scroll-ancestor's top edge, `left` to its left edge. Two-pass deep paint ensures sticky elements render on top of their non-sticky siblings even when nested in `<thead>`/`<tbody>`. |
-| `relative`, `absolute`, `fixed` | ❌ | parsed but ignored |
+| `static` (default) | ✅ | |
+| `sticky` | ✅ | both axes — `top` to nearest scroll-ancestor's top, `left` to its left. Two-pass deep paint keeps sticky elements above non-sticky siblings. |
+| **`relative`** | ✅ | paint-only shift via top/left/right/bottom; siblings unaffected |
+| **`absolute`** | ✅ | out-of-flow; positioned against immediate parent's content area; left+right derives width |
+| **`fixed`** | ✅ | viewport-relative regardless of scroll |
 
 ### Float
 
-| Value | Status | Notes |
-|---|---|---|
-| `float: left`, `float: right` | ✅ partial | block-flow context only. Sibling block boxes shift past the float; parent stretches to enclose overhang. **Inline-content line-by-line wrap around floats is not yet implemented** — the whole sibling block shifts uniformly. |
-| `clear` | ❌ | use `display: flow-root` or `overflow: auto` on parent to enclose floats |
+| Value | Status |
+|---|---|
+| `float: left`, `float: right` | ✅ partial — sibling block boxes shift past floats; parent encloses overhang. Inline-content line-by-line wrap around floats not yet implemented. |
+| **`clear: left`/`right`/`both`** | ✅ |
 
 ### Text
 
@@ -71,18 +70,18 @@ out in the notes column.
 | `color` | ✅ | named, `#rrggbb`, `#rgb`, `rgb(...)`, `rgba(...)` |
 | `font-family` | ✅ | first-listed family wins |
 | `font-size` | ✅ | px, em, rem, pt, % |
-| `font-weight` | ✅ | bold-or-not (no numeric weights between 100-900) |
+| `font-weight` | ✅ | bold/normal + numeric (≥500 → bold) |
 | `font-style: italic` | ✅ | |
 | `text-align` | ✅ | left / right / center |
 | `line-height` | ✅ | unitless multiplier and explicit lengths |
-| `text-decoration: underline` | ✅ | |
+| `text-decoration: underline` / `line-through` | ✅ | |
 | `white-space: normal` / `nowrap` / `pre` | ✅ | |
 | `text-transform: uppercase` / `lowercase` / `capitalize` | ✅ | |
 | `letter-spacing`, `text-indent` | ✅ | |
 | `text-overflow: ellipsis` | ✅ | requires `white-space: nowrap` |
-| `vertical-align` on `display: table-cell` | ✅ | top / middle / bottom; legacy `<td valign="...">` attribute also honoured |
+| `vertical-align` on `display: table-cell` | ✅ | top / middle / bottom; legacy `<td valign>` honoured |
 | `vertical-align` on inline / inline-block | ❌ | parsed but ignored |
-| `text-shadow` | ❌ | |
+| **`text-shadow`** | ✅ | offset + colour painted as tinted underlay; blur captured but not rendered |
 
 ### Background
 
@@ -91,10 +90,22 @@ out in the notes column.
 | `background-color` | ✅ | named + hex + rgb/rgba |
 | `background-image: url(...)` | ✅ | http(s) and `data:image/...;base64,...` URIs |
 | `background-size: cover` / `contain` / `auto` | ✅ | |
-| `background-position` | ⚠️ | always centred — `top`/`left`/etc. ignored |
-| `background-repeat` | ❌ | always painted once |
-| `background` shorthand | ✅ | extracts color + url(...) |
-| `linear-gradient` / `radial-gradient` | ❌ | |
+| **`background-position`** | ✅ | keywords (top/right/bottom/left/center) + percentages + lengths. Honoured by cover (shifts crop), contain (shifts dest), repeat (shifts tile origin). |
+| **`background-repeat`** | ✅ | repeat / repeat-x / repeat-y / no-repeat |
+| `background` shorthand | ✅ | extracts color + url(...) + linear-gradient |
+| **`linear-gradient(angle, c1, c2)`** | ✅ | painted as Linear-Gradient brush; multi-stop falls back to first+last |
+| `radial-gradient` | ❌ | |
+
+### Transforms
+
+| Property | Status | Notes |
+|---|---|---|
+| **`transform: translate(x,y)`** / `translateX` / `translateY` | ✅ | |
+| **`transform: rotate(deg)`** | ✅ | rotates around box centre |
+| **`transform: scale(n)`** / `scale(x,y)` / `scaleX` / `scaleY` | ✅ | |
+| Multiple chained transforms | ✅ | accumulate per-axis |
+| `transform-origin` override | ❌ | always centre (50% 50%) |
+| `matrix()` / `matrix3d()` / 3D transforms | ❌ | |
 
 ### Visibility / overflow
 
@@ -107,43 +118,48 @@ out in the notes column.
 
 ### Tables
 
-| Feature | Status | Notes |
-|---|---|---|
-| Per-cell `width` / `style="width:..."` / `width="..."` HTML attr | ✅ | first cell-per-column wins; percentages resolve against table content width |
-| `<colgroup>` / `<col style="width:...">` / `<col width="..." span="N">` | ✅ | highest priority — applied before per-cell widths |
-| Anonymous row wrapping for orphan cells | ✅ | `display:table` parent with direct `display:table-cell` children |
-| `colspan`, `rowspan` | ⚠️ | `colspan` honoured for cell width-across; `rowspan` ignored |
-| `border-collapse: collapse` | ✅ | always collapsed (default) |
-| `border-collapse: separate` | ❌ | always-collapsed |
-| `<th>` defaults | ✅ | bold + center text |
+| Feature | Status |
+|---|---|
+| Per-cell `width` (style / attr / CSS rule) | ✅ |
+| `<colgroup>` / `<col style="width:...">` / `<col span="N">` | ✅ |
+| Anonymous row wrapping for orphan cells | ✅ |
+| `colspan` | ✅ |
+| `rowspan` | ❌ |
+| `border-collapse: collapse` | ✅ (always) |
+| `border-collapse: separate` | ❌ |
 
 ### Lists
 
-| Property | Status | Notes |
-|---|---|---|
-| `list-style-type` | ✅ | disc / circle / square / decimal / lower-alpha / upper-alpha / lower-roman / upper-roman / none |
+| Property | Status |
+|---|---|
+| `list-style-type` | ✅ |
 
 ### CSS variables
 
-| Feature | Status | Notes |
-|---|---|---|
-| Custom properties (`--name: value`) | ✅ | defined on `:root` are global; element-scoped vars work too |
-| `var(--name, fallback)` | ✅ | |
+| Feature | Status |
+|---|---|
+| Custom properties (`--name`) on `:root` and elements | ✅ |
+| `var(--name, fallback)` | ✅ |
 
 ### Selectors
 
-| Form | Status | Notes |
-|---|---|---|
-| Tag (`div`) | ✅ | |
-| Class (`.foo`) | ✅ | |
-| ID (`#bar`) | ✅ | |
-| Compound (`div.foo#bar`) | ✅ | |
-| Descendant (`div p`) | ✅ | |
-| Comma list (`h1, h2, h3`) | ✅ | |
-| Pseudo-classes (`:hover`, `:focus`, `:not()`, `:nth-child()`) | ❌ | parsed without crashing — rules with unsupported selectors simply never match (verified — does NOT drop sibling rules). |
-| Universal (`*`) | ✅ | combined with `:root` for global custom properties |
-| `@media`, `@keyframes`, other at-rules | ⚠️ | parsed but skipped (don't break the stylesheet) |
-| `!important` | ⚠️ | stripped before parsing — cascade priority isn't tracked |
+| Form | Status |
+|---|---|
+| Tag (`div`) | ✅ |
+| Class (`.foo`) | ✅ |
+| ID (`#bar`) | ✅ |
+| Compound (`div.foo#bar`) | ✅ |
+| Descendant (`div p`) | ✅ |
+| Comma list (`h1, h2, h3`) | ✅ |
+| **`:hover`, `:active`, `:focus`** | ✅ runtime — flags maintained on the tag, MouseMove/MouseDown update the chain |
+| **`[attr]` (presence)** | ✅ |
+| **`[attr="value"]` (exact)** | ✅ |
+| `[attr~=]`, `[attr^=]`, `[attr$=]`, `[attr*=]` | ❌ |
+| `:not()`, `:nth-child()` | ❌ — parsed without crashing; rules silently no-match (verified) |
+| Universal (`*`) | ✅ |
+| `+` adjacent / `~` general sibling combinators | ❌ |
+| `@media`, `@keyframes`, other at-rules | ⚠️ parsed but skipped (don't break the stylesheet) |
+| `!important` | ⚠️ stripped before parsing — cascade priority isn't tracked |
 
 ---
 
@@ -151,7 +167,7 @@ out in the notes column.
 
 | Element | Status |
 |---|---|
-| `<html>`, `<body>`, `<head>` (skipped), `<style>`, `<title>` (skipped), `<meta>` (skipped) | ✅ |
+| `<html>`, `<body>`, `<head>`, `<style>`, `<title>`, `<meta>` | ✅ |
 | `<div>`, `<p>`, `<span>`, `<a>`, `<br>`, `<hr>`, `<img>` | ✅ |
 | `<h1>`–`<h6>`, `<b>`, `<i>`, `<u>`, `<strong>`, `<em>`, `<s>`, `<sub>`, `<sup>` | ✅ |
 | `<ul>`, `<ol>`, `<li>` | ✅ |
@@ -163,16 +179,18 @@ out in the notes column.
 
 ---
 
-## Events
+## Events / Diagnostics
 
 | Hook | Notes |
 |---|---|
-| `onclick="Object:Method(args)"` | RTTI dispatch to public/published methods on objects registered via `RegisterObject`. Args are passed as strings. |
+| `onclick="Object:Method(args)"` | RTTI dispatch to public/published methods on objects registered via `RegisterObject` |
 | `OnElementClick` event | Fallback when RTTI dispatch doesn't catch |
-| `OnUnresolvedClick` event | **Diagnostic hook** — fires when a click can't be dispatched, with a human-readable `Reason` ("method not found", "private visibility", "wrong arg count", etc.). Recommended for development builds — use it to log silent failures. |
+| **`OnUnresolvedClick`** event | **Diagnostic** — fires when a click can't be dispatched, with a Reason ("method not found", "private visibility", "wrong arg count", etc.) |
+| **`OnCssParseError`** event | **Diagnostic** — fires when a CSS rule produces zero parsable declarations |
 | `OnFormControlClick` / `OnFormControlChange` / `OnFormSubmit` | Native form events |
 | `OnLinkClick` | `<a href="...">` click; set `Handled := True` to skip default |
 | `OnScroll` | Viewport scroll position |
+| **`DebugBoxOverlay`** property | Toggle to paint margin (orange) / padding (green) / content (blue) frames over every laid-out box |
 
 ---
 
@@ -184,14 +202,16 @@ out in the notes column.
 
 ---
 
-## Known gaps (high-impact roadmap)
+## Roadmap / known gaps
 
-1. **Flexbox** — `display: flex; justify-content; align-items` would replace most pixel-math layouts.
-2. **Position absolute/fixed** — for tooltips, badges, overlay placement.
-3. **Inline-content text wrap around floats** — currently siblings shift uniformly.
-4. **Multiple `background-image` layers** (comma-separated) — only the first is rendered.
-5. **CSS transforms** (translate, rotate, scale).
-6. **Pseudo-classes** (`:hover`, `:focus`, `:not()`, `:nth-child()`) match-time, not just parse-time.
+1. **Inline-content text wrap around floats** — currently siblings shift uniformly; line-by-line wrap is the bigger float feature still out.
+2. **`+` / `~` sibling combinators** — needs proper tokenizing instead of split-by-space.
+3. **`@media` query evaluation** — currently parsed-and-skipped. Min/max-width queries against the renderer width would unlock responsive design.
+4. **`!important`** — strip-and-discard; cascade ordering ignores it.
+5. **Multiple `background-image` layers** (comma-separated) — only first rendered.
+6. **`grid`** — biggest remaining layout primitive.
+7. **`:nth-child()`, `:not()`** runtime matching.
+8. **Incremental relayout** — full reparse on every mutation; expensive on large trees.
 
 ---
 
@@ -199,4 +219,4 @@ out in the notes column.
 
 * `readme.md` — top-level docs and tutorials
 * `Tina4HTMLRender.pas` — implementation
-* `Example/Test/TestTina4Components.pas` — 450+ DUnit tests pinning specific behaviours
+* `Example/Test/TestTina4Components.pas` — 480+ DUnit tests pinning specific behaviours

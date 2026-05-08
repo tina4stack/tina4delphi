@@ -106,6 +106,10 @@ type
     procedure TestPositionAbsoluteRightBottomAnchored;
     procedure TestPositionAbsoluteLeftAndRightDerivesWidth;
     procedure TestPositionRelativeShiftsButLeavesSiblings;
+    // Pseudo-classes (:hover/:active/:focus runtime matching)
+    procedure TestHoverPseudoClassAppliesWhenFlagSet;
+    procedure TestActivePseudoClassAppliesWhenFlagSet;
+    procedure TestPseudoClassNotMatchingDoesNotApply;
   end;
 
 implementation
@@ -2316,6 +2320,108 @@ begin
       Format('B.Y should be 30 (after A''s 30px height), got %.1f', [B.Y]));
   finally
     Engine.Free;
+    Parser.Free;
+  end;
+end;
+
+// ---------------------------------------------------------------------------
+// Pseudo-class runtime matching
+//
+// Mouse events are too awkward to simulate from DUnit, so these tests
+// manually flip the IsHovered / IsActive / IsFocused flags on the tag and
+// verify the CSS selector match path consults them.
+// ---------------------------------------------------------------------------
+
+procedure TestTTina4Components.TestHoverPseudoClassAppliesWhenFlagSet;
+var
+  Parser: Tina4HtmlRender.THTMLParser;
+  StyleSheet: Tina4HtmlRender.TCSSStyleSheet;
+  Decls: TDictionary<string, string>;
+begin
+  Parser := Tina4HtmlRender.THTMLParser.Create;
+  StyleSheet := Tina4HtmlRender.TCSSStyleSheet.Create;
+  try
+    StyleSheet.AddCSS('.btn { color: black; }' + sLineBreak +
+                      '.btn:hover { color: red; }');
+    Parser.Parse('<div id="b" class="btn">x</div>');
+
+    var Tag := Parser.Root.Children[0];
+    // Without IsHovered set: only the base rule applies.
+    Decls := TDictionary<string, string>.Create;
+    try
+      StyleSheet.ApplyTo(Tag, Decls);
+      CheckEquals('black', Decls['color'],
+        'without :hover state, only base rule applies');
+    finally
+      Decls.Free;
+    end;
+
+    // Flip IsHovered: the :hover rule should now win.
+    Tag.IsHovered := True;
+    Decls := TDictionary<string, string>.Create;
+    try
+      StyleSheet.ApplyTo(Tag, Decls);
+      CheckEquals('red', Decls['color'],
+        ':hover rule should apply when IsHovered=True');
+    finally
+      Decls.Free;
+    end;
+  finally
+    StyleSheet.Free;
+    Parser.Free;
+  end;
+end;
+
+procedure TestTTina4Components.TestActivePseudoClassAppliesWhenFlagSet;
+var
+  Parser: Tina4HtmlRender.THTMLParser;
+  StyleSheet: Tina4HtmlRender.TCSSStyleSheet;
+  Decls: TDictionary<string, string>;
+begin
+  Parser := Tina4HtmlRender.THTMLParser.Create;
+  StyleSheet := Tina4HtmlRender.TCSSStyleSheet.Create;
+  try
+    StyleSheet.AddCSS('.tile:active { background: blue; }');
+    Parser.Parse('<div id="t" class="tile">x</div>');
+    var Tag := Parser.Root.Children[0];
+    Tag.IsActive := True;
+    Decls := TDictionary<string, string>.Create;
+    try
+      StyleSheet.ApplyTo(Tag, Decls);
+      Check(Decls.ContainsKey('background'),
+        ':active rule should match when IsActive=True');
+    finally
+      Decls.Free;
+    end;
+  finally
+    StyleSheet.Free;
+    Parser.Free;
+  end;
+end;
+
+procedure TestTTina4Components.TestPseudoClassNotMatchingDoesNotApply;
+var
+  Parser: Tina4HtmlRender.THTMLParser;
+  StyleSheet: Tina4HtmlRender.TCSSStyleSheet;
+  Decls: TDictionary<string, string>;
+begin
+  Parser := Tina4HtmlRender.THTMLParser.Create;
+  StyleSheet := Tina4HtmlRender.TCSSStyleSheet.Create;
+  try
+    StyleSheet.AddCSS('.x:hover { color: red; }');
+    Parser.Parse('<div id="d" class="x">x</div>');
+    var Tag := Parser.Root.Children[0];
+    // IsHovered stays False (default).
+    Decls := TDictionary<string, string>.Create;
+    try
+      StyleSheet.ApplyTo(Tag, Decls);
+      Check(not Decls.ContainsKey('color'),
+        ':hover rule should NOT match when IsHovered=False');
+    finally
+      Decls.Free;
+    end;
+  finally
+    StyleSheet.Free;
     Parser.Free;
   end;
 end;

@@ -38,6 +38,12 @@ type
     Children: TList<THTMLTag>;
     /// <summary>Reference to the parent node. Nil for the root.</summary>
     Parent: THTMLTag;
+    /// <summary>Pseudo-class runtime state. The renderer maintains these
+    /// flags as the user mouses around / clicks; CSS selectors with
+    /// `:hover`, `:active`, or `:focus` consult them at match time.</summary>
+    IsHovered: Boolean;
+    IsActive: Boolean;
+    IsFocused: Boolean;
     /// <summary>Creates an empty tag with initialised dictionaries and child list.</summary>
     constructor Create;
     /// <summary>Frees all children recursively and the internal dictionaries.</summary>
@@ -430,6 +436,13 @@ type
     // an extra parameter, since most callers don't care.
     FStickyAnchorY: Single;
     FStickyAnchorX: Single;  // mirror of FStickyAnchorY for horizontal sticky
+    // Pseudo-class state tracking. The renderer owns the chain of currently
+    // hovered / active tags so :hover / :active selectors update at runtime
+    // without a full DOM rebuild. Each entry's IsHovered / IsActive flag is
+    // toggled when this list changes; the renderer triggers Repaint on
+    // change so style cascade re-evaluates.
+    FHoverChain: TList<THTMLTag>;   // nil-or-list, deepest first
+    FActiveChain: TList<THTMLTag>;
     FContentWidth: Single;
     FContentHeight: Single;
     FNeedRelayout: Boolean;
@@ -607,6 +620,9 @@ type
     function GetViewportWidth: Single;
     function GetViewportHeight: Single;
     function FindLayoutBoxByTag(Box: TLayoutBox; Target: THTMLTag): TLayoutBox;
+    function HitTestTagAt(Box: TLayoutBox; OffX, OffY, X, Y: Single): THTMLTag;
+    procedure UpdatePseudoChain(Chain: TList<THTMLTag>; NewLeaf: THTMLTag;
+      const FlagName: string);
     function GetBoxAbsolutePosition(Target: TLayoutBox; out AX, AY: Single): Boolean;
     procedure DoScrollChanged;
     procedure InsertHTMLFragment(Target: THTMLTag; const Html: string; AtFront: Boolean);
@@ -1300,6 +1316,7 @@ function MatchesSingleSelector(const Sel: string; Tag: THTMLTag): Boolean;
 var
   SelTag, SelClass, SelId: string;
   DotPos, HashPos: Integer;
+  RequireHover, RequireActive, RequireFocus: Boolean;
 begin
   Result := False;
   if not Assigned(Tag) or (Tag.TagName = '#text') or (Tag.TagName = 'root') then
@@ -1310,8 +1327,27 @@ begin
   SelTag := '';
   SelClass := '';
   SelId := '';
+  RequireHover := False;
+  RequireActive := False;
+  RequireFocus := False;
 
   var S := Sel;
+
+  // Strip recognised pseudo-class suffixes (`:hover`, `:active`, `:focus`)
+  // and remember which ones we need to verify against the tag's runtime
+  // state. Unknown pseudo-classes (`:not(...)`, `:nth-child()`, etc.) are
+  // left embedded — they'll fail the class/tag string compare below and
+  // produce a no-match without bringing down the surrounding stylesheet.
+  while True do
+  begin
+    var ColonIdx := S.LastIndexOf(':');
+    if ColonIdx <= 0 then Break;
+    var Suffix := S.Substring(ColonIdx).ToLower;
+    if Suffix = ':hover' then begin RequireHover := True; S := S.Substring(0, ColonIdx); end
+    else if Suffix = ':active' then begin RequireActive := True; S := S.Substring(0, ColonIdx); end
+    else if Suffix = ':focus' then begin RequireFocus := True; S := S.Substring(0, ColonIdx); end
+    else Break;
+  end;
   HashPos := S.IndexOf('#');
   DotPos := S.IndexOf('.');
 
@@ -1373,8 +1409,17 @@ begin
     if not SameText(TagId, SelId) then Exit;
   end;
 
-  // Must have matched at least something
-  if (SelTag = '') and (SelClass = '') and (SelId = '') then Exit;
+  // Must have matched at least something — the bare-pseudo case
+  // (e.g. selector `:hover` with no tag/class/id) is allowed when one of
+  // the recognised pseudo-classes is required.
+  if (SelTag = '') and (SelClass = '') and (SelId = '') and
+     (not (RequireHover or RequireActive or RequireFocus)) then Exit;
+
+  // Pseudo-class state checks. All required flags must currently be set
+  // on the tag for the selector to match.
+  if RequireHover and (not Tag.IsHovered) then Exit;
+  if RequireActive and (not Tag.IsActive) then Exit;
+  if RequireFocus and (not Tag.IsFocused) then Exit;
 
   Result := True;
 end;
@@ -5610,6 +5655,8 @@ begin
   FFormControls := TList<TNativeFormControl>.Create;
   FClickableRegions := TList<TClickableRegion>.Create;
   FRegisteredObjects := TDictionary<string, TObject>.Create;
+  FHoverChain := TList<THTMLTag>.Create;
+  FActiveChain := TList<THTMLTag>.Create;
   // Per-box scroll state — keyed by DOM tag so it survives relayouts that
   // rebuild the TLayoutBox tree from scratch.
   FBoxScrollState := TDictionary<THTMLTag, TPointF>.Create;
@@ -5753,6 +5800,8 @@ begin
   FFormControls.Free;
   FClickableRegions.Free;
   FRegisteredObjects.Free;
+  FHoverChain.Free;
+  FActiveChain.Free;
   FBoxScrollState.Free;
   FStyleSheet.Free;
   FLayoutEngine.Free;
@@ -6519,6 +6568,101 @@ begin
   begin
     Result := FindLayoutBoxByTag(Child, Target);
     if Assigned(Result) then Exit;
+  end;
+end;
+
+function TTina4HTMLRender.HitTestTagAt(Box: TLayoutBox;
+  OffX, OffY, X, Y: Single): THTMLTag;
+// Walk the layout tree depth-first looking for the deepest box whose
+// margin-box rectangle contains (X, Y). Returns its Tag, or nil if none.
+// Used by mouse-tracking to update :hover / :active state without a
+// full repaint pass — all we need is the tag, then we mark it.
+var
+  AbsX, AbsY, CX, CY: Single;
+  Hit: THTMLTag;
+begin
+  Result := nil;
+  if not Assigned(Box) then Exit;
+  AbsX := OffX + Box.X;
+  AbsY := OffY + Box.Y;
+  if (X < AbsX) or (X > AbsX + Box.MarginBoxWidth) or
+     (Y < AbsY) or (Y > AbsY + Box.MarginBoxHeight) then
+    Exit;
+  // Box contains the point — record it and try to find a deeper match
+  // among children. Children are positioned relative to ContentLeft/Top.
+  if Assigned(Box.Tag) and (Box.Tag.TagName <> '#text') then
+    Result := Box.Tag;
+  CX := AbsX + Box.ContentLeft;
+  CY := AbsY + Box.ContentTop;
+  for var Child in Box.Children do
+  begin
+    Hit := HitTestTagAt(Child, CX, CY, X, Y);
+    if Assigned(Hit) then Exit(Hit);
+  end;
+end;
+
+procedure TTina4HTMLRender.UpdatePseudoChain(Chain: TList<THTMLTag>;
+  NewLeaf: THTMLTag; const FlagName: string);
+// Re-build the ancestor chain `:hover` / `:active` flag-set so it matches
+// the current leaf. Tags that drop out of the chain have their flag
+// cleared; new ones get it set. Triggers Repaint when anything changed.
+var
+  NewChain: TList<THTMLTag>;
+  Walker: THTMLTag;
+  Changed: Boolean;
+begin
+  NewChain := TList<THTMLTag>.Create;
+  try
+    Walker := NewLeaf;
+    while Assigned(Walker) do
+    begin
+      NewChain.Add(Walker);
+      Walker := Walker.Parent;
+    end;
+
+    // Compare to existing chain
+    Changed := NewChain.Count <> Chain.Count;
+    if not Changed then
+      for var I := 0 to NewChain.Count - 1 do
+        if NewChain[I] <> Chain[I] then
+        begin
+          Changed := True;
+          Break;
+        end;
+    if not Changed then Exit;
+
+    // Clear flags from tags no longer in the chain
+    for var T in Chain do
+      if NewChain.IndexOf(T) < 0 then
+      begin
+        if FlagName = 'hover' then T.IsHovered := False
+        else if FlagName = 'active' then T.IsActive := False
+        else if FlagName = 'focus' then T.IsFocused := False;
+      end;
+    // Set flags on newly-active tags
+    for var T in NewChain do
+      if Chain.IndexOf(T) < 0 then
+      begin
+        if FlagName = 'hover' then T.IsHovered := True
+        else if FlagName = 'active' then T.IsActive := True
+        else if FlagName = 'focus' then T.IsFocused := True;
+      end;
+
+    // Replace chain
+    Chain.Clear;
+    for var T in NewChain do Chain.Add(T);
+
+    // Style cascade re-evaluation. Cheapest path: invalidate the parser
+    // cache + relayout flag isn't required (DOM didn't change), but the
+    // computed-style for these tags differs now so we re-paint. To be
+    // strictly correct we'd also need to invalidate any cached
+    // TComputedStyle — but TComputedStyle.ForTag is currently called
+    // every layout pass, so a Repaint that triggers DoLayout (via
+    // FNeedRelayout) gets fresh styles for free.
+    FNeedRelayout := True;
+    Repaint;
+  finally
+    NewChain.Free;
   end;
 end;
 
@@ -9635,6 +9779,16 @@ begin
   FPanLastTick := TThread.GetTickCount;
   FPanVelocityX := 0;
   FPanVelocityY := 0;
+
+  // Update :active state — set on the element under the press point and
+  // its ancestor chain. Cleared in MouseUp.
+  if (Button = TMouseButton.mbLeft) and Assigned(FLayoutEngine) and
+     Assigned(FLayoutEngine.Root) then
+  begin
+    var ActiveTag := HitTestTagAt(FLayoutEngine.Root, -FScrollX, -FScrollY, X, Y);
+    UpdatePseudoChain(FActiveChain, ActiveTag, 'active');
+  end;
+
   // First check viewport scrollbar (outer)
   if ScrollBarVisible and (X >= Width - FScrollBarWidth) then
   begin
@@ -9704,8 +9858,19 @@ var
   ACX, ACY: Single;
   VisW, VisH, TrackRange, ScrollRange: Single;
   SB: Single;
+  HoverTag: THTMLTag;
 begin
   inherited;
+
+  // Update :hover state. Hit-test against the layout tree to find the
+  // deepest element under the cursor, then promote/demote the
+  // ancestor chain. UpdatePseudoChain triggers Repaint only when the
+  // chain actually changed.
+  if Assigned(FLayoutEngine) and Assigned(FLayoutEngine.Root) then
+  begin
+    HoverTag := HitTestTagAt(FLayoutEngine.Root, -FScrollX, -FScrollY, X, Y);
+    UpdatePseudoChain(FHoverChain, HoverTag, 'hover');
+  end;
   if FMouseDownOnScroll and ScrollBarVisible then
   begin
     Ratio := Height / FContentHeight;
@@ -9976,6 +10141,10 @@ begin
 
     end;
   end;
+
+  // Clear :active — chain empty, all flags off.
+  if (Button = TMouseButton.mbLeft) and (FActiveChain.Count > 0) then
+    UpdatePseudoChain(FActiveChain, nil, 'active');
 
   // Check pre-recorded clickable regions for onclick attribute handling.
   // Regions are in screen coordinates, recorded during Paint.

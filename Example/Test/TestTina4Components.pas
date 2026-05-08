@@ -115,6 +115,10 @@ type
     procedure TestBackgroundPositionKeywordsParsed;
     procedure TestBackgroundRepeatParsed;
     procedure TestLinearGradientFromBackgroundShorthand;
+    // CSS transforms
+    procedure TestTransformTranslateParsed;
+    procedure TestTransformRotateParsed;
+    procedure TestTransformScaleAndChainedParsed;
   end;
 
 implementation
@@ -2533,6 +2537,76 @@ begin
     CheckEquals(180, D.Style.BgGradientAngle, 'to bottom = 180deg');
     Check(D.Style.BgGradientStart <> 0, 'start colour set');
     Check(D.Style.BgGradientEnd <> 0, 'end colour set');
+  finally
+    Engine.Free;
+    Parser.Free;
+  end;
+end;
+
+// ---------------------------------------------------------------------------
+// CSS transforms
+// ---------------------------------------------------------------------------
+
+procedure TestTTina4Components.TestTransformTranslateParsed;
+var
+  Parser: Tina4HtmlRender.THTMLParser;
+  Engine: Tina4HtmlRender.TLayoutEngine;
+  D: Tina4HtmlRender.TLayoutBox;
+begin
+  Parser := Tina4HtmlRender.THTMLParser.Create;
+  Engine := Tina4HtmlRender.TLayoutEngine.Create(nil);
+  try
+    RunLayout(Parser, Engine,
+      '<div id="d" style="transform: translate(10px, 20px)">x</div>', 400);
+    D := FindBoxById(Engine.Root, 'd');
+    Check(D.Style.TransformActive, 'transform active');
+    CheckEquals(10, D.Style.TransformTranslateX, 'translateX');
+    CheckEquals(20, D.Style.TransformTranslateY, 'translateY');
+  finally
+    Engine.Free;
+    Parser.Free;
+  end;
+end;
+
+procedure TestTTina4Components.TestTransformRotateParsed;
+var
+  Parser: Tina4HtmlRender.THTMLParser;
+  Engine: Tina4HtmlRender.TLayoutEngine;
+  D: Tina4HtmlRender.TLayoutBox;
+begin
+  Parser := Tina4HtmlRender.THTMLParser.Create;
+  Engine := Tina4HtmlRender.TLayoutEngine.Create(nil);
+  try
+    RunLayout(Parser, Engine, '<div id="d" style="transform: rotate(45deg)">x</div>', 400);
+    D := FindBoxById(Engine.Root, 'd');
+    Check(D.Style.TransformActive, 'transform active');
+    CheckEquals(45, D.Style.TransformRotate, 'rotate=45');
+  finally
+    Engine.Free;
+    Parser.Free;
+  end;
+end;
+
+procedure TestTTina4Components.TestTransformScaleAndChainedParsed;
+var
+  Parser: Tina4HtmlRender.THTMLParser;
+  Engine: Tina4HtmlRender.TLayoutEngine;
+  D: Tina4HtmlRender.TLayoutBox;
+begin
+  Parser := Tina4HtmlRender.THTMLParser.Create;
+  Engine := Tina4HtmlRender.TLayoutEngine.Create(nil);
+  try
+    // Chained transforms accumulate per-axis.
+    RunLayout(Parser, Engine,
+      '<div id="d" style="transform: translate(5px, 5px) rotate(90deg) scale(2)">x</div>',
+      400);
+    D := FindBoxById(Engine.Root, 'd');
+    Check(D.Style.TransformActive, 'active');
+    CheckEquals(5, D.Style.TransformTranslateX, 'tx=5');
+    CheckEquals(5, D.Style.TransformTranslateY, 'ty=5');
+    CheckEquals(90, D.Style.TransformRotate, 'rot=90');
+    CheckEquals(2, D.Style.TransformScaleX, 'sx=2');
+    CheckEquals(2, D.Style.TransformScaleY, 'sy=2');
   finally
     Engine.Free;
     Parser.Free;

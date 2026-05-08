@@ -280,6 +280,16 @@ type
     BgGradientEnd: TAlphaColor;
     BgGradientAngle: Single;     // degrees clockwise from `to top`
     BgGradientActive: Boolean;
+    // CSS transforms (subset): translate/translateX/translateY, rotate, scale.
+    // Applied as a single matrix at paint time around the element's
+    // border-box centre. matrix() / matrix3d() / 3D transforms not yet
+    // supported.
+    TransformActive: Boolean;
+    TransformTranslateX: Single;
+    TransformTranslateY: Single;
+    TransformRotate: Single;       // degrees clockwise
+    TransformScaleX: Single;
+    TransformScaleY: Single;
     procedure SetBorderWidth(W: Single);
     procedure SetBorderColor(C: TAlphaColor);
     function BorderColor: TAlphaColor;  // returns Top color (legacy compat)
@@ -2303,6 +2313,9 @@ begin
   Result.BgPosY := 0;
   Result.BgRepeat := 'no-repeat';
   Result.BgGradientActive := False;
+  Result.TransformActive := False;
+  Result.TransformScaleX := 1;
+  Result.TransformScaleY := 1;
 end;
 
 class function TComputedStyle.ParseColor(const S: string): TAlphaColor;
@@ -2569,6 +2582,9 @@ begin
   Result.BgPosY := 0;
   Result.BgRepeat := 'no-repeat';
   Result.BgGradientActive := False;
+  Result.TransformActive := False;
+  Result.TransformScaleX := 1;
+  Result.TransformScaleY := 1;
 
   if Tag = nil then Exit;
   TN := Tag.TagName.ToLower;
@@ -3416,6 +3432,90 @@ begin
         Style.BgGradientStart := Colors[0];
         Style.BgGradientEnd := Colors[High(Colors)];
         Style.BgGradientActive := True;
+      end;
+    end;
+  end;
+
+  // CSS transform: parse a chain of translate/rotate/scale function
+  // calls into the per-axis fields. Multiple transforms compose in
+  // CSS order; we aggregate translate offsets, multiply scales,
+  // and sum rotation. Functions we don't recognise are skipped.
+  if Decls.TryGetValue('transform', Temp) and not ShouldSkip(Temp) then
+  begin
+    var TfStr := Temp.Trim.ToLower;
+    if (TfStr = 'none') or (TfStr = '') then
+    begin
+      Style.TransformActive := False;
+      Style.TransformScaleX := 1;
+      Style.TransformScaleY := 1;
+    end
+    else
+    begin
+      Style.TransformActive := True;
+      var Pos := 0;
+      while Pos < TfStr.Length do
+      begin
+        // Skip whitespace / commas
+        while (Pos < TfStr.Length) and ((TfStr.Chars[Pos] = ' ') or (TfStr.Chars[Pos] = ',')) do
+          Inc(Pos);
+        if Pos >= TfStr.Length then Break;
+        // Function name up to '('
+        var NameStart := Pos;
+        while (Pos < TfStr.Length) and (TfStr.Chars[Pos] <> '(') do Inc(Pos);
+        if Pos >= TfStr.Length then Break;
+        var FnName := TfStr.Substring(NameStart, Pos - NameStart).Trim;
+        Inc(Pos); // skip '('
+        var ArgStart := Pos;
+        while (Pos < TfStr.Length) and (TfStr.Chars[Pos] <> ')') do Inc(Pos);
+        var ArgStr := TfStr.Substring(ArgStart, Pos - ArgStart);
+        if Pos < TfStr.Length then Inc(Pos);  // skip ')'
+        var Args := ArgStr.Split([',']);
+
+        if FnName = 'translate' then
+        begin
+          if Length(Args) >= 1 then
+            Style.TransformTranslateX := Style.TransformTranslateX + ParseLength(Args[0].Trim, Style.FontSize);
+          if Length(Args) >= 2 then
+            Style.TransformTranslateY := Style.TransformTranslateY + ParseLength(Args[1].Trim, Style.FontSize);
+        end
+        else if FnName = 'translatex' then
+        begin
+          if Length(Args) >= 1 then
+            Style.TransformTranslateX := Style.TransformTranslateX + ParseLength(Args[0].Trim, Style.FontSize);
+        end
+        else if FnName = 'translatey' then
+        begin
+          if Length(Args) >= 1 then
+            Style.TransformTranslateY := Style.TransformTranslateY + ParseLength(Args[0].Trim, Style.FontSize);
+        end
+        else if FnName = 'rotate' then
+        begin
+          if Length(Args) >= 1 then
+          begin
+            var A := Args[0].Trim;
+            if A.EndsWith('deg') then A := A.Substring(0, A.Length - 3);
+            Style.TransformRotate := Style.TransformRotate + StrToFloatDef(A, 0);
+          end;
+        end
+        else if FnName = 'scale' then
+        begin
+          if Length(Args) >= 1 then
+            Style.TransformScaleX := Style.TransformScaleX * StrToFloatDef(Args[0].Trim, 1);
+          if Length(Args) >= 2 then
+            Style.TransformScaleY := Style.TransformScaleY * StrToFloatDef(Args[1].Trim, 1)
+          else if Length(Args) >= 1 then
+            Style.TransformScaleY := Style.TransformScaleY * StrToFloatDef(Args[0].Trim, 1);
+        end
+        else if FnName = 'scalex' then
+        begin
+          if Length(Args) >= 1 then
+            Style.TransformScaleX := Style.TransformScaleX * StrToFloatDef(Args[0].Trim, 1);
+        end
+        else if FnName = 'scaley' then
+        begin
+          if Length(Args) >= 1 then
+            Style.TransformScaleY := Style.TransformScaleY * StrToFloatDef(Args[0].Trim, 1);
+        end;
       end;
     end;
   end;
@@ -8275,6 +8375,30 @@ begin
   // Viewport culling
   if (AbsY + Box.MarginBoxHeight < 0) or (AbsY > Height) then Exit;
 
+  // CSS `transform` is paint-only — apply it as a canvas matrix around
+  // the box's centre (CSS transform-origin defaults to 50% 50%) and
+  // restore at the end. Affects both self-paint and children paint.
+  // We rely on the lack of further `Exit` after this point — the
+  // closing `end;` of PaintBox is the only return path.
+  var TransformActive := Box.Style.TransformActive;
+  var TransformSaveState := Canvas.SaveState;
+  try
+  if TransformActive then
+  begin
+    var CTX := AbsX + Box.MarginBoxWidth / 2;
+    var CTY := AbsY + Box.MarginBoxHeight / 2;
+    var M := Canvas.Matrix;
+    M := TMatrix.CreateTranslation(-CTX, -CTY) * M;
+    if (Box.Style.TransformScaleX <> 1) or (Box.Style.TransformScaleY <> 1) then
+      M := TMatrix.CreateScaling(Box.Style.TransformScaleX, Box.Style.TransformScaleY) * M;
+    if Box.Style.TransformRotate <> 0 then
+      M := TMatrix.CreateRotation(DegToRad(Box.Style.TransformRotate)) * M;
+    M := TMatrix.CreateTranslation(
+      CTX + Box.Style.TransformTranslateX,
+      CTY + Box.Style.TransformTranslateY) * M;
+    Canvas.SetMatrix(M);
+  end;
+
   // Sticky-paint mode gating:
   //   mode 2 (sticky-only pass) paints box content only when this box is
   //   sticky; non-sticky boxes are walked purely to reach sticky descendants.
@@ -8471,6 +8595,10 @@ begin
       for var Child in Box.Children do
         PaintBox(Canvas, Child, CX, CY, ChildStickyMode);
     end;
+  end;
+  finally
+    // Restore the canvas matrix saved before the transform (if any).
+    Canvas.RestoreState(TransformSaveState);
   end;
 end;
 

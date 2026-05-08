@@ -119,6 +119,11 @@ type
     procedure TestTransformTranslateParsed;
     procedure TestTransformRotateParsed;
     procedure TestTransformScaleAndChainedParsed;
+    // Misc small batch
+    procedure TestClearLeftPushesPastFloatBottom;
+    procedure TestNumericFontWeightTriggersBold;
+    procedure TestAttributeSelectorPresenceMatches;
+    procedure TestAttributeSelectorValueMatches;
   end;
 
 implementation
@@ -2609,6 +2614,124 @@ begin
     CheckEquals(2, D.Style.TransformScaleY, 'sy=2');
   finally
     Engine.Free;
+    Parser.Free;
+  end;
+end;
+
+// ---------------------------------------------------------------------------
+// Misc batch: clear, numeric font-weight, attribute selectors
+// ---------------------------------------------------------------------------
+
+procedure TestTTina4Components.TestClearLeftPushesPastFloatBottom;
+var
+  Parser: Tina4HtmlRender.THTMLParser;
+  Engine: Tina4HtmlRender.TLayoutEngine;
+  S: Tina4HtmlRender.TLayoutBox;
+begin
+  Parser := Tina4HtmlRender.THTMLParser.Create;
+  Engine := Tina4HtmlRender.TLayoutEngine.Create(nil);
+  try
+    // 80px float on the left, sibling with clear:left must sit BELOW
+    // the float bottom — Y >= 80 — not shift past it horizontally.
+    RunLayout(Parser, Engine,
+      '<div style="width:300px; padding:0">' +
+      '  <div style="float:left; width:64px; height:80px; padding:0">F</div>' +
+      '  <div id="s" style="clear:left; height:30px; padding:0">S</div>' +
+      '</div>', 400);
+    S := FindBoxById(Engine.Root, 's');
+    Check(Assigned(S), 'sibling exists');
+    Check(S.Y >= 80,
+      Format('clear:left should push S.Y past float bottom 80, got %.1f', [S.Y]));
+    // Sibling should NOT be shifted right.
+    Check(Abs(S.X) < 1,
+      Format('clear:left sibling should sit at X=0, got %.1f', [S.X]));
+  finally
+    Engine.Free;
+    Parser.Free;
+  end;
+end;
+
+procedure TestTTina4Components.TestNumericFontWeightTriggersBold;
+var
+  Parser: Tina4HtmlRender.THTMLParser;
+  Engine: Tina4HtmlRender.TLayoutEngine;
+  D1, D2: Tina4HtmlRender.TLayoutBox;
+begin
+  Parser := Tina4HtmlRender.THTMLParser.Create;
+  Engine := Tina4HtmlRender.TLayoutEngine.Create(nil);
+  try
+    RunLayout(Parser, Engine,
+      '<div id="a" style="font-weight: 700">x</div>' +
+      '<div id="b" style="font-weight: 300">x</div>', 400);
+    D1 := FindBoxById(Engine.Root, 'a');
+    D2 := FindBoxById(Engine.Root, 'b');
+    Check(D1.Style.Bold, 'font-weight:700 → bold');
+    Check(not D2.Style.Bold, 'font-weight:300 → not bold');
+  finally
+    Engine.Free;
+    Parser.Free;
+  end;
+end;
+
+procedure TestTTina4Components.TestAttributeSelectorPresenceMatches;
+var
+  Parser: Tina4HtmlRender.THTMLParser;
+  StyleSheet: Tina4HtmlRender.TCSSStyleSheet;
+  Decls: TDictionary<string, string>;
+begin
+  Parser := Tina4HtmlRender.THTMLParser.Create;
+  StyleSheet := Tina4HtmlRender.TCSSStyleSheet.Create;
+  try
+    StyleSheet.AddCSS('input[disabled] { color: gray; }');
+    Parser.Parse('<input disabled name="x">');
+    var Tag := Parser.Root.Children[0];
+    Decls := TDictionary<string, string>.Create;
+    try
+      StyleSheet.ApplyTo(Tag, Decls);
+      Check(Decls.ContainsKey('color'),
+        '[disabled] presence selector should match');
+    finally
+      Decls.Free;
+    end;
+  finally
+    StyleSheet.Free;
+    Parser.Free;
+  end;
+end;
+
+procedure TestTTina4Components.TestAttributeSelectorValueMatches;
+var
+  Parser: Tina4HtmlRender.THTMLParser;
+  StyleSheet: Tina4HtmlRender.TCSSStyleSheet;
+  Decls: TDictionary<string, string>;
+begin
+  Parser := Tina4HtmlRender.THTMLParser.Create;
+  StyleSheet := Tina4HtmlRender.TCSSStyleSheet.Create;
+  try
+    StyleSheet.AddCSS('input[type="email"] { color: blue; }');
+    Parser.Parse('<input type="email" name="e">');
+    var Tag := Parser.Root.Children[0];
+    Decls := TDictionary<string, string>.Create;
+    try
+      StyleSheet.ApplyTo(Tag, Decls);
+      Check(Decls.ContainsKey('color'),
+        '[type="email"] should match');
+    finally
+      Decls.Free;
+    end;
+    // Negative case — different value
+    Parser.Parse('<input type="text" name="t">');
+    Tag := Parser.Root.Children[0];
+    Decls := TDictionary<string, string>.Create;
+    try
+      StyleSheet.ApplyTo(Tag, Decls);
+      Check(not Decls.ContainsKey('color'),
+        '[type="email"] should NOT match type=text');
+    finally
+      Decls.Free;
+    end;
+  finally
+    StyleSheet.Free;
     Parser.Free;
   end;
 end;

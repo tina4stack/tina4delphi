@@ -134,11 +134,15 @@ type
     destructor Destroy; override;
   end;
 
+  TCSSStyleSheetParseError = procedure(Sender: TObject;
+    const Selector, Reason: string) of object;
+
   TCSSStyleSheet = class
   private
     FRules: TObjectList<TCSSRule>;
     FFileCache: TFileCache;
     FCustomProps: TDictionary<string, string>;
+    FOnParseError: TCSSStyleSheetParseError;
     procedure ParseCSS(const CSSText: string);
     function SelectorMatches(const Selector: string; Tag: THTMLTag): Boolean;
     function SelectorSpecificity(const Selector: string): Integer;
@@ -153,6 +157,7 @@ type
     function ResolveVarWith(const Value: string; Props: TDictionary<string, string>): string;
     property Rules: TObjectList<TCSSRule> read FRules;
     property FileCache: TFileCache read FFileCache write FFileCache;
+    property OnParseError: TCSSStyleSheetParseError read FOnParseError write FOnParseError;
     property CustomProps: TDictionary<string, string> read FCustomProps;
   end;
 
@@ -290,6 +295,10 @@ type
     TransformRotate: Single;       // degrees clockwise
     TransformScaleX: Single;
     TransformScaleY: Single;
+    // CSS `clear`: 'none' (default) | 'left' | 'right' | 'both'
+    // Pushes the box's top edge past any active float on the indicated
+    // side. Honoured by LayoutBlock's float pass.
+    CSSClear: string;
     procedure SetBorderWidth(W: Single);
     procedure SetBorderColor(C: TAlphaColor);
     function BorderColor: TAlphaColor;  // returns Top color (legacy compat)
@@ -427,6 +436,14 @@ type
   THTMLUnresolvedClickEvent = procedure(Sender: TObject;
     const ObjectName, MethodName: string; Params: TStrings;
     const Reason: string) of object;
+  /// <summary>
+  /// Diagnostic hook fired when a CSS rule fails to parse cleanly. Currently
+  /// emitted for selectors that produce zero declarations (a malformed rule
+  /// or one whose declaration block is entirely unrecognised). Useful for
+  /// dev-time logging — without it, broken CSS just silently disappears.
+  /// </summary>
+  THTMLCssParseErrorEvent = procedure(Sender: TObject;
+    const Selector, Reason: string) of object;
   /// <summary>Event for anchor link clicks. Set Handled := True to prevent default processing.</summary>
   THTMLLinkClickEvent = procedure(Sender: TObject; const AURL: string; var Handled: Boolean) of object;
   /// <summary>Event fired when the scroll position changes (wheel, drag, or programmatic).</summary>
@@ -543,6 +560,7 @@ type
     FOnSubmit: THTMLFormSubmitEvent;
     FOnElementClick: THTMLElementClickEvent;
     FOnUnresolvedClick: THTMLUnresolvedClickEvent;
+    FOnCssParseError: THTMLCssParseErrorEvent;
     FOnLinkClick: THTMLLinkClickEvent;
     FFrond: TStringList;
     FFrondEngine: TObject;        // TTina4Frond (declared in implementation uses)
@@ -567,6 +585,7 @@ type
     procedure SetFrond(const Value: TStringList);
     function GetFrond: TStringList;
     procedure FFrondChange(Sender: TObject);
+    procedure CssParseErrorRelay(Sender: TObject; const Selector, Reason: string);
     procedure RenderFrond;
     procedure SetFrondTemplatePath(const Value: string);
     procedure OnImageLoaded(Sender: TObject);
@@ -872,6 +891,11 @@ type
     /// `private`-visibility method on the target produces zero feedback.
     /// </summary>
     property OnUnresolvedClick: THTMLUnresolvedClickEvent read FOnUnresolvedClick write FOnUnresolvedClick;
+    /// <summary>
+    /// Diagnostic hook fired when a CSS rule yields zero declarations
+    /// (malformed). Wire it in dev builds to log unrecognised CSS.
+    /// </summary>
+    property OnCssParseError: THTMLCssParseErrorEvent read FOnCssParseError write FOnCssParseError;
     /// <summary>
     /// Fires when an anchor tag with href is clicked. Set Handled := True to
     /// prevent default processing. Used by TTina4HTMLPages for page navigation.
@@ -1201,7 +1225,12 @@ begin
           FRules.Add(Rule);
         end
         else
+        begin
+          if Assigned(FOnParseError) then
+            FOnParseError(Self, TrimmedSel,
+              'rule produced no parsable declarations');
           Rule.Free;
+        end;
       end;
     end;
 
@@ -1388,6 +1417,41 @@ begin
     else if Suffix = ':focus' then begin RequireFocus := True; S := S.Substring(0, ColonIdx); end
     else Break;
   end;
+
+  // Strip attribute selectors `[name]` (presence) and `[name="value"]`
+  // (exact-match — the most common form). Other operators (`~=`, `^=`,
+  // `$=`, `*=`) aren't yet honoured; they'll fall through to a no-match.
+  // Multiple `[...]` segments are allowed; we collect them all and check
+  // each at the end. Required attrs survive case-insensitive match on
+  // the name, case-sensitive on the value (matches browsers).
+  var AttrChecks: TArray<TPair<string, string>>;
+  while True do
+  begin
+    var BracketStart := S.IndexOf('[');
+    if BracketStart < 0 then Break;
+    var BracketEnd := S.IndexOf(']', BracketStart + 1);
+    if BracketEnd < 0 then Break;
+    var Inner := S.Substring(BracketStart + 1, BracketEnd - BracketStart - 1).Trim;
+    var Pair: TPair<string, string>;
+    var EqIdx := Inner.IndexOf('=');
+    if EqIdx > 0 then
+    begin
+      Pair.Key := Inner.Substring(0, EqIdx).Trim.ToLower;
+      var V := Inner.Substring(EqIdx + 1).Trim;
+      if (V.Length >= 2) and ((V.Chars[0] = '"') or (V.Chars[0] = '''')) then
+        V := V.Substring(1, V.Length - 2);
+      Pair.Value := V;
+    end
+    else
+    begin
+      Pair.Key := Inner.ToLower;
+      Pair.Value := #1#1;  // sentinel meaning "presence only"
+    end;
+    SetLength(AttrChecks, Length(AttrChecks) + 1);
+    AttrChecks[High(AttrChecks)] := Pair;
+    // Remove the [...] segment from S
+    S := S.Remove(BracketStart, BracketEnd - BracketStart + 1);
+  end;
   HashPos := S.IndexOf('#');
   DotPos := S.IndexOf('.');
 
@@ -1449,17 +1513,27 @@ begin
     if not SameText(TagId, SelId) then Exit;
   end;
 
-  // Must have matched at least something — the bare-pseudo case
-  // (e.g. selector `:hover` with no tag/class/id) is allowed when one of
-  // the recognised pseudo-classes is required.
+  // Must have matched at least something — the bare-pseudo or bare-attr
+  // case (e.g. `:hover` or `[disabled]`) is allowed when one of the
+  // pseudo-class flags is required or an attribute check is in play.
   if (SelTag = '') and (SelClass = '') and (SelId = '') and
-     (not (RequireHover or RequireActive or RequireFocus)) then Exit;
+     (not (RequireHover or RequireActive or RequireFocus)) and
+     (Length(AttrChecks) = 0) then Exit;
 
   // Pseudo-class state checks. All required flags must currently be set
   // on the tag for the selector to match.
   if RequireHover and (not Tag.IsHovered) then Exit;
   if RequireActive and (not Tag.IsActive) then Exit;
   if RequireFocus and (not Tag.IsFocused) then Exit;
+
+  // Attribute checks — `[name]` requires presence, `[name="val"]` requires
+  // exact value match.
+  for var Check in AttrChecks do
+  begin
+    if not Tag.HasAttribute(Check.Key) then Exit;
+    if Check.Value <> #1#1 then
+      if Tag.GetAttribute(Check.Key, '') <> Check.Value then Exit;
+  end;
 
   Result := True;
 end;
@@ -2316,6 +2390,7 @@ begin
   Result.TransformActive := False;
   Result.TransformScaleX := 1;
   Result.TransformScaleY := 1;
+  Result.CSSClear := 'none';
 end;
 
 class function TComputedStyle.ParseColor(const S: string): TAlphaColor;
@@ -2585,6 +2660,7 @@ begin
   Result.TransformActive := False;
   Result.TransformScaleX := 1;
   Result.TransformScaleY := 1;
+  Result.CSSClear := 'none';
 
   if Tag = nil then Exit;
   TN := Tag.TagName.ToLower;
@@ -3277,6 +3353,13 @@ begin
     var FloatStr := Temp.Trim.ToLower;
     if (FloatStr = 'left') or (FloatStr = 'right') or (FloatStr = 'none') then
       Style.CSSFloat := FloatStr;
+  end;
+  if Decls.TryGetValue('clear', Temp) and not ShouldSkip(Temp) then
+  begin
+    var ClrStr := Temp.Trim.ToLower;
+    if (ClrStr = 'left') or (ClrStr = 'right') or (ClrStr = 'both') or
+       (ClrStr = 'none') then
+      Style.CSSClear := ClrStr;
   end;
 
   // Flexbox container properties
@@ -4252,6 +4335,15 @@ begin
         // Floats don't advance the in-flow cursor.
         Continue;
       end;
+
+      // CSS `clear`: push the cursor past the relevant float's bottom
+      // BEFORE positioning. clear:left waits for left floats, clear:right
+      // for right, clear:both for the latest of either.
+      var Clr := Child.Style.CSSClear;
+      if (Clr = 'left') or (Clr = 'both') then
+        if CursorY < LeftFloatBottom then CursorY := LeftFloatBottom;
+      if (Clr = 'right') or (Clr = 'both') then
+        if CursorY < RightFloatBottom then CursorY := RightFloatBottom;
 
       // In-flow child — shift past active floats whose vertical span
       // covers the current cursor.
@@ -5888,6 +5980,7 @@ begin
   FLayoutEngine := TLayoutEngine.Create(FImageCache);
   FStyleSheet := TCSSStyleSheet.Create;
   FStyleSheet.FileCache := FFileCache;
+  FStyleSheet.OnParseError := CssParseErrorRelay;
   FHTML.OnChange := FHTMLChange;
   FFrond := TStringList.Create;
   FFrond.OnChange := FFrondChange;
@@ -6124,6 +6217,13 @@ end;
 procedure TTina4HTMLRender.FFrondChange(Sender: TObject);
 begin
   RenderFrond;
+end;
+
+procedure TTina4HTMLRender.CssParseErrorRelay(Sender: TObject;
+  const Selector, Reason: string);
+begin
+  if Assigned(FOnCssParseError) then
+    FOnCssParseError(Self, Selector, Reason);
 end;
 
 procedure TTina4HTMLRender.SetFrondVariable(const AName: string; const AValue: string);

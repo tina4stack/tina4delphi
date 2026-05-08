@@ -3531,6 +3531,13 @@ begin
     Kind := lbkBlock
   else if Style.Display = 'inline-block' then
     Kind := lbkInlineBlock
+  else if Style.Display = 'inline-table' then
+    // CSS Display Module Level 3 two-value model:
+    //   inline-table = outer-display:inline + inner-display:table
+    // We reuse the inline-block kind for outer flow (so siblings flow
+    // horizontally) and key off Style.Display in LayoutInlineChildren
+    // to dispatch the inner layout to LayoutTable instead of LayoutBlock.
+    Kind := lbkInlineBlock
   else
     Kind := lbkInline;
 
@@ -4058,15 +4065,29 @@ var
       if Child.Style.ExplicitWidth < 0 then
         Child.Style.TextAlign := TTextAlign.Leading;
 
+      // For `display: inline-table` we route the inner layout through
+      // LayoutTable (so anonymous-row wrapping for orphan table-cells and
+      // per-column widths kick in), but keep the outer placement inline
+      // — same path as inline-block.
+      var IsInlineTable := (Child.Style.Display = 'inline-table');
+
       // Use shrink-to-fit width: lay out with available width, then shrink.
       // Under nowrap the child shouldn't be squeezed by the remaining row
       // space — give it the full container width so its intrinsic size wins.
       if NoWrap then
-        LayoutBlock(Child, AvailWidth)
+      begin
+        if IsInlineTable then LayoutTable(Child, AvailWidth)
+        else                  LayoutBlock(Child, AvailWidth);
+      end
       else
-        LayoutBlock(Child, AvailWidth - CursorX);
-      // If no explicit width, shrink content width to fit children
-      if Child.Style.ExplicitWidth < 0 then
+      begin
+        if IsInlineTable then LayoutTable(Child, AvailWidth - CursorX)
+        else                  LayoutBlock(Child, AvailWidth - CursorX);
+      end;
+      // If no explicit width, shrink content width to fit children. For
+      // inline-table this is unnecessary — LayoutTable already produces
+      // a width-fitted box from its column sums.
+      if (not IsInlineTable) and (Child.Style.ExplicitWidth < 0) then
       begin
         var MaxChildRight: Single := 0;
         for var GC in Child.Children do
@@ -4087,8 +4108,11 @@ var
         // Re-layout with full available width after wrap
         if Child.Style.ExplicitWidth < 0 then
           Child.Style.TextAlign := TTextAlign.Leading;
-        LayoutBlock(Child, AvailWidth);
-        if Child.Style.ExplicitWidth < 0 then
+        if IsInlineTable then
+          LayoutTable(Child, AvailWidth)
+        else
+          LayoutBlock(Child, AvailWidth);
+        if (not IsInlineTable) and (Child.Style.ExplicitWidth < 0) then
         begin
           var MaxChildRight2: Single := 0;
           for var GC in Child.Children do

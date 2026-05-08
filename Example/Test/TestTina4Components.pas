@@ -79,6 +79,9 @@ type
     procedure TestSiblingPastFloatBottomReturnsToFullWidth;
     procedure TestParentEnclosesOverhangingFloat;
     procedure TestFloatLogoTextRowRepro;
+    // display: inline-table
+    procedure TestInlineTableLaysOutCellsSideBySide;
+    procedure TestInlineTableSiblingsFlowHorizontally;
   end;
 
 implementation
@@ -1590,6 +1593,89 @@ begin
     Check(Desc.ContentWidth > 0, 'description width > 0');
     Check(Desc.ContentWidth < 110,
       Format('description width clamped (<110), got %.1f', [Desc.ContentWidth]));
+  finally
+    Engine.Free;
+    Parser.Free;
+  end;
+end;
+
+// ---------------------------------------------------------------------------
+// display: inline-table
+//
+// CSS Display Module Level 3 two-value model:
+//   inline-table = outer-display:inline + inner-display:table
+// Tina4 routes the outer placement through the inline-block path (so the
+// box itself flows inline with surrounding text/elements) and the inner
+// layout through LayoutTable (so anonymous-row wrapping and column-width
+// rules kick in).
+// ---------------------------------------------------------------------------
+
+procedure TestTTina4Components.TestInlineTableLaysOutCellsSideBySide;
+var
+  Parser: Tina4HtmlRender.THTMLParser;
+  Engine: Tina4HtmlRender.TLayoutEngine;
+  Tbl, A, B: Tina4HtmlRender.TLayoutBox;
+begin
+  Parser := Tina4HtmlRender.THTMLParser.Create;
+  Engine := Tina4HtmlRender.TLayoutEngine.Create(nil);
+  try
+    // Verbatim bug-report repro: display:inline-table parent with two
+    // direct display:table-cell children. Cells must lay out side-by-side
+    // and the parent must have non-zero size.
+    RunLayout(Parser, Engine,
+      '<div id="row" style="display:inline-table; width:200px; padding:0">' +
+      '  <div id="a" style="display:table-cell; padding:4px">A</div>' +
+      '  <div id="b" style="display:table-cell; padding:4px">B</div>' +
+      '</div>',
+      400);
+
+    Tbl := FindBoxById(Engine.Root, 'row');
+    A := FindBoxById(Engine.Root, 'a');
+    B := FindBoxById(Engine.Root, 'b');
+    Check(Assigned(Tbl) and Assigned(A) and Assigned(B), 'boxes must exist');
+
+    Check(Tbl.ContentWidth > 0,
+      Format('inline-table must have width > 0, got %.1f', [Tbl.ContentWidth]));
+    Check(Tbl.ContentHeight > 0,
+      Format('inline-table must have height > 0, got %.1f', [Tbl.ContentHeight]));
+    Check(B.X > A.X,
+      Format('B (%.1f) must sit to the right of A (%.1f)', [B.X, A.X]));
+  finally
+    Engine.Free;
+    Parser.Free;
+  end;
+end;
+
+procedure TestTTina4Components.TestInlineTableSiblingsFlowHorizontally;
+var
+  Parser: Tina4HtmlRender.THTMLParser;
+  Engine: Tina4HtmlRender.TLayoutEngine;
+  T1, T2: Tina4HtmlRender.TLayoutBox;
+begin
+  Parser := Tina4HtmlRender.THTMLParser.Create;
+  Engine := Tina4HtmlRender.TLayoutEngine.Create(nil);
+  try
+    // Two inline-table siblings should sit side-by-side on the same line
+    // (inline outer flow), not stack vertically like display:table would.
+    RunLayout(Parser, Engine,
+      '<div style="width:600px; padding:0">' +
+      '  <div id="t1" style="display:inline-table; width:120px; padding:0">' +
+      '    <div style="display:table-cell">A</div>' +
+      '  </div>' +
+      '  <div id="t2" style="display:inline-table; width:120px; padding:0">' +
+      '    <div style="display:table-cell">B</div>' +
+      '  </div>' +
+      '</div>',
+      600);
+
+    T1 := FindBoxById(Engine.Root, 't1');
+    T2 := FindBoxById(Engine.Root, 't2');
+    Check(Assigned(T1) and Assigned(T2), 'both inline-tables must exist');
+
+    Check(T2.X > T1.X,
+      Format('inline-tables must flow horizontally: t1.X=%.1f t2.X=%.1f', [T1.X, T2.X]));
+    Check(Abs(T1.Y - T2.Y) < 2,
+      Format('inline-tables on same line: t1.Y=%.1f t2.Y=%.1f', [T1.Y, T2.Y]));
   finally
     Engine.Free;
     Parser.Free;

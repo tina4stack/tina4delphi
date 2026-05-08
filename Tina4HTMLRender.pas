@@ -4392,12 +4392,23 @@ var
 begin
   BorderW := Box.Style.BorderWidths.Top;
   Rows := TList<TLayoutBox>.Create;
+  // Synthetic anonymous rows generated for orphan table-cell children of
+  // a `display:table` box (CSS 2.1 §17.2.1). The synthetic rows hold
+  // *references* to the cells (Children.OwnsObjects = False); the cells
+  // themselves stay in Box.Children so the painter still finds them as
+  // direct descendants of the table. After layout we convert the cells'
+  // row-relative Y to table-relative Y.
+  var SyntheticRows := TObjectList<TLayoutBox>.Create(True);
   try
-    // Collect all row boxes (flattening thead/tbody/tfoot)
+    // Collect all row boxes (flattening thead/tbody/tfoot). Orphan cells
+    // — direct table-cell children of a `display:table` parent without a
+    // `display:table-row` wrapper — get rolled up into anonymous rows.
+    var CurrentSyn: TLayoutBox := nil;
     for var Child in Box.Children do
     begin
       if Child.Kind = lbkTableRow then
       begin
+        CurrentSyn := nil;  // a real row terminates any synthetic-row run
         // Check if this is a row group (thead/tbody/tfoot) containing actual rows
         var HasSubRows := False;
         for var Sub in Child.Children do
@@ -4410,7 +4421,24 @@ begin
         end;
         if not HasSubRows then
           Rows.Add(Child);
+      end
+      else if Child.Kind = lbkTableCell then
+      begin
+        // Orphan cell — start (or continue) an anonymous row.
+        if CurrentSyn = nil then
+        begin
+          CurrentSyn := TLayoutBox.Create(nil, lbkTableRow);
+          CurrentSyn.Children.OwnsObjects := False;
+          CurrentSyn.Style := TComputedStyle.Default;
+          SyntheticRows.Add(CurrentSyn);
+          Rows.Add(CurrentSyn);
+        end;
+        CurrentSyn.Children.Add(Child);
       end;
+      // Other kinds (whitespace text nodes, stray inline elements between
+      // cells, etc.) don't break the synthetic-row run — only an explicit
+      // <tr> does. This matches browser behaviour and survives the HTML
+      // parser inserting #text nodes for inter-element whitespace.
     end;
 
     // Count columns
@@ -4695,10 +4723,20 @@ begin
       CursorY := CursorY + RowH + CellBorderW;
     end;
 
+    // Synthetic anonymous rows aren't in Box.Children — the painter sees
+    // their cells as direct children of the table. Promote each cell's
+    // row-relative Y into table-relative Y so it paints in the right place.
+    for var SynRow in SyntheticRows do
+    begin
+      for var Cell in SynRow.Children do
+        Cell.Y := Cell.Y + SynRow.Y;
+    end;
+
     Box.ContentWidth := TableContentW;
     Box.ContentHeight := CursorY;
   finally
     Rows.Free;
+    SyntheticRows.Free;
   end;
 end;
 

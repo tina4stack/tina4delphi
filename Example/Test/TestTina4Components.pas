@@ -69,6 +69,9 @@ type
     procedure TestBugReportColgroupColWidth;
     procedure TestBugReportColgroupColWidthPercentage;
     procedure TestBugReportColSpanAttribute;
+    // Anonymous table-row wrapping for orphan table-cells
+    procedure TestDisplayTableWithOrphanCellsLaysOutSideBySide;
+    procedure TestTileRowLogoLeftDescRightRepro;
   end;
 
 implementation
@@ -1293,6 +1296,92 @@ begin
     Check(Abs(C1.ContentWidth - 100) < 2, Format('span col 0 = %.1f', [C1.ContentWidth]));
     Check(Abs(C2.ContentWidth - 100) < 2, Format('span col 1 = %.1f', [C2.ContentWidth]));
     Check(Abs(C3.ContentWidth - 400) < 2, Format('lone col = %.1f',  [C3.ContentWidth]));
+  finally
+    Engine.Free;
+    Parser.Free;
+  end;
+end;
+
+// ---------------------------------------------------------------------------
+// Anonymous table-row generation
+//
+// CSS 2.1 §17.2.1: a table-cell whose parent is `display:table` (without an
+// intervening `display:table-row`) gets wrapped in an anonymous row. Before
+// this fix, the row collection step found no rows, NumCols defaulted to 0,
+// and the table rendered as 0x0 — making the orphan cells' content vanish.
+// This is the bug report from cuttlefishmobile's Data drill-down tile.
+// ---------------------------------------------------------------------------
+
+procedure TestTTina4Components.TestDisplayTableWithOrphanCellsLaysOutSideBySide;
+var
+  Parser: Tina4HtmlRender.THTMLParser;
+  Engine: Tina4HtmlRender.TLayoutEngine;
+  Tbl, A, B: Tina4HtmlRender.TLayoutBox;
+begin
+  Parser := Tina4HtmlRender.THTMLParser.Create;
+  Engine := Tina4HtmlRender.TLayoutEngine.Create(nil);
+  try
+    // The bug-report shape: parent display:table with two display:table-cell
+    // children directly underneath, no <tr> wrapper. Both cells must have
+    // non-zero width and the table itself must claim a non-zero size.
+    RunLayout(Parser, Engine,
+      '<div id="t" style="display:table; width:200px; padding:0">' +
+      '  <div id="a" style="display:table-cell; padding:0">A</div>' +
+      '  <div id="b" style="display:table-cell; padding:0">B</div>' +
+      '</div>',
+      400);
+
+    Tbl := FindBoxById(Engine.Root, 't');
+    A := FindBoxById(Engine.Root, 'a');
+    B := FindBoxById(Engine.Root, 'b');
+    Check(Assigned(Tbl) and Assigned(A) and Assigned(B), 'boxes must exist');
+
+    Check(Tbl.ContentWidth > 0,
+      Format('display:table with orphan cells must have width > 0, got %.1f', [Tbl.ContentWidth]));
+    Check(A.ContentWidth > 0,
+      Format('first orphan cell width > 0, got %.1f', [A.ContentWidth]));
+    Check(B.ContentWidth > 0,
+      Format('second orphan cell width > 0, got %.1f', [B.ContentWidth]));
+    // Cells should be side-by-side: B starts to the right of A.
+    Check(B.X > A.X,
+      Format('B.X (%.1f) must be greater than A.X (%.1f)', [B.X, A.X]));
+  finally
+    Engine.Free;
+    Parser.Free;
+  end;
+end;
+
+procedure TestTTina4Components.TestTileRowLogoLeftDescRightRepro;
+var
+  Parser: Tina4HtmlRender.THTMLParser;
+  Engine: Tina4HtmlRender.TLayoutEngine;
+  Logo, Desc: Tina4HtmlRender.TLayoutBox;
+begin
+  Parser := Tina4HtmlRender.THTMLParser.Create;
+  Engine := Tina4HtmlRender.TLayoutEngine.Create(nil);
+  try
+    // Verbatim repro of the original cuttlefish drill-down tile shape that
+    // rendered with blank text before the fix: logo+description side-by-side
+    // via display:table / display:table-cell.
+    RunLayout(Parser, Engine,
+      '<div style="display:table; width:170px; padding:0">' +
+      '  <div id="logo" style="display:table-cell; width:64px; ' +
+      '       vertical-align:middle; padding:0">L</div>' +
+      '  <div id="desc" style="display:table-cell; ' +
+      '       vertical-align:middle; padding:0 6px">' +
+      '       R12 MTN Hourly Data 1GB</div>' +
+      '</div>',
+      400);
+
+    Logo := FindBoxById(Engine.Root, 'logo');
+    Desc := FindBoxById(Engine.Root, 'desc');
+    Check(Assigned(Logo) and Assigned(Desc), 'cells must exist');
+
+    Check(Desc.X > Logo.X,
+      Format('description must sit to the right of logo (logo.X=%.1f desc.X=%.1f)',
+             [Logo.X, Desc.X]));
+    Check(Desc.ContentWidth > 0,
+      Format('description cell must have non-zero width, got %.1f', [Desc.ContentWidth]));
   finally
     Engine.Free;
     Parser.Free;

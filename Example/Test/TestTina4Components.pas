@@ -87,6 +87,10 @@ type
     procedure TestTableCellWidthIsHardConstraint;
     procedure TestNotPseudoClassDoesNotDropSiblingRules;
     procedure TestDisplayFlowRootEnclosesFloats;
+    // Bug-list 2026-05-08
+    procedure TestStickyLeftPinsToScrollAncestorXEdge;
+    procedure TestNowrapInlineBlockOverflowsContainer;
+    procedure TestDataUriBackgroundImageInInlineStyleParsed;
   end;
 
 implementation
@@ -1808,6 +1812,131 @@ begin
     Check(Assigned(P), 'flow-root box must exist');
     Check(P.ContentHeight >= 80,
       Format('flow-root parent must enclose 80px float, got %.1f', [P.ContentHeight]));
+  finally
+    Engine.Free;
+    Parser.Free;
+  end;
+end;
+
+// ---------------------------------------------------------------------------
+// 2026-05-08 bug list — sticky:left, nowrap on inline-block, data: URIs
+// ---------------------------------------------------------------------------
+
+procedure TestTTina4Components.TestStickyLeftPinsToScrollAncestorXEdge;
+var
+  Parser: Tina4HtmlRender.THTMLParser;
+  Engine: Tina4HtmlRender.TLayoutEngine;
+  Back: Tina4HtmlRender.TLayoutBox;
+begin
+  Parser := Tina4HtmlRender.THTMLParser.Create;
+  Engine := Tina4HtmlRender.TLayoutEngine.Create(nil);
+  try
+    // Bug 1 from 2026-05-08 list: sticky `left:0` inside an
+    // overflow-x: auto strip. We can't simulate scroll in a layout-only
+    // test, but we can verify the BACK cell is laid out as an inline-block
+    // (its X is sensible) and that its Style.CSSPosition + CSSLeft are
+    // captured. Paint logic for horizontal sticky lives in PaintBox.
+    RunLayout(Parser, Engine,
+      '<div style="width:540px; overflow-x:auto; white-space:nowrap; padding:0">' +
+      '  <div id="back" style="display:inline-block; width:72px; height:72px;' +
+      '       position:sticky; left:0">BACK</div>' +
+      '  <div style="display:inline-block; width:200px; height:72px">A</div>' +
+      '  <div style="display:inline-block; width:200px; height:72px">B</div>' +
+      '  <div style="display:inline-block; width:200px; height:72px">C</div>' +
+      '</div>',
+      540);
+
+    Back := FindBoxById(Engine.Root, 'back');
+    Check(Assigned(Back), 'BACK cell must exist');
+    CheckEquals('sticky', Back.Style.CSSPosition,
+      'BACK cell must keep position:sticky');
+    Check(Back.Style.CSSLeft > -9990,
+      Format('BACK cell must capture left:0, got CSSLeft=%.1f', [Back.Style.CSSLeft]));
+    Check(Abs(Back.Style.CSSLeft) < 0.5,
+      Format('BACK cell left:0 should resolve to 0, got %.1f', [Back.Style.CSSLeft]));
+  finally
+    Engine.Free;
+    Parser.Free;
+  end;
+end;
+
+procedure TestTTina4Components.TestNowrapInlineBlockOverflowsContainer;
+var
+  Parser: Tina4HtmlRender.THTMLParser;
+  Engine: Tina4HtmlRender.TLayoutEngine;
+  A, B, C: Tina4HtmlRender.TLayoutBox;
+begin
+  Parser := Tina4HtmlRender.THTMLParser.Create;
+  Engine := Tina4HtmlRender.TLayoutEngine.Create(nil);
+  try
+    // Bug 6 from 2026-05-08 list: nowrap on parent must keep inline-block
+    // children on a single line even when their sum exceeds the parent.
+    RunLayout(Parser, Engine,
+      '<div style="width:300px; white-space:nowrap; padding:0">' +
+      '  <div id="a" style="display:inline-block; width:200px; height:50px">A</div>' +
+      '  <div id="b" style="display:inline-block; width:200px; height:50px">B</div>' +
+      '  <div id="c" style="display:inline-block; width:200px; height:50px">C</div>' +
+      '</div>',
+      400);
+
+    A := FindBoxById(Engine.Root, 'a');
+    B := FindBoxById(Engine.Root, 'b');
+    C := FindBoxById(Engine.Root, 'c');
+    Check(Assigned(A) and Assigned(B) and Assigned(C), 'all 3 cells must exist');
+
+    // Under nowrap all three siblings keep the same Y as A (one line),
+    // overflowing the 300px container's right edge.
+    Check(Abs(A.Y - B.Y) < 1,
+      Format('B should be on same line as A: A.Y=%.1f B.Y=%.1f', [A.Y, B.Y]));
+    Check(Abs(A.Y - C.Y) < 1,
+      Format('C should be on same line as A: A.Y=%.1f C.Y=%.1f', [A.Y, C.Y]));
+    Check(B.X > A.X,
+      Format('B must sit to the right of A (no wrap): B.X=%.1f A.X=%.1f', [B.X, A.X]));
+    Check(C.X > B.X,
+      Format('C must sit to the right of B (no wrap): C.X=%.1f B.X=%.1f', [C.X, B.X]));
+  finally
+    Engine.Free;
+    Parser.Free;
+  end;
+end;
+
+procedure TestTTina4Components.TestDataUriBackgroundImageInInlineStyleParsed;
+var
+  Parser: Tina4HtmlRender.THTMLParser;
+  Engine: Tina4HtmlRender.TLayoutEngine;
+  D: Tina4HtmlRender.TLayoutBox;
+const
+  // Tiny 1x1 PNG as base64. Real-world data: URIs are kilobytes; this is
+  // enough to exercise the parser's handling of `;`, `:`, and `,` inside
+  // a url() value.
+  TINY_PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+begin
+  Parser := Tina4HtmlRender.THTMLParser.Create;
+  Engine := Tina4HtmlRender.TLayoutEngine.Create(nil);
+  try
+    // Bug 8 from 2026-05-08 list: inline style with data: URI for
+    // background-image. The URI itself contains ';' (mediatype param
+    // separator) and ':' (after data). Both can confuse a naive parser.
+    // We verify that Style.BackgroundImage holds the FULL URI and that
+    // the previously-set width on the same element survives parsing.
+    RunLayout(Parser, Engine,
+      '<div id="t" style="width:109px; height:50px; ' +
+      '       background-image: url(' + TINY_PNG + ')">x</div>',
+      400);
+
+    D := FindBoxById(Engine.Root, 't');
+    Check(Assigned(D), 'box must exist');
+    Check(Abs(D.ContentWidth - 109) < 0.5,
+      Format('width must be preserved past the url() value: got %.1f', [D.ContentWidth]));
+    Check(D.Style.BackgroundImage <> '',
+      'background-image must be captured from inline style');
+    Check(D.Style.BackgroundImage.StartsWith('data:image/png;base64,'),
+      Format('background-image should retain full data: URI prefix, got [%s]',
+             [D.Style.BackgroundImage.Substring(0, 40)]));
+    // The base64 payload must be intact (parser must not have truncated
+    // at the ';' or ',' inside the URI).
+    Check(D.Style.BackgroundImage.Contains('iVBORw0KGgo'),
+      'base64 payload must survive parsing');
   finally
     Engine.Free;
     Parser.Free;

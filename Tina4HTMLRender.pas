@@ -366,6 +366,17 @@ type
   THTMLFormSubmitEvent = procedure(Sender: TObject; const FormName: string; FormData: TStrings) of object;
   /// <summary>Event for onclick attribute handling when RTTI invocation is not available.</summary>
   THTMLElementClickEvent = procedure(Sender: TObject; const ObjectName, MethodName: string; Params: TStrings) of object;
+  /// <summary>
+  /// Fired when an `onclick="Obj:Method(args)"` dispatch fails because
+  /// the registered object can't be found, the method doesn't exist,
+  /// the parameter count doesn't match, or invocation raised an
+  /// exception. `Reason` is a short human-readable explanation. Use
+  /// this for diagnostic logging during development — silent click
+  /// drops are otherwise invisible.
+  /// </summary>
+  THTMLUnresolvedClickEvent = procedure(Sender: TObject;
+    const ObjectName, MethodName: string; Params: TStrings;
+    const Reason: string) of object;
   /// <summary>Event for anchor link clicks. Set Handled := True to prevent default processing.</summary>
   THTMLLinkClickEvent = procedure(Sender: TObject; const AURL: string; var Handled: Boolean) of object;
   /// <summary>Event fired when the scroll position changes (wheel, drag, or programmatic).</summary>
@@ -405,6 +416,7 @@ type
     // PaintBox (saved/restored on entry to each scroll container) instead of
     // an extra parameter, since most callers don't care.
     FStickyAnchorY: Single;
+    FStickyAnchorX: Single;  // mirror of FStickyAnchorY for horizontal sticky
     FContentWidth: Single;
     FContentHeight: Single;
     FNeedRelayout: Boolean;
@@ -472,6 +484,7 @@ type
     FOnExit: THTMLFormControlEvent;
     FOnSubmit: THTMLFormSubmitEvent;
     FOnElementClick: THTMLElementClickEvent;
+    FOnUnresolvedClick: THTMLUnresolvedClickEvent;
     FOnLinkClick: THTMLLinkClickEvent;
     FFrond: TStringList;
     FFrondEngine: TObject;        // TTina4Frond (declared in implementation uses)
@@ -791,6 +804,12 @@ type
     property OnFormSubmit: THTMLFormSubmitEvent read FOnSubmit write FOnSubmit;
     /// <summary>Fires when an element with onclick attribute is clicked (RTTI fallback).</summary>
     property OnElementClick: THTMLElementClickEvent read FOnElementClick write FOnElementClick;
+    /// <summary>
+    /// Diagnostic hook fired when an onclick="Obj:Method(...)" call can't
+    /// be dispatched. Useful during development — without it, a typo or
+    /// `private`-visibility method on the target produces zero feedback.
+    /// </summary>
+    property OnUnresolvedClick: THTMLUnresolvedClickEvent read FOnUnresolvedClick write FOnUnresolvedClick;
     /// <summary>
     /// Fires when an anchor tag with href is clicked. Set Handled := True to
     /// prevent default processing. Used by TTina4HTMLPages for page navigation.
@@ -7336,10 +7355,12 @@ begin
     Canvas.Fill.Color := TAlphaColors.White;
     Canvas.FillRect(LocalRect, 1.0);
 
-    // Reset the sticky anchor to the viewport top before each paint pass —
-    // it gets pushed/popped per scroll container during recursion, so a
-    // crash or early-exit could otherwise leave it pointing at a freed box.
+    // Reset the sticky anchors to the viewport edges before each paint
+    // pass — they get pushed/popped per scroll container during recursion,
+    // so a crash or early-exit could otherwise leave them pointing at a
+    // freed box.
     FStickyAnchorY := 0;
+    FStickyAnchorX := 0;
 
     // Paint layout tree
     if Assigned(FLayoutEngine.Root) then
@@ -7392,7 +7413,10 @@ begin
   if Box.Style.Display = 'none' then Exit;
   if Box.Style.Visibility = 'hidden' then Exit;
 
-  IsSticky := (Box.Style.CSSPosition = 'sticky') and (Box.Style.CSSTop > -9990);
+  // Sticky on either axis qualifies — `top` only (vertical scroll-pinned
+  // header), `left` only (horizontal scroll-pinned freeze column), or both.
+  IsSticky := (Box.Style.CSSPosition = 'sticky') and
+    ((Box.Style.CSSTop > -9990) or (Box.Style.CSSLeft > -9990));
 
   // Mode 1 (non-sticky pass): a sticky element and its entire subtree are
   // skipped — they get painted in mode 2 on top of the background pass.
@@ -7439,16 +7463,25 @@ begin
   AbsX := OffX + Box.X;
   AbsY := OffY + Box.Y;
 
-  // Sticky positioning: pin to the nearest scroll-ancestor's content top
-  // (FStickyAnchorY, in absolute paint coordinates) plus the element's
-  // CSS `top` offset. Falls back to the viewport (FStickyAnchorY = 0) for
-  // elements outside any internal scroll container — that's the "header
-  // sticks to top of page while page scrolls" case.
-  if (Box.Style.CSSPosition = 'sticky') and (Box.Style.CSSTop > -9990) then
+  // Sticky positioning: pin to the nearest scroll-ancestor's content edges
+  // (FStickyAnchorX/Y, in absolute paint coordinates) plus the element's
+  // `top` / `left` offsets. Both axes are independent — a sticky cell in a
+  // horizontally-scrolling row uses `left: 0`; a sticky table header uses
+  // `top: 0`; a sticky corner uses both.
+  if Box.Style.CSSPosition = 'sticky' then
   begin
-    var StickyAnchor := FStickyAnchorY + Box.Style.CSSTop;
-    if AbsY < StickyAnchor then
-      AbsY := StickyAnchor;
+    if Box.Style.CSSTop > -9990 then
+    begin
+      var StickyAnchorY := FStickyAnchorY + Box.Style.CSSTop;
+      if AbsY < StickyAnchorY then
+        AbsY := StickyAnchorY;
+    end;
+    if Box.Style.CSSLeft > -9990 then
+    begin
+      var StickyAnchorX := FStickyAnchorX + Box.Style.CSSLeft;
+      if AbsX < StickyAnchorX then
+        AbsX := StickyAnchorX;
+    end;
   end;
 
   // Viewport culling
@@ -7539,13 +7572,17 @@ begin
     Box.ClampOwnScroll;
     var SaveState := Canvas.SaveState;
     // While painting *inside* this scroll container, sticky descendants
-    // anchor to its visible top edge (CY) instead of the outer viewport.
-    // Save and restore around the recursion so sibling subtrees don't see
-    // a stale anchor.
-    var SavedAnchor := FStickyAnchorY;
+    // anchor to its visible top/left edge (CX, CY) instead of the outer
+    // viewport. Save and restore around the recursion so sibling subtrees
+    // don't see a stale anchor.
+    var SavedAnchorY := FStickyAnchorY;
+    var SavedAnchorX := FStickyAnchorX;
     if (Box.Style.OverflowY = 'auto') or (Box.Style.OverflowY = 'scroll') or
        (Box.Style.Overflow  = 'auto') or (Box.Style.Overflow  = 'scroll') then
       FStickyAnchorY := CY;
+    if (Box.Style.OverflowX = 'auto') or (Box.Style.OverflowX = 'scroll') or
+       (Box.Style.Overflow  = 'auto') or (Box.Style.Overflow  = 'scroll') then
+      FStickyAnchorX := CX;
     try
       Canvas.IntersectClipRect(RectF(CX, CY, CX + Box.ContentWidth, CY + Box.ContentHeight));
       // Two-pass deep paint:
@@ -7605,7 +7642,8 @@ begin
       end;
     finally
       Canvas.RestoreState(SaveState);
-      FStickyAnchorY := SavedAnchor;
+      FStickyAnchorY := SavedAnchorY;
+      FStickyAnchorX := SavedAnchorX;
     end;
     // Paint scrollbars OUTSIDE the clip so they're always visible regardless
     // of how far the content has been scrolled.
@@ -8997,28 +9035,54 @@ begin
         Params.Add(ResolveOnClickParam(LastParam, ClickedTag));
     end;
 
-    // Try direct RTTI invocation on registered objects
+    // Try direct RTTI invocation on registered objects. Track the failure
+    // reason at each branch so OnUnresolvedClick can report something
+    // useful instead of just "didn't fire". RTTI sees only `published` and
+    // `public` members by default; a `private` method is the most common
+    // cause of "method not found".
     var Handled := False;
-    if (ObjName <> '') and FRegisteredObjects.ContainsKey(ObjName.ToLower) then
+    var UnresolvedReason: string := '';
+    if ObjName = '' then
+      UnresolvedReason := 'onclick has no Object: prefix'
+    else if not FRegisteredObjects.ContainsKey(ObjName.ToLower) then
+      UnresolvedReason := Format('object "%s" is not registered (use RegisterObject)', [ObjName])
+    else
     begin
       var TargetObj := FRegisteredObjects[ObjName.ToLower];
       var Ctx := TRttiContext.Create;
       try
         var RttiType := Ctx.GetType(TargetObj.ClassType);
-        if Assigned(RttiType) then
+        if not Assigned(RttiType) then
+          UnresolvedReason := Format('RTTI type info missing for %s', [TargetObj.ClassName])
+        else
         begin
           var Method := RttiType.GetMethod(MethodName);
-          if Assigned(Method) then
+          if not Assigned(Method) then
+            UnresolvedReason := Format(
+              '%s.%s not found by RTTI — must be `public` or `published` (currently `private`?)',
+              [TargetObj.ClassName, MethodName])
+          else
           begin
             var RttiParams := Method.GetParameters;
-            if Length(RttiParams) = Params.Count then
+            if Length(RttiParams) <> Params.Count then
+              UnresolvedReason := Format(
+                '%s.%s expects %d args but onclick passed %d',
+                [TargetObj.ClassName, MethodName, Length(RttiParams), Params.Count])
+            else
             begin
-              var Args: TArray<TValue>;
-              SetLength(Args, Params.Count);
-              for var I := 0 to Params.Count - 1 do
-                Args[I] := TValue.From<string>(Params[I]);
-              Method.Invoke(TargetObj, Args);
-              Handled := True;
+              try
+                var Args: TArray<TValue>;
+                SetLength(Args, Params.Count);
+                for var I := 0 to Params.Count - 1 do
+                  Args[I] := TValue.From<string>(Params[I]);
+                Method.Invoke(TargetObj, Args);
+                Handled := True;
+              except
+                on E: Exception do
+                  UnresolvedReason := Format(
+                    '%s.%s raised %s: %s',
+                    [TargetObj.ClassName, MethodName, E.ClassName, E.Message]);
+              end;
             end;
           end;
         end;
@@ -9029,7 +9093,15 @@ begin
 
     // Fall back to OnElementClick event if not handled via RTTI
     if (not Handled) and Assigned(FOnElementClick) then
+    begin
       FOnElementClick(Self, ObjName, MethodName, Params);
+      Handled := True;
+    end;
+
+    // Still nothing? Fire the diagnostic hook so the host app can surface
+    // a typo or visibility mistake during development.
+    if (not Handled) and Assigned(FOnUnresolvedClick) then
+      FOnUnresolvedClick(Self, ObjName, MethodName, Params, UnresolvedReason);
   finally
     Params.Free;
   end;

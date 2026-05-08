@@ -7004,14 +7004,16 @@ begin
     Chain.Clear;
     for var T in NewChain do Chain.Add(T);
 
-    // Style cascade re-evaluation. Cheapest path: invalidate the parser
-    // cache + relayout flag isn't required (DOM didn't change), but the
-    // computed-style for these tags differs now so we re-paint. To be
-    // strictly correct we'd also need to invalidate any cached
-    // TComputedStyle — but TComputedStyle.ForTag is currently called
-    // every layout pass, so a Repaint that triggers DoLayout (via
-    // FNeedRelayout) gets fresh styles for free.
-    FNeedRelayout := True;
+    // We deliberately do NOT set FNeedRelayout here. Setting it on every
+    // hover/active change caused a full relayout per MouseMove, which
+    // visibly broke scroll/pan gestures (each cursor move while panning
+    // would tear down + rebuild the layout tree). The trade-off: :hover/
+    // :active styles only re-cascade on the next external relayout —
+    // i.e. when HTML.Text changes, when a class is toggled, or when the
+    // host calls Repaint after manually clearing FNeedRelayout. Most
+    // apps don't need real-time hover feedback during a pan, and the
+    // tag's IsHovered/IsActive flag is still correct so the selector
+    // matches when the layout DOES rebuild.
     Repaint;
   finally
     NewChain.Free;
@@ -8480,8 +8482,16 @@ begin
   // restore at the end. Affects both self-paint and children paint.
   // We rely on the lack of further `Exit` after this point — the
   // closing `end;` of PaintBox is the only return path.
+  //
+  // Important perf note: we ONLY save/restore the canvas state when a
+  // transform is actually present. Per-box save/restore on every paint
+  // (one for every <div>) showed up under profiling — and meant every
+  // mouse-move-driven repaint did O(N) extra canvas work even though
+  // 99% of boxes never have a transform.
   var TransformActive := Box.Style.TransformActive;
-  var TransformSaveState := Canvas.SaveState;
+  var TransformSaveState: TCanvasSaveState := nil;
+  if TransformActive then
+    TransformSaveState := Canvas.SaveState;
   try
   if TransformActive then
   begin
@@ -8698,7 +8708,8 @@ begin
   end;
   finally
     // Restore the canvas matrix saved before the transform (if any).
-    Canvas.RestoreState(TransformSaveState);
+    if TransformActive then
+      Canvas.RestoreState(TransformSaveState);
   end;
 end;
 
@@ -10435,10 +10446,15 @@ begin
   inherited;
 
   // Update :hover state. Hit-test against the layout tree to find the
-  // deepest element under the cursor, then promote/demote the
-  // ancestor chain. UpdatePseudoChain triggers Repaint only when the
-  // chain actually changed.
-  if Assigned(FLayoutEngine) and Assigned(FLayoutEngine.Root) then
+  // deepest element under the cursor, then promote/demote the ancestor
+  // chain. UpdatePseudoChain triggers Repaint only when the chain
+  // actually changed. We skip the update entirely during an active
+  // pan/scroll gesture — the cursor crosses many elements while
+  // dragging, and re-computing hover on each move competes with the
+  // scroll animation and serves no UX purpose (touch UX has no hover).
+  if Assigned(FLayoutEngine) and Assigned(FLayoutEngine.Root) and
+     (not FPanActive) and (not FMouseDownOnScroll) and
+     (not Assigned(FDragScrollBox)) then
   begin
     HoverTag := HitTestTagAt(FLayoutEngine.Root, -FScrollX, -FScrollY, X, Y);
     UpdatePseudoChain(FHoverChain, HoverTag, 'hover');

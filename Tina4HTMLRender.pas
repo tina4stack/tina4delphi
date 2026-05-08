@@ -234,6 +234,14 @@ type
     OutlineColor: TAlphaColor;
     OutlineStyle: string;       // 'solid' | 'dashed' | 'dotted' | 'none'
     OutlineOffset: Single;
+    // CSS `float`: 'none' (default) | 'left' | 'right'. Only honoured in
+    // block-flow context — a floated child of an inline-formatting parent
+    // currently still flows inline. Floats are taken out of normal flow:
+    // a left float occupies the parent's left edge at the current cursor
+    // Y, the next non-float sibling positions to its right with reduced
+    // width. The parent's content height stretches to enclose any float
+    // that would otherwise overhang.
+    CSSFloat: string;
     procedure SetBorderWidth(W: Single);
     procedure SetBorderColor(C: TAlphaColor);
     function BorderColor: TAlphaColor;  // returns Top color (legacy compat)
@@ -2175,6 +2183,7 @@ begin
   Result.OutlineColor := TAlphaColors.Null;
   Result.OutlineStyle := 'none';
   Result.OutlineOffset := 0;
+  Result.CSSFloat := 'none';
 end;
 
 class function TComputedStyle.ParseColor(const S: string): TAlphaColor;
@@ -2428,6 +2437,7 @@ begin
   Result.OutlineColor := TAlphaColors.Null;
   Result.OutlineStyle := 'none';
   Result.OutlineOffset := 0;
+  Result.CSSFloat := 'none';
 
   if Tag = nil then Exit;
   TN := Tag.TagName.ToLower;
@@ -3114,6 +3124,13 @@ begin
     Style.OutlineStyle := Temp.Trim.ToLower;
   if Decls.TryGetValue('outline-offset', Temp) and not ShouldSkip(Temp) then
     Style.OutlineOffset := ParseLength(Temp, Style.FontSize);
+
+  if Decls.TryGetValue('float', Temp) and not ShouldSkip(Temp) then
+  begin
+    var FloatStr := Temp.Trim.ToLower;
+    if (FloatStr = 'left') or (FloatStr = 'right') or (FloatStr = 'none') then
+      Style.CSSFloat := FloatStr;
+  end;
 end;
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -3693,14 +3710,14 @@ begin
   // Resolve explicit height (may be percentage — but no reference, ignore for now)
   // Percentages on height are complex in CSS; we skip them
 
-  // Determine layout mode: inline vs block
-  // When a container has block children, whitespace-only text nodes should be
-  // ignored (CSS "inter-element whitespace" rule). Only non-whitespace inline
-  // content triggers mixed inline/block layout.
+  // Determine layout mode: inline vs block. Float children are out of normal
+  // flow and don't influence the parent's flow type — they're handled
+  // separately inside the block branch below.
   HasInline := False;
   var HasBlock := False;
   for var Child in Box.Children do
   begin
+    if Child.Style.CSSFloat <> 'none' then Continue;  // out of flow
     case Child.Kind of
       lbkBlock, lbkTable, lbkListItem, lbkHR:
         HasBlock := True;
@@ -3721,6 +3738,7 @@ begin
     HasInline := False;
     for var Child in Box.Children do
     begin
+      if Child.Style.CSSFloat <> 'none' then Continue;  // out of flow
       if (Child.Kind = lbkImage) or (Child.Kind = lbkFormControl) or
          (Child.Kind = lbkBR) or (Child.Kind = lbkInline) or
          (Child.Kind = lbkInlineBlock) then
@@ -3745,44 +3763,110 @@ begin
   end
   else
   begin
-    // Pure block children
+    // Pure block children, with float support. CSS float positions a child
+    // at the parent's left/right edge and removes it from normal flow;
+    // subsequent in-flow siblings get shifted past the float and width-
+    // reduced for as long as their natural Y is within the float's
+    // vertical span. Multiple floats stack: a second left float sits to
+    // the right of the first, etc. When a non-floated child reaches a Y
+    // past the bottom of all left/right floats, it returns to full width.
+    //
+    // Limitation: inline content inside an in-flow block child does NOT
+    // wrap around floats line-by-line — the whole child box is shifted
+    // and width-clamped for its full extent. Good enough for the common
+    // "logo on the left, description block on the right" pattern.
+    var LeftFloatRight: Single := 0;     // X past rightmost active left float
+    var LeftFloatBottom: Single := 0;    // Bottom Y of active left floats
+    var RightFloatLeft: Single := ContentW;
+    var RightFloatBottom: Single := 0;
+
     for var Child in Box.Children do
     begin
-      case Child.Kind of
-        lbkBlock: LayoutBlock(Child, ContentW);
-        lbkTable: LayoutTable(Child, ContentW);
-        lbkListItem: LayoutListItem(Child, ContentW);
-        lbkHR: LayoutHR(Child, ContentW);
-      else
-        LayoutBlock(Child, ContentW);
+      var FloatKind := Child.Style.CSSFloat;
+      var IsFloat := (FloatKind = 'left') or (FloatKind = 'right');
+
+      if IsFloat then
+      begin
+        // Available width inside the band between active floats.
+        var FloatAvail := RightFloatLeft - LeftFloatRight;
+        if FloatAvail < 0 then FloatAvail := 0;
+        case Child.Kind of
+          lbkBlock:       LayoutBlock(Child, FloatAvail);
+          lbkTable:       LayoutTable(Child, FloatAvail);
+          lbkImage:       LayoutImage(Child, FloatAvail);
+          lbkListItem:    LayoutListItem(Child, FloatAvail);
+          lbkInlineBlock: LayoutBlock(Child, FloatAvail);
+          lbkHR:          LayoutHR(Child, FloatAvail);
+          lbkFormControl: LayoutFormControl(Child, FloatAvail);
+        else
+          LayoutBlock(Child, FloatAvail);
+        end;
+
+        if FloatKind = 'left' then
+        begin
+          Child.X := LeftFloatRight;
+          Child.Y := CursorY;
+          LeftFloatRight := Child.X + Child.MarginBoxWidth;
+          if Child.Y + Child.MarginBoxHeight > LeftFloatBottom then
+            LeftFloatBottom := Child.Y + Child.MarginBoxHeight;
+        end
+        else
+        begin
+          Child.X := RightFloatLeft - Child.MarginBoxWidth;
+          Child.Y := CursorY;
+          RightFloatLeft := Child.X;
+          if Child.Y + Child.MarginBoxHeight > RightFloatBottom then
+            RightFloatBottom := Child.Y + Child.MarginBoxHeight;
+        end;
+        // Floats don't advance the in-flow cursor.
+        Continue;
       end;
-      // Distribute auto margins horizontally:
-      //   margin: 0 auto       -> centered (slack split equally)
-      //   margin-left: auto    -> right-aligned (all slack on left)
-      //   margin-right: auto   -> left-aligned (default behaviour)
-      // The child's MarginBoxWidth uses ResolveMargin (auto -> 0), so the
-      // raw outer width below is what the box would occupy if we ignored
-      // any auto margin. Slack against the parent's content width is then
-      // distributed according to which side(s) are auto.
+
+      // In-flow child — shift past active floats whose vertical span
+      // covers the current cursor.
+      var ShiftL: Single := 0;
+      var ShiftR: Single := 0;
+      if CursorY < LeftFloatBottom  then ShiftL := LeftFloatRight;
+      if CursorY < RightFloatBottom then ShiftR := ContentW - RightFloatLeft;
+      var EffW := ContentW - ShiftL - ShiftR;
+      if EffW < 0 then EffW := 0;
+
+      case Child.Kind of
+        lbkBlock: LayoutBlock(Child, EffW);
+        lbkTable: LayoutTable(Child, EffW);
+        lbkListItem: LayoutListItem(Child, EffW);
+        lbkHR: LayoutHR(Child, EffW);
+      else
+        LayoutBlock(Child, EffW);
+      end;
+
+      // Distribute auto margins horizontally — Slack is now relative to
+      // the float-reduced effective width, not the parent ContentW.
       var AutoL := IsAutoMargin(Child.Style.Margin.Left);
       var AutoR := IsAutoMargin(Child.Style.Margin.Right);
       if AutoL or AutoR then
       begin
         var ChildOuterW := Child.MarginBoxWidth;
-        var Slack := ContentW - ChildOuterW;
+        var Slack := EffW - ChildOuterW;
         if Slack < 0 then Slack := 0;
         if AutoL and AutoR then
-          Child.X := Slack / 2
+          Child.X := ShiftL + Slack / 2
         else if AutoL then
-          Child.X := Slack
+          Child.X := ShiftL + Slack
         else
-          Child.X := 0;
+          Child.X := ShiftL;
       end
       else
-        Child.X := 0;
+        Child.X := ShiftL;
       Child.Y := CursorY;
       CursorY := CursorY + Child.MarginBoxHeight;
     end;
+
+    // Clearfix-equivalent: parent stretches to enclose any float that
+    // overhangs below the in-flow content cursor. Without this the
+    // floats would visually escape the parent's box.
+    if LeftFloatBottom  > CursorY then CursorY := LeftFloatBottom;
+    if RightFloatBottom > CursorY then CursorY := RightFloatBottom;
     Box.ContentHeight := CursorY;
   end;
 

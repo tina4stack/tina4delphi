@@ -72,6 +72,13 @@ type
     // Anonymous table-row wrapping for orphan table-cells
     procedure TestDisplayTableWithOrphanCellsLaysOutSideBySide;
     procedure TestTileRowLogoLeftDescRightRepro;
+    // CSS float
+    procedure TestFloatLeftPushesSiblingRight;
+    procedure TestFloatRightPushesSiblingLeft;
+    procedure TestTwoLeftFloatsStackHorizontally;
+    procedure TestSiblingPastFloatBottomReturnsToFullWidth;
+    procedure TestParentEnclosesOverhangingFloat;
+    procedure TestFloatLogoTextRowRepro;
   end;
 
 implementation
@@ -1382,6 +1389,207 @@ begin
              [Logo.X, Desc.X]));
     Check(Desc.ContentWidth > 0,
       Format('description cell must have non-zero width, got %.1f', [Desc.ContentWidth]));
+  finally
+    Engine.Free;
+    Parser.Free;
+  end;
+end;
+
+// ---------------------------------------------------------------------------
+// CSS float
+//
+// Float MVP: out-of-flow positioning at parent's left/right edge, in-flow
+// siblings shifted past the float horizontally. Parent stretches vertically
+// to enclose any overhanging float (clearfix-like). Inline-content
+// line-by-line wrap around floats is NOT yet implemented — siblings shift
+// uniformly as full blocks.
+// ---------------------------------------------------------------------------
+
+procedure TestTTina4Components.TestFloatLeftPushesSiblingRight;
+var
+  Parser: Tina4HtmlRender.THTMLParser;
+  Engine: Tina4HtmlRender.TLayoutEngine;
+  L, S: Tina4HtmlRender.TLayoutBox;
+begin
+  Parser := Tina4HtmlRender.THTMLParser.Create;
+  Engine := Tina4HtmlRender.TLayoutEngine.Create(nil);
+  try
+    // float:left logo + sibling div. The sibling must sit to the right
+    // of the float (X > 0) and have its width clamped accordingly.
+    RunLayout(Parser, Engine,
+      '<div style="width:300px; padding:0">' +
+      '  <div id="lf" style="float:left; width:64px; height:64px; padding:0">L</div>' +
+      '  <div id="sib" style="padding:0">S</div>' +
+      '</div>',
+      400);
+
+    L := FindBoxById(Engine.Root, 'lf');
+    S := FindBoxById(Engine.Root, 'sib');
+    Check(Assigned(L) and Assigned(S), 'boxes must exist');
+
+    Check(Abs(L.X) < 0.5, Format('float should sit at X=0, got %.1f', [L.X]));
+    Check(Abs(S.X - 64) < 2, Format('sibling X should be past float (~64), got %.1f', [S.X]));
+    Check(S.ContentWidth > 0, Format('sibling content width > 0, got %.1f', [S.ContentWidth]));
+    Check(S.ContentWidth < 240,
+      Format('sibling width should be reduced (<240), got %.1f', [S.ContentWidth]));
+  finally
+    Engine.Free;
+    Parser.Free;
+  end;
+end;
+
+procedure TestTTina4Components.TestFloatRightPushesSiblingLeft;
+var
+  Parser: Tina4HtmlRender.THTMLParser;
+  Engine: Tina4HtmlRender.TLayoutEngine;
+  R, S: Tina4HtmlRender.TLayoutBox;
+begin
+  Parser := Tina4HtmlRender.THTMLParser.Create;
+  Engine := Tina4HtmlRender.TLayoutEngine.Create(nil);
+  try
+    RunLayout(Parser, Engine,
+      '<div style="width:300px; padding:0">' +
+      '  <div id="rf" style="float:right; width:64px; height:64px; padding:0">R</div>' +
+      '  <div id="sib" style="padding:0">S</div>' +
+      '</div>',
+      400);
+
+    R := FindBoxById(Engine.Root, 'rf');
+    S := FindBoxById(Engine.Root, 'sib');
+    Check(Assigned(R) and Assigned(S), 'boxes must exist');
+
+    // float:right pinned to right edge: X+W ≈ 300.
+    Check(Abs(R.X + R.MarginBoxWidth - 300) < 2,
+      Format('float-right X+W should be 300, got %.1f', [R.X + R.MarginBoxWidth]));
+    Check(Abs(S.X) < 0.5, Format('sibling X should be 0, got %.1f', [S.X]));
+    Check(S.ContentWidth < 240,
+      Format('sibling width reduced for right-float, got %.1f', [S.ContentWidth]));
+  finally
+    Engine.Free;
+    Parser.Free;
+  end;
+end;
+
+procedure TestTTina4Components.TestTwoLeftFloatsStackHorizontally;
+var
+  Parser: Tina4HtmlRender.THTMLParser;
+  Engine: Tina4HtmlRender.TLayoutEngine;
+  F1, F2: Tina4HtmlRender.TLayoutBox;
+begin
+  Parser := Tina4HtmlRender.THTMLParser.Create;
+  Engine := Tina4HtmlRender.TLayoutEngine.Create(nil);
+  try
+    RunLayout(Parser, Engine,
+      '<div style="width:400px; padding:0">' +
+      '  <div id="a" style="float:left; width:80px; height:50px; padding:0">A</div>' +
+      '  <div id="b" style="float:left; width:80px; height:50px; padding:0">B</div>' +
+      '</div>',
+      400);
+
+    F1 := FindBoxById(Engine.Root, 'a');
+    F2 := FindBoxById(Engine.Root, 'b');
+    Check(Assigned(F1) and Assigned(F2), 'floats must exist');
+
+    Check(Abs(F1.X) < 0.5, Format('first float at X=0, got %.1f', [F1.X]));
+    Check(Abs(F2.X - 80) < 2, Format('second float X≈80, got %.1f', [F2.X]));
+  finally
+    Engine.Free;
+    Parser.Free;
+  end;
+end;
+
+procedure TestTTina4Components.TestSiblingPastFloatBottomReturnsToFullWidth;
+var
+  Parser: Tina4HtmlRender.THTMLParser;
+  Engine: Tina4HtmlRender.TLayoutEngine;
+  S1, S2: Tina4HtmlRender.TLayoutBox;
+begin
+  Parser := Tina4HtmlRender.THTMLParser.Create;
+  Engine := Tina4HtmlRender.TLayoutEngine.Create(nil);
+  try
+    // 50px float, two 30px siblings: first overlaps the float (shifted right),
+    // second sits below the float bottom (full width back).
+    RunLayout(Parser, Engine,
+      '<div style="width:300px; padding:0">' +
+      '  <div id="f"  style="float:left; width:64px; height:50px; padding:0">F</div>' +
+      '  <div id="s1" style="height:30px; padding:0">A</div>' +
+      '  <div id="s2" style="height:30px; padding:0">B</div>' +
+      '</div>',
+      400);
+
+    S1 := FindBoxById(Engine.Root, 's1');
+    S2 := FindBoxById(Engine.Root, 's2');
+    Check(Assigned(S1) and Assigned(S2), 'siblings must exist');
+
+    // s1 starts at Y=0, within float's 0..50 range → shifted.
+    Check(Abs(S1.X - 64) < 2, Format('s1 (within float) shifted, got X=%.1f', [S1.X]));
+    // s2 starts at Y=30, still inside float (0..50) → still shifted.
+    Check(Abs(S2.X - 64) < 2, Format('s2 (still in float band) shifted, got X=%.1f', [S2.X]));
+    // s2's Y must be past s1's height
+    Check(S2.Y >= 30,
+      Format('s2.Y should be at/past 30 (s1 bottom), got %.1f', [S2.Y]));
+  finally
+    Engine.Free;
+    Parser.Free;
+  end;
+end;
+
+procedure TestTTina4Components.TestParentEnclosesOverhangingFloat;
+var
+  Parser: Tina4HtmlRender.THTMLParser;
+  Engine: Tina4HtmlRender.TLayoutEngine;
+  P: Tina4HtmlRender.TLayoutBox;
+begin
+  Parser := Tina4HtmlRender.THTMLParser.Create;
+  Engine := Tina4HtmlRender.TLayoutEngine.Create(nil);
+  try
+    // Float is taller than the in-flow sibling. Parent's content height
+    // must extend to cover the float (otherwise it would visually escape).
+    RunLayout(Parser, Engine,
+      '<div id="p" style="width:300px; padding:0">' +
+      '  <div style="float:left; width:64px; height:120px; padding:0">F</div>' +
+      '  <div style="height:20px; padding:0">S</div>' +
+      '</div>',
+      400);
+
+    P := FindBoxById(Engine.Root, 'p');
+    Check(Assigned(P), 'parent must exist');
+    Check(P.ContentHeight >= 120,
+      Format('parent must enclose 120px float, got height %.1f', [P.ContentHeight]));
+  finally
+    Engine.Free;
+    Parser.Free;
+  end;
+end;
+
+procedure TestTTina4Components.TestFloatLogoTextRowRepro;
+var
+  Parser: Tina4HtmlRender.THTMLParser;
+  Engine: Tina4HtmlRender.TLayoutEngine;
+  Logo, Desc: Tina4HtmlRender.TLayoutBox;
+begin
+  Parser := Tina4HtmlRender.THTMLParser.Create;
+  Engine := Tina4HtmlRender.TLayoutEngine.Create(nil);
+  try
+    // Verbatim cuttlefish drill-down tile shape using floats — what the
+    // bug report described as "floats are also a known weak spot".
+    RunLayout(Parser, Engine,
+      '<div style="width:170px; padding:0">' +
+      '  <div id="logo" style="float:left; width:64px; height:64px; padding:0">L</div>' +
+      '  <div id="desc" style="padding:0">R12 MTN Hourly Data 1GB</div>' +
+      '</div>',
+      400);
+
+    Logo := FindBoxById(Engine.Root, 'logo');
+    Desc := FindBoxById(Engine.Root, 'desc');
+    Check(Assigned(Logo) and Assigned(Desc), 'logo + desc boxes must exist');
+
+    Check(Abs(Logo.X) < 0.5, Format('logo at X=0, got %.1f', [Logo.X]));
+    Check(Abs(Desc.X - 64) < 2,
+      Format('description shifted past float (~64), got %.1f', [Desc.X]));
+    Check(Desc.ContentWidth > 0, 'description width > 0');
+    Check(Desc.ContentWidth < 110,
+      Format('description width clamped (<110), got %.1f', [Desc.ContentWidth]));
   finally
     Engine.Free;
     Parser.Free;

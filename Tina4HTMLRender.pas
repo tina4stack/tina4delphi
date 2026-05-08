@@ -242,6 +242,17 @@ type
     // width. The parent's content height stretches to enclose any float
     // that would otherwise overhang.
     CSSFloat: string;
+    // CSS Flexbox (subset). The container has FlexDirection / JustifyContent
+    // / AlignItems / FlexGap; flex items have FlexGrow / FlexShrink /
+    // FlexBasis. `flex: 1` sets grow=1, shrink=1, basis=0. flex-wrap and
+    // baseline alignment are not yet supported.
+    FlexDirection: string;     // 'row' (default) | 'column' | 'row-reverse' | 'column-reverse'
+    JustifyContent: string;    // 'flex-start' (default) | 'flex-end' | 'center' | 'space-between' | 'space-around' | 'space-evenly'
+    AlignItems: string;        // 'stretch' (default) | 'flex-start' | 'flex-end' | 'center'
+    FlexGrow: Single;          // 0 = don't grow (default)
+    FlexShrink: Single;        // 1 = shrink to fit (default)
+    FlexBasis: Single;         // -1 = auto (use width/height)
+    FlexGap: Single;           // 0 = no gap (default) — applies between items along main axis
     procedure SetBorderWidth(W: Single);
     procedure SetBorderColor(C: TAlphaColor);
     function BorderColor: TAlphaColor;  // returns Top color (legacy compat)
@@ -341,6 +352,7 @@ type
     procedure LayoutBlock(Box: TLayoutBox; AvailWidth: Single);
     procedure LayoutInlineChildren(Box: TLayoutBox; AvailWidth: Single);
     procedure LayoutTable(Box: TLayoutBox; AvailWidth: Single);
+    procedure LayoutFlex(Box: TLayoutBox; AvailWidth: Single);
     procedure LayoutListItem(Box: TLayoutBox; AvailWidth: Single);
     procedure LayoutImage(Box: TLayoutBox; AvailWidth: Single);
     procedure LayoutFormControl(Box: TLayoutBox; AvailWidth: Single);
@@ -2203,6 +2215,13 @@ begin
   Result.OutlineStyle := 'none';
   Result.OutlineOffset := 0;
   Result.CSSFloat := 'none';
+  Result.FlexDirection := 'row';
+  Result.JustifyContent := 'flex-start';
+  Result.AlignItems := 'stretch';
+  Result.FlexGrow := 0;
+  Result.FlexShrink := 1;
+  Result.FlexBasis := -1;
+  Result.FlexGap := 0;
 end;
 
 class function TComputedStyle.ParseColor(const S: string): TAlphaColor;
@@ -2457,6 +2476,13 @@ begin
   Result.OutlineStyle := 'none';
   Result.OutlineOffset := 0;
   Result.CSSFloat := 'none';
+  Result.FlexDirection := 'row';
+  Result.JustifyContent := 'flex-start';
+  Result.AlignItems := 'stretch';
+  Result.FlexGrow := 0;
+  Result.FlexShrink := 1;
+  Result.FlexBasis := -1;
+  Result.FlexGap := 0;
 
   if Tag = nil then Exit;
   TN := Tag.TagName.ToLower;
@@ -3150,6 +3176,52 @@ begin
     if (FloatStr = 'left') or (FloatStr = 'right') or (FloatStr = 'none') then
       Style.CSSFloat := FloatStr;
   end;
+
+  // Flexbox container properties
+  if Decls.TryGetValue('flex-direction', Temp) and not ShouldSkip(Temp) then
+    Style.FlexDirection := Temp.Trim.ToLower;
+  if Decls.TryGetValue('justify-content', Temp) and not ShouldSkip(Temp) then
+    Style.JustifyContent := Temp.Trim.ToLower;
+  if Decls.TryGetValue('align-items', Temp) and not ShouldSkip(Temp) then
+    Style.AlignItems := Temp.Trim.ToLower;
+  if Decls.TryGetValue('gap', Temp) and not ShouldSkip(Temp) then
+    Style.FlexGap := ParseLength(Temp, Style.FontSize);
+  if Decls.TryGetValue('column-gap', Temp) and not ShouldSkip(Temp) then
+    Style.FlexGap := ParseLength(Temp, Style.FontSize);
+  if Decls.TryGetValue('row-gap', Temp) and not ShouldSkip(Temp) then
+    Style.FlexGap := ParseLength(Temp, Style.FontSize);
+
+  // Flexbox item properties — `flex` is a shorthand for grow/shrink/basis.
+  // Common forms: `flex: 1` -> grow=1 shrink=1 basis=0
+  //               `flex: auto` -> grow=1 shrink=1 basis=auto
+  //               `flex: 0 0 100px` -> grow=0 shrink=0 basis=100px
+  if Decls.TryGetValue('flex', Temp) and not ShouldSkip(Temp) then
+  begin
+    var FlexStr := Temp.Trim.ToLower;
+    if FlexStr = 'auto' then
+    begin
+      Style.FlexGrow := 1; Style.FlexShrink := 1; Style.FlexBasis := -1;
+    end
+    else if FlexStr = 'none' then
+    begin
+      Style.FlexGrow := 0; Style.FlexShrink := 0; Style.FlexBasis := -1;
+    end
+    else
+    begin
+      var Parts := FlexStr.Split([' ']);
+      if Length(Parts) >= 1 then Style.FlexGrow := StrToFloatDef(Parts[0], 0);
+      if Length(Parts) >= 2 then Style.FlexShrink := StrToFloatDef(Parts[1], 1)
+      else Style.FlexShrink := 1;
+      if Length(Parts) >= 3 then Style.FlexBasis := ParseLength(Parts[2], Style.FontSize)
+      else Style.FlexBasis := 0;  // single-number `flex: 1` -> basis 0
+    end;
+  end;
+  if Decls.TryGetValue('flex-grow', Temp) and not ShouldSkip(Temp) then
+    Style.FlexGrow := StrToFloatDef(Temp.Trim, 0);
+  if Decls.TryGetValue('flex-shrink', Temp) and not ShouldSkip(Temp) then
+    Style.FlexShrink := StrToFloatDef(Temp.Trim, 1);
+  if Decls.TryGetValue('flex-basis', Temp) and not ShouldSkip(Temp) then
+    Style.FlexBasis := ParseLength(Temp, Style.FontSize);
 end;
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -3546,13 +3618,16 @@ begin
     Kind := lbkTableCell
   else if Style.Display = 'list-item' then
     Kind := lbkListItem
-  else if (Style.Display = 'block') or (Style.Display = 'flow-root') then
+  else if (Style.Display = 'block') or (Style.Display = 'flow-root') or
+          (Style.Display = 'flex') then
     // `flow-root` (CSS Display L3) establishes a new block-formatting
     // context. Tina4's LayoutBlock already encloses overhanging floats
     // so a plain block is functionally equivalent — accept the explicit
     // opt-in keyword so authors don't need overflow:hidden hacks.
+    // `flex` keeps block outer-display; LayoutBlock detects it and
+    // dispatches to LayoutFlex.
     Kind := lbkBlock
-  else if Style.Display = 'inline-block' then
+  else if (Style.Display = 'inline-block') or (Style.Display = 'inline-flex') then
     Kind := lbkInlineBlock
   else if Style.Display = 'inline-table' then
     // CSS Display Module Level 3 two-value model:
@@ -3699,6 +3774,27 @@ begin
   var IsFitContentBox := IsFitContentWidth(Box.Style.ExplicitWidth);
   if IsFitContentBox then
     Box.Style.TextAlign := TTextAlign.Leading;
+
+  // `display: flex` (and `inline-flex`) — dispatch to the flex layout
+  // algorithm. We still computed ContentW above so the box has a
+  // consistent ContentWidth; LayoutFlex will overwrite ContentHeight
+  // (and possibly ContentWidth for column flex) once items are placed.
+  if (Box.Style.Display = 'flex') or (Box.Style.Display = 'inline-flex') then
+  begin
+    LayoutFlex(Box, AvailWidth);
+    // Apply explicit-height clamp (mirrors what the block path does later).
+    if Box.Style.ExplicitHeight > 0 then
+    begin
+      if SameText(Box.Style.BoxSizing, 'border-box') then
+        Box.ContentHeight := Box.Style.ExplicitHeight - Box.Style.BorderWidths.Vert -
+          Box.Style.Padding.Top - Box.Style.Padding.Bottom
+      else
+        Box.ContentHeight := Box.Style.ExplicitHeight;
+    end;
+    Box.ScrollWidth := Box.ContentWidth;
+    Box.ScrollHeight := Box.ContentHeight;
+    Exit;
+  end;
 
   // Block-level form controls (e.g. Bootstrap .form-control sets display:block; width:100%)
   // Size them using LayoutFormControl then return — they have no children to lay out.
@@ -4868,6 +4964,292 @@ begin
   finally
     Rows.Free;
     SyntheticRows.Free;
+  end;
+end;
+
+procedure TLayoutEngine.LayoutFlex(Box: TLayoutBox; AvailWidth: Single);
+// CSS Flexbox subset:
+//   * row + row-reverse + column + column-reverse main axes
+//   * justify-content: flex-start / flex-end / center / space-between /
+//                      space-around / space-evenly
+//   * align-items: flex-start / flex-end / center / stretch
+//   * flex-grow / flex-shrink / flex-basis on items (also `flex` shorthand)
+//   * gap / row-gap / column-gap between items
+// Not implemented: flex-wrap (single-line layout), align-self, baseline
+//   alignment, multi-line align-content, intrinsic-size resolution beyond
+//   "lay out at container size, take resulting width". Good enough for the
+//   90% of "row of buttons / centred logo / two-column grow layout"
+//   patterns that drive most app UI.
+var
+  IsRow, IsReverse: Boolean;
+  ContentW, MarginL, MarginR, ExpW: Single;
+  Items: TList<TLayoutBox>;
+  HypoSizes, FinalSizes: TArray<Single>;
+  CrossSize: Single;
+  Gap: Single;
+  I: Integer;
+
+  procedure LayoutItemAt(Item: TLayoutBox; ItemAvail: Single);
+  begin
+    case Item.Kind of
+      lbkBlock, lbkInlineBlock: LayoutBlock(Item, ItemAvail);
+      lbkImage: LayoutImage(Item, ItemAvail);
+      lbkTable: LayoutTable(Item, ItemAvail);
+      lbkListItem: LayoutListItem(Item, ItemAvail);
+      lbkFormControl: LayoutFormControl(Item, ItemAvail);
+    else
+      LayoutBlock(Item, ItemAvail);
+    end;
+  end;
+
+begin
+  IsRow := (Box.Style.FlexDirection = '') or
+           (Box.Style.FlexDirection = 'row') or
+           (Box.Style.FlexDirection = 'row-reverse');
+  IsReverse := (Box.Style.FlexDirection = 'row-reverse') or
+               (Box.Style.FlexDirection = 'column-reverse');
+  Gap := Box.Style.FlexGap;
+
+  // Resolve content width — same dance as LayoutBlock's prologue.
+  MarginL := ResolveMargin(Box.Style.Margin.Left);
+  MarginR := ResolveMargin(Box.Style.Margin.Right);
+  ContentW := AvailWidth - MarginL - MarginR -
+    Box.Style.BorderWidths.Horz - Box.Style.Padding.Left - Box.Style.Padding.Right;
+  ExpW := Box.Style.ExplicitWidth;
+  if IsPercentageValue(ExpW) then
+    ContentW := ResolvePercentage(ExpW, AvailWidth) -
+      Box.Style.BorderWidths.Horz - Box.Style.Padding.Left - Box.Style.Padding.Right
+  else if ExpW > 0 then
+  begin
+    if SameText(Box.Style.BoxSizing, 'border-box') then
+      ContentW := ExpW - Box.Style.BorderWidths.Horz -
+        Box.Style.Padding.Left - Box.Style.Padding.Right
+    else
+      ContentW := ExpW;
+  end;
+  if ContentW < 0 then ContentW := 0;
+  Box.ContentWidth := ContentW;
+
+  // Container's main-axis size is ContentW (row) or its content height
+  // (column — but height isn't known until items lay out, so we use the
+  // explicit height if any, otherwise fall back to AvailWidth as a
+  // proxy and let stretch absorb).
+  var MainSize: Single;
+  if IsRow then MainSize := ContentW
+  else if Box.Style.ExplicitHeight > 0 then MainSize := Box.Style.ExplicitHeight
+  else MainSize := AvailWidth;  // best-effort proxy
+
+  Items := TList<TLayoutBox>.Create;
+  try
+    // Collect flex items. Skip floats (taken out of flow), display:none
+    // children (already filtered upstream), and empty whitespace text.
+    for var Child in Box.Children do
+    begin
+      if Child.Style.CSSFloat <> 'none' then Continue;
+      if (Child.Kind = lbkText) and Assigned(Child.Tag) and
+         (Child.Tag.Text.Trim = '') then Continue;
+      Items.Add(Child);
+    end;
+
+    if Items.Count = 0 then
+    begin
+      Box.ContentHeight := 0;
+      Exit;
+    end;
+
+    // Phase 1: hypothetical main size for each item.
+    //   1. flex-basis explicit -> use that
+    //   2. width / height explicit -> use that
+    //   3. flex-grow > 0 (and no explicit basis/size) -> treat hypothetical
+    //      as 0. This matches the common `flex: 1` / `flex-grow: 1`
+    //      "fill the remaining space" intent — a hypothetical of 0 leaves
+    //      all the container's main-size as Remaining for grow distribution.
+    //   4. otherwise -> lay out tentatively and measure intrinsic main size
+    SetLength(HypoSizes, Items.Count);
+    for I := 0 to Items.Count - 1 do
+    begin
+      var Item := Items[I];
+      var ItemMainSize: Single := -1;
+      if Item.Style.FlexBasis >= 0 then
+        ItemMainSize := Item.Style.FlexBasis
+      else if IsRow and (Item.Style.ExplicitWidth > 0) then
+        ItemMainSize := Item.Style.ExplicitWidth
+      else if (not IsRow) and (Item.Style.ExplicitHeight > 0) then
+        ItemMainSize := Item.Style.ExplicitHeight
+      else if Item.Style.FlexGrow > 0 then
+        ItemMainSize := 0;
+
+      if ItemMainSize < 0 then
+      begin
+        // Lay out tentatively at the container's main size to get an
+        // intrinsic measure.
+        LayoutItemAt(Item, MainSize);
+        if IsRow then ItemMainSize := Item.MarginBoxWidth
+        else ItemMainSize := Item.MarginBoxHeight;
+      end;
+      HypoSizes[I] := ItemMainSize;
+    end;
+
+    // Phase 2: distribute remaining space among grow/shrink items.
+    SetLength(FinalSizes, Items.Count);
+    for I := 0 to Items.Count - 1 do FinalSizes[I] := HypoSizes[I];
+    var TotalBasis: Single := 0;
+    for var H in HypoSizes do TotalBasis := TotalBasis + H;
+    var TotalGap := Gap * Max(0, Items.Count - 1);
+    var Remaining := MainSize - TotalBasis - TotalGap;
+
+    if Remaining > 0 then
+    begin
+      var TotalGrow: Single := 0;
+      for var Item in Items do TotalGrow := TotalGrow + Item.Style.FlexGrow;
+      if TotalGrow > 0 then
+        for I := 0 to Items.Count - 1 do
+          FinalSizes[I] := FinalSizes[I] + Remaining * (Items[I].Style.FlexGrow / TotalGrow);
+    end
+    else if Remaining < 0 then
+    begin
+      var TotalShrink: Single := 0;
+      for var Item in Items do TotalShrink := TotalShrink + Item.Style.FlexShrink;
+      if TotalShrink > 0 then
+      begin
+        for I := 0 to Items.Count - 1 do
+          FinalSizes[I] := FinalSizes[I] +
+            Remaining * (Items[I].Style.FlexShrink / TotalShrink);
+        for I := 0 to Items.Count - 1 do
+          if FinalSizes[I] < 0 then FinalSizes[I] := 0;
+      end;
+    end;
+
+    // Phase 3: lay out items at their final main-axis size and find the
+    // tallest cross-axis extent. Forcing main size via ExplicitWidth/Height
+    // is the simplest way to get LayoutBlock to size the item correctly;
+    // any prior explicit size on the item is overridden by flex.
+    var MaxCrossSize: Single := 0;
+    for I := 0 to Items.Count - 1 do
+    begin
+      var Item := Items[I];
+      if IsRow then
+      begin
+        Item.Style.ExplicitWidth := FinalSizes[I];
+        LayoutItemAt(Item, FinalSizes[I]);
+        if Item.MarginBoxHeight > MaxCrossSize then MaxCrossSize := Item.MarginBoxHeight;
+      end
+      else
+      begin
+        Item.Style.ExplicitHeight := FinalSizes[I];
+        LayoutItemAt(Item, ContentW);
+        if Item.MarginBoxWidth > MaxCrossSize then MaxCrossSize := Item.MarginBoxWidth;
+      end;
+    end;
+
+    // Cross-axis size: explicit container size if present, otherwise the
+    // tallest item.
+    var ExpCrossSize: Single;
+    if IsRow then ExpCrossSize := Box.Style.ExplicitHeight
+    else ExpCrossSize := -1;  // column — already used ExplicitWidth as main
+    if ExpCrossSize > 0 then CrossSize := ExpCrossSize
+    else CrossSize := MaxCrossSize;
+
+    // Phase 4: stretch items without explicit cross-size to the container's
+    // cross-size — only when align-items is `stretch` (default) and the
+    // container's cross-size is known.
+    if (Box.Style.AlignItems = 'stretch') or (Box.Style.AlignItems = '') then
+    begin
+      for I := 0 to Items.Count - 1 do
+      begin
+        var Item := Items[I];
+        if IsRow then
+        begin
+          if Item.Style.ExplicitHeight <= 0 then
+          begin
+            var TargetH := CrossSize -
+              ResolveMargin(Item.Style.Margin.Top) - ResolveMargin(Item.Style.Margin.Bottom) -
+              Item.Style.BorderWidths.Vert -
+              Item.Style.Padding.Top - Item.Style.Padding.Bottom;
+            if TargetH > Item.ContentHeight then Item.ContentHeight := TargetH;
+          end;
+        end;
+      end;
+    end;
+
+    // Phase 5: position items along the main axis according to
+    // justify-content. FreeSpace is what's left after items + gaps consume
+    // their share of MainSize.
+    var TotalUsed: Single := 0;
+    for I := 0 to Items.Count - 1 do TotalUsed := TotalUsed + FinalSizes[I];
+    TotalUsed := TotalUsed + TotalGap;
+    var FreeSpace := MainSize - TotalUsed;
+    if FreeSpace < 0 then FreeSpace := 0;
+
+    var StartOffset: Single := 0;
+    var ExtraSpacing: Single := 0;
+    var JC := Box.Style.JustifyContent;
+    if (JC = 'flex-end') or (JC = 'end') or (JC = 'right') then
+      StartOffset := FreeSpace
+    else if JC = 'center' then
+      StartOffset := FreeSpace / 2
+    else if JC = 'space-between' then
+    begin
+      if Items.Count > 1 then
+        ExtraSpacing := FreeSpace / (Items.Count - 1);
+    end
+    else if JC = 'space-around' then
+    begin
+      if Items.Count > 0 then
+      begin
+        var AroundEach := FreeSpace / Items.Count;
+        StartOffset := AroundEach / 2;
+        ExtraSpacing := AroundEach;
+      end;
+    end
+    else if JC = 'space-evenly' then
+    begin
+      if Items.Count > 0 then
+      begin
+        var EvenEach := FreeSpace / (Items.Count + 1);
+        StartOffset := EvenEach;
+        ExtraSpacing := EvenEach;
+      end;
+    end;
+
+    var Cursor: Single := StartOffset;
+    for I := 0 to Items.Count - 1 do
+    begin
+      var Idx := I;
+      if IsReverse then Idx := Items.Count - 1 - I;
+      var Item := Items[Idx];
+      var ItemMain := FinalSizes[Idx];
+
+      // Cross-axis position
+      var CrossOffset: Single := 0;
+      var ItemCrossOuter: Single;
+      if IsRow then ItemCrossOuter := Item.MarginBoxHeight
+      else ItemCrossOuter := Item.MarginBoxWidth;
+
+      var AI := Box.Style.AlignItems;
+      if (AI = 'flex-end') or (AI = 'end') then
+        CrossOffset := CrossSize - ItemCrossOuter
+      else if AI = 'center' then
+        CrossOffset := (CrossSize - ItemCrossOuter) / 2;
+      // 'flex-start' / 'stretch' / default → 0
+
+      if IsRow then
+      begin
+        Item.X := Cursor;
+        Item.Y := CrossOffset;
+      end
+      else
+      begin
+        Item.Y := Cursor;
+        Item.X := CrossOffset;
+      end;
+      Cursor := Cursor + ItemMain + Gap + ExtraSpacing;
+    end;
+
+    if IsRow then Box.ContentHeight := CrossSize
+    else Box.ContentWidth := CrossSize;
+  finally
+    Items.Free;
   end;
 end;
 

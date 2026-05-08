@@ -91,6 +91,15 @@ type
     procedure TestStickyLeftPinsToScrollAncestorXEdge;
     procedure TestNowrapInlineBlockOverflowsContainer;
     procedure TestDataUriBackgroundImageInInlineStyleParsed;
+    // Flexbox
+    procedure TestFlexRowItemsLayOutHorizontally;
+    procedure TestFlexGrowDistributesRemainingSpace;
+    procedure TestFlexJustifyContentCenter;
+    procedure TestFlexJustifyContentSpaceBetween;
+    procedure TestFlexAlignItemsCenter;
+    procedure TestFlexGapBetweenItems;
+    procedure TestFlexColumnDirectionStacksVertically;
+    procedure TestFlexShorthandOneSetsGrowShrinkBasis;
   end;
 
 implementation
@@ -1937,6 +1946,228 @@ begin
     // at the ';' or ',' inside the URI).
     Check(D.Style.BackgroundImage.Contains('iVBORw0KGgo'),
       'base64 payload must survive parsing');
+  finally
+    Engine.Free;
+    Parser.Free;
+  end;
+end;
+
+// ---------------------------------------------------------------------------
+// CSS Flexbox
+// ---------------------------------------------------------------------------
+
+procedure TestTTina4Components.TestFlexRowItemsLayOutHorizontally;
+var
+  Parser: Tina4HtmlRender.THTMLParser;
+  Engine: Tina4HtmlRender.TLayoutEngine;
+  A, B, C: Tina4HtmlRender.TLayoutBox;
+begin
+  Parser := Tina4HtmlRender.THTMLParser.Create;
+  Engine := Tina4HtmlRender.TLayoutEngine.Create(nil);
+  try
+    RunLayout(Parser, Engine,
+      '<div style="display:flex; width:300px; padding:0">' +
+      '  <div id="a" style="width:50px; height:30px; padding:0">A</div>' +
+      '  <div id="b" style="width:50px; height:30px; padding:0">B</div>' +
+      '  <div id="c" style="width:50px; height:30px; padding:0">C</div>' +
+      '</div>', 400);
+
+    A := FindBoxById(Engine.Root, 'a');
+    B := FindBoxById(Engine.Root, 'b');
+    C := FindBoxById(Engine.Root, 'c');
+    Check(Assigned(A) and Assigned(B) and Assigned(C), 'all 3 items');
+
+    Check(Abs(A.X - 0)   < 2, Format('A.X expected 0, got %.1f', [A.X]));
+    Check(Abs(B.X - 50)  < 2, Format('B.X expected 50, got %.1f', [B.X]));
+    Check(Abs(C.X - 100) < 2, Format('C.X expected 100, got %.1f', [C.X]));
+    // Same Y (single row).
+    Check(Abs(A.Y - B.Y) < 1, 'B same Y as A');
+    Check(Abs(A.Y - C.Y) < 1, 'C same Y as A');
+  finally
+    Engine.Free;
+    Parser.Free;
+  end;
+end;
+
+procedure TestTTina4Components.TestFlexGrowDistributesRemainingSpace;
+var
+  Parser: Tina4HtmlRender.THTMLParser;
+  Engine: Tina4HtmlRender.TLayoutEngine;
+  A, B: Tina4HtmlRender.TLayoutBox;
+begin
+  Parser := Tina4HtmlRender.THTMLParser.Create;
+  Engine := Tina4HtmlRender.TLayoutEngine.Create(nil);
+  try
+    // 300px container, 50px fixed item + 1 grow item → grow item gets 250px.
+    RunLayout(Parser, Engine,
+      '<div style="display:flex; width:300px; padding:0">' +
+      '  <div id="a" style="width:50px; height:30px; padding:0">A</div>' +
+      '  <div id="b" style="flex-grow:1; height:30px; padding:0">B</div>' +
+      '</div>', 400);
+
+    A := FindBoxById(Engine.Root, 'a');
+    B := FindBoxById(Engine.Root, 'b');
+    Check(Assigned(A) and Assigned(B), 'items exist');
+    Check(Abs(A.MarginBoxWidth - 50) < 2,
+      Format('A stays 50, got %.1f', [A.MarginBoxWidth]));
+    Check(Abs(B.MarginBoxWidth - 250) < 2,
+      Format('B grows to 250, got %.1f', [B.MarginBoxWidth]));
+  finally
+    Engine.Free;
+    Parser.Free;
+  end;
+end;
+
+procedure TestTTina4Components.TestFlexJustifyContentCenter;
+var
+  Parser: Tina4HtmlRender.THTMLParser;
+  Engine: Tina4HtmlRender.TLayoutEngine;
+  A: Tina4HtmlRender.TLayoutBox;
+begin
+  Parser := Tina4HtmlRender.THTMLParser.Create;
+  Engine := Tina4HtmlRender.TLayoutEngine.Create(nil);
+  try
+    RunLayout(Parser, Engine,
+      '<div style="display:flex; justify-content:center; width:300px; padding:0">' +
+      '  <div id="a" style="width:60px; height:30px; padding:0">A</div>' +
+      '</div>', 400);
+    A := FindBoxById(Engine.Root, 'a');
+    Check(Assigned(A), 'item exists');
+    // Single 60px item centred in 300px → X = (300-60)/2 = 120.
+    Check(Abs(A.X - 120) < 2,
+      Format('justify-content:center → A.X=120, got %.1f', [A.X]));
+  finally
+    Engine.Free;
+    Parser.Free;
+  end;
+end;
+
+procedure TestTTina4Components.TestFlexJustifyContentSpaceBetween;
+var
+  Parser: Tina4HtmlRender.THTMLParser;
+  Engine: Tina4HtmlRender.TLayoutEngine;
+  A, B, C: Tina4HtmlRender.TLayoutBox;
+begin
+  Parser := Tina4HtmlRender.THTMLParser.Create;
+  Engine := Tina4HtmlRender.TLayoutEngine.Create(nil);
+  try
+    // 3 x 50px items in 300px container with space-between:
+    //   FreeSpace = 300 - 150 = 150, divided into 2 gaps = 75 each
+    //   A at 0, B at 50+75=125, C at 125+50+75=250
+    RunLayout(Parser, Engine,
+      '<div style="display:flex; justify-content:space-between; width:300px; padding:0">' +
+      '  <div id="a" style="width:50px; height:30px; padding:0">A</div>' +
+      '  <div id="b" style="width:50px; height:30px; padding:0">B</div>' +
+      '  <div id="c" style="width:50px; height:30px; padding:0">C</div>' +
+      '</div>', 400);
+
+    A := FindBoxById(Engine.Root, 'a');
+    B := FindBoxById(Engine.Root, 'b');
+    C := FindBoxById(Engine.Root, 'c');
+    Check(Abs(A.X) < 2,         Format('A.X=0, got %.1f', [A.X]));
+    Check(Abs(B.X - 125) < 2,   Format('B.X=125, got %.1f', [B.X]));
+    Check(Abs(C.X - 250) < 2,   Format('C.X=250, got %.1f', [C.X]));
+  finally
+    Engine.Free;
+    Parser.Free;
+  end;
+end;
+
+procedure TestTTina4Components.TestFlexAlignItemsCenter;
+var
+  Parser: Tina4HtmlRender.THTMLParser;
+  Engine: Tina4HtmlRender.TLayoutEngine;
+  A: Tina4HtmlRender.TLayoutBox;
+begin
+  Parser := Tina4HtmlRender.THTMLParser.Create;
+  Engine := Tina4HtmlRender.TLayoutEngine.Create(nil);
+  try
+    // Container 100px tall, item 30px tall, align-items:center → Y = 35.
+    RunLayout(Parser, Engine,
+      '<div style="display:flex; align-items:center; width:300px; height:100px; padding:0">' +
+      '  <div id="a" style="width:50px; height:30px; padding:0">A</div>' +
+      '</div>', 400);
+    A := FindBoxById(Engine.Root, 'a');
+    Check(Assigned(A), 'item exists');
+    Check(Abs(A.Y - 35) < 2,
+      Format('align-items:center → A.Y=35, got %.1f', [A.Y]));
+  finally
+    Engine.Free;
+    Parser.Free;
+  end;
+end;
+
+procedure TestTTina4Components.TestFlexGapBetweenItems;
+var
+  Parser: Tina4HtmlRender.THTMLParser;
+  Engine: Tina4HtmlRender.TLayoutEngine;
+  A, B: Tina4HtmlRender.TLayoutBox;
+begin
+  Parser := Tina4HtmlRender.THTMLParser.Create;
+  Engine := Tina4HtmlRender.TLayoutEngine.Create(nil);
+  try
+    RunLayout(Parser, Engine,
+      '<div style="display:flex; gap:10px; width:300px; padding:0">' +
+      '  <div id="a" style="width:50px; height:30px; padding:0">A</div>' +
+      '  <div id="b" style="width:50px; height:30px; padding:0">B</div>' +
+      '</div>', 400);
+    A := FindBoxById(Engine.Root, 'a');
+    B := FindBoxById(Engine.Root, 'b');
+    Check(Abs(A.X) < 2,        Format('A.X=0, got %.1f', [A.X]));
+    Check(Abs(B.X - 60) < 2,   Format('B.X=60 (50+10gap), got %.1f', [B.X]));
+  finally
+    Engine.Free;
+    Parser.Free;
+  end;
+end;
+
+procedure TestTTina4Components.TestFlexColumnDirectionStacksVertically;
+var
+  Parser: Tina4HtmlRender.THTMLParser;
+  Engine: Tina4HtmlRender.TLayoutEngine;
+  A, B: Tina4HtmlRender.TLayoutBox;
+begin
+  Parser := Tina4HtmlRender.THTMLParser.Create;
+  Engine := Tina4HtmlRender.TLayoutEngine.Create(nil);
+  try
+    RunLayout(Parser, Engine,
+      '<div style="display:flex; flex-direction:column; width:200px; padding:0">' +
+      '  <div id="a" style="height:30px; padding:0">A</div>' +
+      '  <div id="b" style="height:40px; padding:0">B</div>' +
+      '</div>', 400);
+    A := FindBoxById(Engine.Root, 'a');
+    B := FindBoxById(Engine.Root, 'b');
+    Check(Abs(A.Y) < 2, Format('A.Y=0, got %.1f', [A.Y]));
+    Check(Abs(B.Y - 30) < 2, Format('B.Y=30, got %.1f', [B.Y]));
+    // Column items share X (default align-items=stretch).
+    Check(Abs(A.X - B.X) < 1, 'column items share X');
+  finally
+    Engine.Free;
+    Parser.Free;
+  end;
+end;
+
+procedure TestTTina4Components.TestFlexShorthandOneSetsGrowShrinkBasis;
+var
+  Parser: Tina4HtmlRender.THTMLParser;
+  Engine: Tina4HtmlRender.TLayoutEngine;
+  A, B: Tina4HtmlRender.TLayoutBox;
+begin
+  Parser := Tina4HtmlRender.THTMLParser.Create;
+  Engine := Tina4HtmlRender.TLayoutEngine.Create(nil);
+  try
+    // `flex: 1` on both → equal-width 50/50 split.
+    RunLayout(Parser, Engine,
+      '<div style="display:flex; width:300px; padding:0">' +
+      '  <div id="a" style="flex:1; height:30px; padding:0">A</div>' +
+      '  <div id="b" style="flex:1; height:30px; padding:0">B</div>' +
+      '</div>', 400);
+    A := FindBoxById(Engine.Root, 'a');
+    B := FindBoxById(Engine.Root, 'b');
+    Check(Abs(A.MarginBoxWidth - 150) < 2,
+      Format('A=150, got %.1f', [A.MarginBoxWidth]));
+    Check(Abs(B.MarginBoxWidth - 150) < 2,
+      Format('B=150, got %.1f', [B.MarginBoxWidth]));
   finally
     Engine.Free;
     Parser.Free;

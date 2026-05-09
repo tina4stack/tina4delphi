@@ -143,6 +143,7 @@ type
     FFileCache: TFileCache;
     FCustomProps: TDictionary<string, string>;
     FOnParseError: TCSSStyleSheetParseError;
+    FHasInteractiveSelectors: Boolean;  // any rule uses :hover/:active/:focus?
     procedure ParseCSS(const CSSText: string);
     function SelectorMatches(const Selector: string; Tag: THTMLTag): Boolean;
     function SelectorSpecificity(const Selector: string): Integer;
@@ -158,6 +159,12 @@ type
     property Rules: TObjectList<TCSSRule> read FRules;
     property FileCache: TFileCache read FFileCache write FFileCache;
     property OnParseError: TCSSStyleSheetParseError read FOnParseError write FOnParseError;
+    /// <summary>
+    /// True when any rule's selector contains `:hover`, `:active`, or
+    /// `:focus`. Lets the renderer short-circuit mouse-tracking when no
+    /// stylesheet rule cares about interactive state.
+    /// </summary>
+    property HasInteractiveSelectors: Boolean read FHasInteractiveSelectors;
     property CustomProps: TDictionary<string, string> read FCustomProps;
   end;
 
@@ -347,6 +354,13 @@ type
     Fragments: TList<TTextFragment>;
     ListIndex: Integer;
     IsOrdered: Boolean;
+    // Cached subtree facts, populated during BuildBoxTree. Used by the
+    // paint pass to skip the two-pass position-segregated walk when the
+    // subtree contains nothing that requires it. A repaint of an entire
+    // tree of plain `<div>`s should not pay any per-box cost for sticky
+    // and positioned-stacking segregation that adds zero visible work.
+    HasStickyDescendant: Boolean;     // self or any descendant has position:sticky
+    HasPositionedDescendant: Boolean; // self or any descendant has non-static position
     constructor Create(ATag: THTMLTag; AKind: TLayoutBoxKind);
     destructor Destroy; override;
     function MarginBoxWidth: Single;
@@ -1223,6 +1237,12 @@ begin
         begin
           Rule.SourceOrder := FRules.Count;
           FRules.Add(Rule);
+          // Note any interactive pseudo-class so the renderer can skip
+          // mouse-tracking when no rule needs it.
+          if (Pos(':hover', TrimmedSel.ToLower) > 0) or
+             (Pos(':active', TrimmedSel.ToLower) > 0) or
+             (Pos(':focus', TrimmedSel.ToLower) > 0) then
+            FHasInteractiveSelectors := True;
         end
         else
         begin
@@ -1401,56 +1421,66 @@ begin
   RequireFocus := False;
 
   var S := Sel;
+  var AttrChecks: TArray<TPair<string, string>>;
 
-  // Strip recognised pseudo-class suffixes (`:hover`, `:active`, `:focus`)
-  // and remember which ones we need to verify against the tag's runtime
-  // state. Unknown pseudo-classes (`:not(...)`, `:nth-child()`, etc.) are
-  // left embedded — they'll fail the class/tag string compare below and
-  // produce a no-match without bringing down the surrounding stylesheet.
-  while True do
+  // Fast path: most CSS selectors are pure tag/class/id and contain
+  // neither `:` nor `[`. Skip the pseudo-class suffix scan and the
+  // attribute-selector scan entirely in that case — saves an order of
+  // magnitude on per-render selector matching for stylesheets that
+  // don't use these features. (The previous unconditional code did
+  // LastIndexOf+Substring on every call, which became visible on
+  // mobile during pan/scroll.)
+  if (S.IndexOf(':') >= 0) then
   begin
-    var ColonIdx := S.LastIndexOf(':');
-    if ColonIdx <= 0 then Break;
-    var Suffix := S.Substring(ColonIdx).ToLower;
-    if Suffix = ':hover' then begin RequireHover := True; S := S.Substring(0, ColonIdx); end
-    else if Suffix = ':active' then begin RequireActive := True; S := S.Substring(0, ColonIdx); end
-    else if Suffix = ':focus' then begin RequireFocus := True; S := S.Substring(0, ColonIdx); end
-    else Break;
+    // Strip recognised pseudo-class suffixes (`:hover`, `:active`,
+    // `:focus`). Unknown pseudo-classes (`:not(...)`, `:nth-child()`)
+    // are left embedded — they'll fail the class/tag compare below
+    // and produce a no-match without bringing down the surrounding
+    // stylesheet.
+    while True do
+    begin
+      var ColonIdx := S.LastIndexOf(':');
+      if ColonIdx <= 0 then Break;
+      var Suffix := S.Substring(ColonIdx).ToLower;
+      if Suffix = ':hover' then begin RequireHover := True; S := S.Substring(0, ColonIdx); end
+      else if Suffix = ':active' then begin RequireActive := True; S := S.Substring(0, ColonIdx); end
+      else if Suffix = ':focus' then begin RequireFocus := True; S := S.Substring(0, ColonIdx); end
+      else Break;
+    end;
   end;
 
-  // Strip attribute selectors `[name]` (presence) and `[name="value"]`
-  // (exact-match — the most common form). Other operators (`~=`, `^=`,
-  // `$=`, `*=`) aren't yet honoured; they'll fall through to a no-match.
-  // Multiple `[...]` segments are allowed; we collect them all and check
-  // each at the end. Required attrs survive case-insensitive match on
-  // the name, case-sensitive on the value (matches browsers).
-  var AttrChecks: TArray<TPair<string, string>>;
-  while True do
+  if S.IndexOf('[') >= 0 then
   begin
-    var BracketStart := S.IndexOf('[');
-    if BracketStart < 0 then Break;
-    var BracketEnd := S.IndexOf(']', BracketStart + 1);
-    if BracketEnd < 0 then Break;
-    var Inner := S.Substring(BracketStart + 1, BracketEnd - BracketStart - 1).Trim;
-    var Pair: TPair<string, string>;
-    var EqIdx := Inner.IndexOf('=');
-    if EqIdx > 0 then
+    // Strip attribute selectors `[name]` (presence) and `[name="value"]`
+    // (exact-match). Other operators (`~=`, `^=`, `$=`, `*=`) aren't
+    // honoured; they'll fall through to a no-match.
+    while True do
     begin
-      Pair.Key := Inner.Substring(0, EqIdx).Trim.ToLower;
-      var V := Inner.Substring(EqIdx + 1).Trim;
-      if (V.Length >= 2) and ((V.Chars[0] = '"') or (V.Chars[0] = '''')) then
-        V := V.Substring(1, V.Length - 2);
-      Pair.Value := V;
-    end
-    else
-    begin
-      Pair.Key := Inner.ToLower;
-      Pair.Value := #1#1;  // sentinel meaning "presence only"
+      var BracketStart := S.IndexOf('[');
+      if BracketStart < 0 then Break;
+      var BracketEnd := S.IndexOf(']', BracketStart + 1);
+      if BracketEnd < 0 then Break;
+      var Inner := S.Substring(BracketStart + 1, BracketEnd - BracketStart - 1).Trim;
+      var Pair: TPair<string, string>;
+      var EqIdx := Inner.IndexOf('=');
+      if EqIdx > 0 then
+      begin
+        Pair.Key := Inner.Substring(0, EqIdx).Trim.ToLower;
+        var V := Inner.Substring(EqIdx + 1).Trim;
+        if (V.Length >= 2) and ((V.Chars[0] = '"') or (V.Chars[0] = '''')) then
+          V := V.Substring(1, V.Length - 2);
+        Pair.Value := V;
+      end
+      else
+      begin
+        Pair.Key := Inner.ToLower;
+        Pair.Value := #1#1;  // sentinel meaning "presence only"
+      end;
+      SetLength(AttrChecks, Length(AttrChecks) + 1);
+      AttrChecks[High(AttrChecks)] := Pair;
+      // Remove the [...] segment from S
+      S := S.Remove(BracketStart, BracketEnd - BracketStart + 1);
     end;
-    SetLength(AttrChecks, Length(AttrChecks) + 1);
-    AttrChecks[High(AttrChecks)] := Pair;
-    // Remove the [...] segment from S
-    S := S.Remove(BracketStart, BracketEnd - BracketStart + 1);
   end;
   HashPos := S.IndexOf('#');
   DotPos := S.IndexOf('.');
@@ -4039,9 +4069,26 @@ begin
           ChildBox.IsOrdered := IsOL;
         end;
         Result.Children.Add(ChildBox);
+        // Bubble subtree facts up so the paint pass can short-circuit.
+        if ChildBox.HasStickyDescendant then
+          Result.HasStickyDescendant := True;
+        if ChildBox.HasPositionedDescendant then
+          Result.HasPositionedDescendant := True;
       end;
     end;
   end;
+
+  // Self contributes too — a sticky / positioned box marks its OWN flag
+  // so the parent's loop above bubbles correctly.
+  if Style.CSSPosition = 'sticky' then
+  begin
+    Result.HasStickyDescendant := True;
+    Result.HasPositionedDescendant := True;
+  end
+  else if (Style.CSSPosition = 'relative') or
+          (Style.CSSPosition = 'absolute') or
+          (Style.CSSPosition = 'fixed') then
+    Result.HasPositionedDescendant := True;
 
   // Request images
   if Kind = lbkImage then
@@ -5669,9 +5716,24 @@ procedure TLayoutEngine.LayoutAbsoluteChildren(Box: TLayoutBox);
 // Called from LayoutBlock and LayoutFlex after the in-flow cursor has
 // settled and ContentHeight is finalised, so left+right / top+bottom can
 // resolve against a known containing-block size.
+//
+// Fast-out when no child is positioned absolute/fixed — most boxes have
+// none, so the previous unconditional iteration was pure overhead per
+// every container in the tree.
 var
   CW, CH: Single;
+  HasPositioned: Boolean;
 begin
+  HasPositioned := False;
+  for var Child in Box.Children do
+    if (Child.Style.CSSPosition = 'absolute') or
+       (Child.Style.CSSPosition = 'fixed') then
+    begin
+      HasPositioned := True;
+      Break;
+    end;
+  if not HasPositioned then Exit;
+
   CW := Box.ContentWidth;
   CH := Box.ContentHeight;
   for var Child in Box.Children do
@@ -8607,17 +8669,23 @@ begin
       FStickyAnchorX := CX;
     try
       Canvas.IntersectClipRect(RectF(CX, CY, CX + Box.ContentWidth, CY + Box.ContentHeight));
-      // Two-pass deep paint:
-      //   pass 1 walks the entire subtree painting everything that is NOT
-      //          sticky (any sticky element + its subtree is skipped),
-      //   pass 2 walks the same subtree painting ONLY sticky elements.
-      // This is what lets a sticky <th> nested four levels deep paint on
-      // top of its <tbody> siblings — the sibling-level segregation that
-      // applied previously couldn't reach across `<thead>` vs `<tbody>`.
-      for var Child in Box.Children do
-        PaintBox(Canvas, Child, CX - Box.ScrollX, CY - Box.ScrollY, 1);
-      for var Child in Box.Children do
-        PaintBox(Canvas, Child, CX - Box.ScrollX, CY - Box.ScrollY, 2);
+      // Two-pass deep paint when there's a sticky descendant inside this
+      // scroll container — pass 1 paints non-sticky, pass 2 paints sticky
+      // on top. When the cached HasStickyDescendant flag is False (the
+      // common case — most scroll containers contain plain content) we
+      // skip the second walk entirely, halving the recursion cost.
+      if Box.HasStickyDescendant then
+      begin
+        for var Child in Box.Children do
+          PaintBox(Canvas, Child, CX - Box.ScrollX, CY - Box.ScrollY, 1);
+        for var Child in Box.Children do
+          PaintBox(Canvas, Child, CX - Box.ScrollX, CY - Box.ScrollY, 2);
+      end
+      else
+      begin
+        for var Child in Box.Children do
+          PaintBox(Canvas, Child, CX - Box.ScrollX, CY - Box.ScrollY, 0);
+      end;
 
       // text-overflow: ellipsis — paint "..." at right edge when content overflows
       if (Box.Style.TextOverflow = 'ellipsis') and (Box.Style.WhiteSpace = 'nowrap') then
@@ -8679,22 +8747,31 @@ begin
     // alongside non-sticky siblings stays on top.
     if ChildStickyMode = 0 then
     begin
-      // Pass 1: in-flow / static children only.
-      for var Child in Box.Children do
+      // Position-aware segregation only matters when SOMETHING in the
+      // subtree is positioned. The common case (vanilla div/span tree)
+      // hits a single-pass walk — half the iteration cost.
+      if Box.HasPositionedDescendant then
       begin
-        var P := Child.Style.CSSPosition;
-        if (P = '') or (P = 'static') then
-          PaintBox(Canvas, Child, CX, CY, 0);
-      end;
-      // Pass 2: any positioned child (relative / absolute / fixed / sticky)
-      // paints on top — gives positioned elements an implicit z-index lift,
-      // matching browsers' default stacking-context behaviour without our
-      // having to track z-index numerically.
-      for var Child in Box.Children do
+        // Pass 1: in-flow / static children only.
+        for var Child in Box.Children do
+        begin
+          var P := Child.Style.CSSPosition;
+          if (P = '') or (P = 'static') then
+            PaintBox(Canvas, Child, CX, CY, 0);
+        end;
+        // Pass 2: positioned child paints on top — implicit z-index lift.
+        for var Child in Box.Children do
+        begin
+          var P := Child.Style.CSSPosition;
+          if (P = 'relative') or (P = 'absolute') or
+             (P = 'fixed') or (P = 'sticky') then
+            PaintBox(Canvas, Child, CX, CY, 0);
+        end;
+      end
+      else
       begin
-        var P := Child.Style.CSSPosition;
-        if (P = 'relative') or (P = 'absolute') or
-           (P = 'fixed') or (P = 'sticky') then
+        // No positioned children anywhere in subtree — single pass.
+        for var Child in Box.Children do
           PaintBox(Canvas, Child, CX, CY, 0);
       end;
     end
@@ -10449,12 +10526,14 @@ begin
   // deepest element under the cursor, then promote/demote the ancestor
   // chain. UpdatePseudoChain triggers Repaint only when the chain
   // actually changed. We skip the update entirely during an active
-  // pan/scroll gesture — the cursor crosses many elements while
-  // dragging, and re-computing hover on each move competes with the
-  // scroll animation and serves no UX purpose (touch UX has no hover).
+  // pan/scroll gesture, AND when the loaded stylesheet doesn't have
+  // any :hover/:active/:focus rule — the latter is the common case
+  // for tap-driven UX where mouse-tracking would just burn CPU per
+  // move with no visible effect.
   if Assigned(FLayoutEngine) and Assigned(FLayoutEngine.Root) and
      (not FPanActive) and (not FMouseDownOnScroll) and
-     (not Assigned(FDragScrollBox)) then
+     (not Assigned(FDragScrollBox)) and
+     Assigned(FStyleSheet) and FStyleSheet.HasInteractiveSelectors then
   begin
     HoverTag := HitTestTagAt(FLayoutEngine.Root, -FScrollX, -FScrollY, X, Y);
     UpdatePseudoChain(FHoverChain, HoverTag, 'hover');

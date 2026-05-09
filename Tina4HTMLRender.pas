@@ -130,6 +130,21 @@ type
     Selector: string;
     Declarations: TCSSDeclarations;
     SourceOrder: Integer;  // Order in which rule appeared in CSS (for stable sorting)
+    // Pre-classified routing key set at parse time so the cascade can
+    // lookup-instead-of-scan. Determined from the rule's last selector
+    // part (the one that targets the tag itself):
+    //   '#X'  -> indexed by tag id 'X'
+    //   '.X'  -> indexed by tag class 'X' (first class wins for multi-class)
+    //   'tag' -> indexed by tag name
+    //   ''    -> universal bucket (matched against every tag)
+    RoutingKey: string;
+    // Selector pre-tokenized at parse time:
+    //   SelectorLower    — Selector.Trim.ToLower (cached)
+    //   SelectorParts    — descendant-split parts of SelectorLower
+    // The matcher reads these directly instead of repeating the
+    // Trim/ToLower/Split work on every match call.
+    SelectorLower: string;
+    SelectorParts: TArray<string>;
     constructor Create;
     destructor Destroy; override;
   end;
@@ -144,9 +159,18 @@ type
     FCustomProps: TDictionary<string, string>;
     FOnParseError: TCSSStyleSheetParseError;
     FHasInteractiveSelectors: Boolean;  // any rule uses :hover/:active/:focus?
+    // Indexed cascade — rules grouped by their routing key so a tag
+    // with class "btn" only checks rules that could plausibly match it.
+    // Cuts ApplyTo from O(rules) to O(matching-rules) per tag, which on
+    // a stylesheet of any size dominates layout cost.
+    FRulesByKey: TDictionary<string, TList<TCSSRule>>;
+    FUniversalRules: TList<TCSSRule>;  // rules with empty RoutingKey
     procedure ParseCSS(const CSSText: string);
-    function SelectorMatches(const Selector: string; Tag: THTMLTag): Boolean;
+    function SelectorMatches(const Selector: string; Tag: THTMLTag): Boolean; overload;
+    function SelectorMatches(Rule: TCSSRule; Tag: THTMLTag): Boolean; overload;
     function SelectorSpecificity(const Selector: string): Integer;
+    procedure ClassifyRule(Rule: TCSSRule);
+    procedure ClearRuleIndex;
   public
     constructor Create;
     destructor Destroy; override;
@@ -1123,11 +1147,15 @@ begin
   inherited;
   FRules := TObjectList<TCSSRule>.Create(True);
   FCustomProps := TDictionary<string, string>.Create;
+  FRulesByKey := TObjectDictionary<string, TList<TCSSRule>>.Create([doOwnsValues]);
+  FUniversalRules := TList<TCSSRule>.Create;
 end;
 
 destructor TCSSStyleSheet.Destroy;
 begin
   FCustomProps.Free;
+  FUniversalRules.Free;
+  FRulesByKey.Free;
   FRules.Free;
   inherited;
 end;
@@ -1136,6 +1164,92 @@ procedure TCSSStyleSheet.Clear;
 begin
   FRules.Clear;
   FCustomProps.Clear;
+  ClearRuleIndex;
+end;
+
+procedure TCSSStyleSheet.ClearRuleIndex;
+begin
+  FRulesByKey.Clear;
+  FUniversalRules.Clear;
+end;
+
+procedure TCSSStyleSheet.ClassifyRule(Rule: TCSSRule);
+// Compute the routing key for a rule based on its LAST selector part
+// (the one that selects the tag itself; preceding parts are descendant
+// constraints checked at match time). Index the rule under that key.
+// Also pre-tokenize the selector so SelectorMatches doesn't repeat the
+// Trim/ToLower/Split work on every call.
+//
+// Examples:
+//   `.btn`              -> RoutingKey = '.btn'
+//   `.btn.active`       -> RoutingKey = '.btn'   (first class wins)
+//   `#submit`           -> RoutingKey = '#submit'
+//   `div p.note`        -> RoutingKey = '.note'
+//   `input[type=email]` -> RoutingKey = 'input'
+//   `*`, `[disabled]`   -> RoutingKey = '' (universal)
+var
+  Sel, LastPart: string;
+  I, DotPos, HashPos, BracketPos, ColonPos: Integer;
+  List: TList<TCSSRule>;
+begin
+  // Pre-tokenize the selector. Lowercase once, split-by-space once.
+  Rule.SelectorLower := Rule.Selector.Trim.ToLower;
+  Rule.SelectorParts := Rule.SelectorLower.Split([' '], TStringSplitOptions.ExcludeEmpty);
+
+  Sel := Rule.Selector.Trim;
+  // Find the last descendant-separated part. Trim trailing combinators.
+  I := Sel.LastIndexOf(' ');
+  if I >= 0 then LastPart := Sel.Substring(I + 1).Trim
+  else LastPart := Sel;
+  if LastPart = '' then Exit;
+
+  // Strip any trailing pseudo-class / attribute selector for routing
+  // purposes — the routing key is just the tag/class/id of the last
+  // simple selector. The full match (incl. pseudo / attr) still runs
+  // later in MatchesSingleSelector.
+  ColonPos := LastPart.IndexOf(':');
+  if ColonPos >= 0 then LastPart := LastPart.Substring(0, ColonPos);
+  BracketPos := LastPart.IndexOf('[');
+  if BracketPos >= 0 then LastPart := LastPart.Substring(0, BracketPos);
+
+  HashPos := LastPart.IndexOf('#');
+  DotPos := LastPart.IndexOf('.');
+
+  if (HashPos >= 0) and ((DotPos < 0) or (HashPos < DotPos)) then
+  begin
+    // ID first: '#X' or 'tag#X'. Routing key = '#X'.
+    var Rest := LastPart.Substring(HashPos + 1);
+    var EndPos := Rest.IndexOfAny(['.']);
+    if EndPos >= 0 then Rest := Rest.Substring(0, EndPos);
+    Rule.RoutingKey := '#' + Rest.ToLower;
+  end
+  else if DotPos >= 0 then
+  begin
+    // Class first: '.X', 'tag.X', '.X.Y'. Routing key = '.X' (first class).
+    var Rest := LastPart.Substring(DotPos + 1);
+    var EndPos := Rest.IndexOfAny(['.', '#']);
+    if EndPos >= 0 then Rest := Rest.Substring(0, EndPos);
+    Rule.RoutingKey := '.' + Rest.ToLower;
+  end
+  else if (LastPart <> '') and (LastPart <> '*') then
+  begin
+    // Plain tag: 'div', 'p'. Lowercase since HTML is case-insensitive.
+    Rule.RoutingKey := LastPart.ToLower;
+  end
+  else
+    Rule.RoutingKey := '';
+
+  if Rule.RoutingKey = '' then
+    FUniversalRules.Add(Rule)
+  else
+  begin
+    if not FRulesByKey.TryGetValue(Rule.RoutingKey, List) then
+    begin
+      List := TList<TCSSRule>.Create;
+      FRulesByKey.Add(Rule.RoutingKey, List);
+    end;
+    List.Add(Rule);
+  end;
 end;
 
 procedure TCSSStyleSheet.ParseCSS(const CSSText: string);
@@ -1237,6 +1351,7 @@ begin
         begin
           Rule.SourceOrder := FRules.Count;
           FRules.Add(Rule);
+          ClassifyRule(Rule);
           // Note any interactive pseudo-class so the renderer can skip
           // mouse-tracking when no rule needs it.
           if (Pos(':hover', TrimmedSel.ToLower) > 0) or
@@ -1569,6 +1684,9 @@ begin
 end;
 
 function TCSSStyleSheet.SelectorMatches(const Selector: string; Tag: THTMLTag): Boolean;
+// Legacy entry point — kept so external callers still work. Allocates
+// per-call splits; use the TCSSRule overload where possible to skip
+// that work via cached SelectorParts.
 var
   Sel: string;
   Parts: TArray<string>;
@@ -1605,6 +1723,35 @@ begin
   Result := PartIdx < 0;
 end;
 
+function TCSSStyleSheet.SelectorMatches(Rule: TCSSRule; Tag: THTMLTag): Boolean;
+// Fast overload — uses Rule.SelectorParts cached at parse time so we
+// don't pay Trim+ToLower+Split per match. Otherwise the same
+// last-part-then-walk-ancestors algorithm as the legacy entry point.
+begin
+  Result := False;
+  if not Assigned(Tag) or (Tag.TagName = '#text') or (Tag.TagName = 'root') then
+    Exit;
+  if Length(Rule.SelectorParts) = 0 then Exit;
+
+  // Match the last simple selector against the tag
+  if not MatchesSingleSelector(Rule.SelectorParts[High(Rule.SelectorParts)], Tag) then
+    Exit;
+
+  if Length(Rule.SelectorParts) = 1 then
+    Exit(True);
+
+  // Walk ancestors greedy-matching descendant parts in reverse
+  var Current := Tag.Parent;
+  var PartIdx := Length(Rule.SelectorParts) - 2;
+  while (PartIdx >= 0) and Assigned(Current) do
+  begin
+    if MatchesSingleSelector(Rule.SelectorParts[PartIdx], Current) then
+      Dec(PartIdx);
+    Current := Current.Parent;
+  end;
+  Result := PartIdx < 0;
+end;
+
 procedure TCSSStyleSheet.ApplyTo(Tag: THTMLTag; Declarations: TCSSDeclarations);
 var
   MatchedRules: TList<TCSSRule>;
@@ -1620,10 +1767,62 @@ begin
     for var Pair in FCustomProps do
       LocalProps.AddOrSetValue(Pair.Key, Pair.Value);
 
-    for var Rule in FRules do
-    begin
-      if SelectorMatches(Rule.Selector, Tag) then
-        MatchedRules.Add(Rule);
+    // Indexed cascade: instead of asking every rule "do you match?", we
+    // build a candidate set from rules indexed by the tag's id, classes,
+    // tag name, plus the universal-rule bucket. SelectorMatches then
+    // verifies (descendants, pseudo-classes, attribute filters). For
+    // typical stylesheets this drops the per-tag selector-match count
+    // from O(rules) to O(matching-prefix-rules) — the dominant cost
+    // saving for any non-trivial CSS.
+    var Candidates: TList<TCSSRule> := TList<TCSSRule>.Create;
+    var Seen: TDictionary<TCSSRule, Boolean> := TDictionary<TCSSRule, Boolean>.Create;
+    try
+      var TagId := Tag.GetAttribute('id', '').ToLower;
+      if TagId <> '' then
+      begin
+        var List: TList<TCSSRule>;
+        if FRulesByKey.TryGetValue('#' + TagId, List) then
+          for var R in List do
+            if not Seen.ContainsKey(R) then begin Candidates.Add(R); Seen.Add(R, True); end;
+      end;
+
+      var TagClassAttr := Tag.GetAttribute('class', '').ToLower;
+      if TagClassAttr <> '' then
+      begin
+        for var Cls in TagClassAttr.Split([' ']) do
+        begin
+          var ClsTrimmed := Cls.Trim;
+          if ClsTrimmed = '' then Continue;
+          var List: TList<TCSSRule>;
+          if FRulesByKey.TryGetValue('.' + ClsTrimmed, List) then
+            for var R in List do
+              if not Seen.ContainsKey(R) then begin Candidates.Add(R); Seen.Add(R, True); end;
+        end;
+      end;
+
+      var TagName := Tag.TagName.ToLower;
+      if TagName <> '' then
+      begin
+        var List: TList<TCSSRule>;
+        if FRulesByKey.TryGetValue(TagName, List) then
+          for var R in List do
+            if not Seen.ContainsKey(R) then begin Candidates.Add(R); Seen.Add(R, True); end;
+      end;
+
+      // Universal rules (selectors with no clear routing key — e.g. `*`,
+      // `[disabled]`, anything that fell through). Always considered.
+      for var R in FUniversalRules do
+        if not Seen.ContainsKey(R) then begin Candidates.Add(R); Seen.Add(R, True); end;
+
+      // Verify each candidate with the full selector matcher (handles
+      // descendant ancestry, pseudo-classes, attribute filters). Uses
+      // the cached-parts overload — no per-call Split or ToLower.
+      for var Rule in Candidates do
+        if SelectorMatches(Rule, Tag) then
+          MatchedRules.Add(Rule);
+    finally
+      Seen.Free;
+      Candidates.Free;
     end;
 
     // Sort by specificity ascending (stable: use SourceOrder as tiebreaker).

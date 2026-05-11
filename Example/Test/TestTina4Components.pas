@@ -108,6 +108,7 @@ type
     procedure TestSpanBackgroundImagePaintsWithFixedSize;
     procedure TestBackgroundShorthandInCssClassRuleHonoured;
     procedure TestImgSizingWithRealLoadedBitmap;
+    procedure TestClassRuleReassignmentReflectsNewColour;
     // CSS position (absolute / fixed / relative)
     procedure TestPositionAbsoluteOutOfFlowSiblingsUnaffected;
     procedure TestPositionAbsoluteTopLeftAnchored;
@@ -2949,6 +2950,66 @@ begin
     Engine.Free;
     Parser.Free;
     Cache.Free;
+  end;
+end;
+
+procedure TestTTina4Components.TestClassRuleReassignmentReflectsNewColour;
+var
+  Parser: Tina4HtmlRender.THTMLParser;
+  Engine: Tina4HtmlRender.TLayoutEngine;
+  StyleSheet: Tina4HtmlRender.TCSSStyleSheet;
+  D: Tina4HtmlRender.TLayoutBox;
+  FirstColor, SecondColor: Cardinal;
+begin
+  // Bug 18 (2026-05-10 follow-up): re-assigning Twig.Text with a new
+  // interpolated CSS value should produce the new value, not the
+  // first render's value. We can't drive the Frond engine here, but
+  // we CAN reproduce the underlying mechanic: parse HTML #1, build
+  // stylesheet, lay out → capture BackgroundColor. Then parse HTML
+  // #2 (same selectors, different colour), Clear + rebuild
+  // stylesheet, lay out again → BackgroundColor must reflect HTML #2.
+
+  Parser := Tina4HtmlRender.THTMLParser.Create;
+  Engine := Tina4HtmlRender.TLayoutEngine.Create(nil);
+  StyleSheet := Tina4HtmlRender.TCSSStyleSheet.Create;
+  try
+    // First render: brand colour = #ff8200
+    Parser.Parse(
+      '<style>.header { background: #ff8200; height: 96px }</style>' +
+      '<div id="d" class="header">x</div>');
+    StyleSheet.Clear;
+    for var I := 0 to Parser.StyleBlocks.Count - 1 do
+      StyleSheet.AddCSS(Parser.StyleBlocks[I]);
+    Engine.Layout(Parser.Root, 400, StyleSheet);
+    D := FindBoxById(Engine.Root, 'd');
+    Check(Assigned(D), 'first render: header box exists');
+    FirstColor := D.Style.BackgroundColor;
+    Check(FirstColor <> 0, 'first render: background colour applied');
+
+    // Second render: brand colour = #e60000. Same selectors, different value.
+    // (This is precisely what Twig.Text reassignment does in production:
+    //  parse new HTML, FStyleSheet.Clear, AddCSS each <style> block again.)
+    Parser.Parse(
+      '<style>.header { background: #e60000; height: 96px }</style>' +
+      '<div id="d" class="header">x</div>');
+    StyleSheet.Clear;
+    for var I := 0 to Parser.StyleBlocks.Count - 1 do
+      StyleSheet.AddCSS(Parser.StyleBlocks[I]);
+    Engine.Layout(Parser.Root, 400, StyleSheet);
+    D := FindBoxById(Engine.Root, 'd');
+    Check(Assigned(D), 'second render: header box exists');
+    SecondColor := D.Style.BackgroundColor;
+    Check(SecondColor <> 0, 'second render: background colour applied');
+
+    // The two must differ — if they don''t, the stylesheet is caching
+    // the first render''s rule and ignoring the second.
+    Check(FirstColor <> SecondColor,
+      Format('class-rule colour must update across renders: first=%x second=%x',
+             [FirstColor, SecondColor]));
+  finally
+    StyleSheet.Free;
+    Engine.Free;
+    Parser.Free;
   end;
 end;
 

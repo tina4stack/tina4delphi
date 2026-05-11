@@ -758,6 +758,15 @@ type
     /// <param name="Name">The name used to reference this object in onclick attributes.</param>
     /// <param name="Obj">The Delphi object instance whose published methods will be callable.</param>
     procedure RegisterObject(const Name: string; Obj: TObject);
+    /// <summary>
+    /// Force a full re-parse + re-cascade on the next paint. Use this when
+    /// you suspect cached state is masking a fresh Twig.Text / HTML.Text
+    /// assignment — clears the stylesheet, the parsed DOM, the file cache
+    /// (for external CSS), and any per-paint pseudo-class chains, then
+    /// schedules a relayout. The next paint pass will re-parse FHTML.Text
+    /// from scratch.
+    /// </summary>
+    procedure InvalidateAllCaches;
     /// <summary>Removes a previously registered object by name.</summary>
     /// <param name="Name">The registered name to remove.</param>
     procedure UnregisterObject(const Name: string);
@@ -6580,6 +6589,25 @@ end;
 procedure TTina4HTMLRender.UnregisterObject(const Name: string);
 begin
   FRegisteredObjects.Remove(Name.ToLower);
+end;
+
+procedure TTina4HTMLRender.InvalidateAllCaches;
+begin
+  // Drop any cached parsed DOM / stylesheet so the next paint rebuilds
+  // from scratch. Useful when a CSS class rule with an interpolated
+  // value (e.g. brand colour) is supposed to change between renders
+  // but somehow stayed at the previous render's value — defensively
+  // calling this guarantees a full re-cascade.
+  FStyleSheet.Clear;
+  if Assigned(FFileCache) then
+    FFileCache.ClearCache;
+  FParserDirty := True;
+  FNeedRelayout := True;
+  // Clear any tracked pseudo-class state too — the new DOM will have
+  // fresh THTMLTag pointers, so the old ones in the chains are stale.
+  FHoverChain.Clear;
+  FActiveChain.Clear;
+  Repaint;
 end;
 
 function TTina4HTMLRender.GetElementById(const Id: string): THTMLTag;

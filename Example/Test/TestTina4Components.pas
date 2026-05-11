@@ -100,6 +100,12 @@ type
     procedure TestFlexGapBetweenItems;
     procedure TestFlexColumnDirectionStacksVertically;
     procedure TestFlexShorthandOneSetsGrowShrinkBasis;
+    // Bug-list 2026-05-09 (round 2)
+    procedure TestMultipleStyleBlocksAllApply;
+    procedure TestBackgroundShorthandCoexistsWithOtherDecls;
+    procedure TestImgWidthAttrConstrainsLargeSourceImage;
+    procedure TestImgMaxWidthClampsLargeSource;
+    procedure TestSpanBackgroundImagePaintsWithFixedSize;
     // CSS position (absolute / fixed / relative)
     procedure TestPositionAbsoluteOutOfFlowSiblingsUnaffected;
     procedure TestPositionAbsoluteTopLeftAnchored;
@@ -2732,6 +2738,188 @@ begin
     end;
   finally
     StyleSheet.Free;
+    Parser.Free;
+  end;
+end;
+
+// ---------------------------------------------------------------------------
+// Bug-list 2026-05-09 (cuttlefish round 2)
+// ---------------------------------------------------------------------------
+
+procedure TestTTina4Components.TestMultipleStyleBlocksAllApply;
+var
+  Parser: Tina4HtmlRender.THTMLParser;
+  StyleSheet: Tina4HtmlRender.TCSSStyleSheet;
+
+  function WalkFindId(Root: Tina4HtmlRender.THTMLTag; const Id: string): Tina4HtmlRender.THTMLTag;
+  begin
+    Result := nil;
+    if not Assigned(Root) then Exit;
+    if SameText(Root.GetAttribute('id', ''), Id) then Exit(Root);
+    for var C in Root.Children do
+    begin
+      Result := WalkFindId(C, Id);
+      if Assigned(Result) then Exit;
+    end;
+  end;
+
+var
+  DivA, DivB: Tina4HtmlRender.THTMLTag;
+  DA, DB: TDictionary<string, string>;
+  Val: string;
+begin
+  Parser := Tina4HtmlRender.THTMLParser.Create;
+  StyleSheet := Tina4HtmlRender.TCSSStyleSheet.Create;
+  try
+    // Bug 14: two <style> blocks inside <head>. Both must contribute
+    // rules to the resolved stylesheet — historically only the first
+    // was reported to apply.
+    Parser.Parse(
+      '<html><head>' +
+      '<style>#a { color: red }</style>' +
+      '<style>#b { color: blue }</style>' +
+      '</head><body><div id="a">A</div><div id="b">B</div></body></html>');
+    Check(Parser.StyleBlocks.Count = 2,
+      Format('parser should capture both style blocks, got %d', [Parser.StyleBlocks.Count]));
+    for var I := 0 to Parser.StyleBlocks.Count - 1 do
+      StyleSheet.AddCSS(Parser.StyleBlocks[I]);
+
+    DivA := WalkFindId(Parser.Root, 'a');
+    DivB := WalkFindId(Parser.Root, 'b');
+    Check(Assigned(DivA) and Assigned(DivB), 'both divs must exist');
+
+    DA := TDictionary<string, string>.Create;
+    DB := TDictionary<string, string>.Create;
+    try
+      StyleSheet.ApplyTo(DivA, DA);
+      StyleSheet.ApplyTo(DivB, DB);
+      Check(DA.ContainsKey('color'),
+        'first style block applied (rule #a color)');
+      Check(DB.ContainsKey('color'),
+        'second style block applied (rule #b color) — bug 14');
+      DA.TryGetValue('color', Val);
+      Check(Pos('red', Val.ToLower) > 0,
+        Format('#a should resolve to red, got "%s"', [Val]));
+      DB.TryGetValue('color', Val);
+      Check(Pos('blue', Val.ToLower) > 0,
+        Format('#b should resolve to blue (second style block), got "%s"', [Val]));
+    finally
+      DA.Free;
+      DB.Free;
+    end;
+  finally
+    StyleSheet.Free;
+    Parser.Free;
+  end;
+end;
+
+procedure TestTTina4Components.TestBackgroundShorthandCoexistsWithOtherDecls;
+var
+  Parser: Tina4HtmlRender.THTMLParser;
+  Engine: Tina4HtmlRender.TLayoutEngine;
+  D: Tina4HtmlRender.TLayoutBox;
+begin
+  Parser := Tina4HtmlRender.THTMLParser.Create;
+  Engine := Tina4HtmlRender.TLayoutEngine.Create(nil);
+  try
+    // Bug 13: a `background:` shorthand mixed with other declarations
+    // in the same inline style should still apply. Check that both
+    // background-color (parsed out of the shorthand) and the unrelated
+    // width get through.
+    RunLayout(Parser, Engine,
+      '<div id="d" style="width:100px; background: #ff0000; color: white">x</div>', 400);
+    D := FindBoxById(Engine.Root, 'd');
+    Check(Assigned(D), 'box must exist');
+    Check(Abs(D.ContentWidth - 100) < 0.5,
+      Format('width applied: expected 100, got %.1f', [D.ContentWidth]));
+    Check(D.Style.BackgroundColor <> 0,
+      'background shorthand should set background-color (got Null)');
+  finally
+    Engine.Free;
+    Parser.Free;
+  end;
+end;
+
+procedure TestTTina4Components.TestImgWidthAttrConstrainsLargeSourceImage;
+var
+  Parser: Tina4HtmlRender.THTMLParser;
+  Engine: Tina4HtmlRender.TLayoutEngine;
+  Img: Tina4HtmlRender.TLayoutBox;
+begin
+  Parser := Tina4HtmlRender.THTMLParser.Create;
+  Engine := Tina4HtmlRender.TLayoutEngine.Create(nil);
+  try
+    // Bug 15: an <img> with declared dimensions must lay out at those
+    // dimensions regardless of the source bitmap's natural size. (We
+    // don't have an actual loaded bitmap here — without image cache the
+    // explicit width/height must still resolve to the declared values.)
+    RunLayout(Parser, Engine,
+      '<img id="i" src="ghost.png" width="64" height="64">', 400);
+    Img := FindBoxById(Engine.Root, 'i');
+    Check(Assigned(Img), 'img box must exist');
+    Check(Abs(Img.ContentWidth - 64) < 0.5,
+      Format('img width attribute: expected 64, got %.1f', [Img.ContentWidth]));
+    Check(Abs(Img.ContentHeight - 64) < 0.5,
+      Format('img height attribute: expected 64, got %.1f', [Img.ContentHeight]));
+  finally
+    Engine.Free;
+    Parser.Free;
+  end;
+end;
+
+procedure TestTTina4Components.TestImgMaxWidthClampsLargeSource;
+var
+  Parser: Tina4HtmlRender.THTMLParser;
+  Engine: Tina4HtmlRender.TLayoutEngine;
+  Img: Tina4HtmlRender.TLayoutBox;
+begin
+  Parser := Tina4HtmlRender.THTMLParser.Create;
+  Engine := Tina4HtmlRender.TLayoutEngine.Create(nil);
+  try
+    // Bug 15: max-width/max-height on <img>. Without a loaded bitmap,
+    // LayoutImage falls back to a 100x100 default natural size. The
+    // 64px max-width must clamp that down to 64x64 (aspect-preserving).
+    RunLayout(Parser, Engine,
+      '<img id="i" src="never-loads.png" style="max-width:64px; max-height:64px">',
+      400);
+    Img := FindBoxById(Engine.Root, 'i');
+    Check(Assigned(Img), 'img box must exist');
+    Check(Img.ContentWidth <= 64.5,
+      Format('max-width must clamp: got %.1f, expected <=64', [Img.ContentWidth]));
+    Check(Img.ContentHeight <= 64.5,
+      Format('max-height must clamp: got %.1f, expected <=64', [Img.ContentHeight]));
+  finally
+    Engine.Free;
+    Parser.Free;
+  end;
+end;
+
+procedure TestTTina4Components.TestSpanBackgroundImagePaintsWithFixedSize;
+var
+  Parser: Tina4HtmlRender.THTMLParser;
+  Engine: Tina4HtmlRender.TLayoutEngine;
+  S: Tina4HtmlRender.TLayoutBox;
+begin
+  Parser := Tina4HtmlRender.THTMLParser.Create;
+  Engine := Tina4HtmlRender.TLayoutEngine.Create(nil);
+  try
+    // Bug 16: an inline-block <span> with width/height and a
+    // background-image must produce a layout box of the declared size,
+    // so the painter has somewhere to draw the background. Style.
+    // BackgroundImage must be captured from the inline style.
+    RunLayout(Parser, Engine,
+      '<span id="s" style="display:inline-block; width:64px; height:64px; ' +
+      '       background-image: url(ghost.png)">&nbsp;</span>', 400);
+    S := FindBoxById(Engine.Root, 's');
+    Check(Assigned(S), 'span box must exist');
+    Check(Abs(S.ContentWidth - 64) < 0.5,
+      Format('span content width: expected 64, got %.1f', [S.ContentWidth]));
+    Check(Abs(S.ContentHeight - 64) < 0.5,
+      Format('span content height: expected 64, got %.1f', [S.ContentHeight]));
+    Check(S.Style.BackgroundImage <> '',
+      'span must capture background-image URL');
+  finally
+    Engine.Free;
     Parser.Free;
   end;
 end;

@@ -6103,7 +6103,38 @@ begin
       W := W * Ratio;
   end;
 
-  // Clamp to available width
+  // Apply max-width / max-height / min-width / min-height. The previous
+  // implementation honoured only `width` / `height` and silently ignored
+  // max-* / min-*, so a `<img style="max-width:64px">` against a 1000px
+  // PNG would paint at the natural 1000px. Both axes scale together so
+  // the image keeps its aspect ratio.
+  if (Box.Style.MaxWidth >= 0) and (W > Box.Style.MaxWidth) then
+  begin
+    var Ratio := Box.Style.MaxWidth / W;
+    W := Box.Style.MaxWidth;
+    H := H * Ratio;
+  end;
+  if (Box.Style.MaxHeight >= 0) and (H > Box.Style.MaxHeight) then
+  begin
+    var Ratio := Box.Style.MaxHeight / H;
+    H := Box.Style.MaxHeight;
+    W := W * Ratio;
+  end;
+  if (Box.Style.MinWidth >= 0) and (W < Box.Style.MinWidth) then
+  begin
+    var Ratio := Box.Style.MinWidth / W;
+    W := Box.Style.MinWidth;
+    H := H * Ratio;
+  end;
+  if (Box.Style.MinHeight >= 0) and (H < Box.Style.MinHeight) then
+  begin
+    var Ratio := Box.Style.MinHeight / H;
+    H := Box.Style.MinHeight;
+    W := W * Ratio;
+  end;
+
+  // Clamp to available width as a last resort (so an image declared
+  // larger than its container doesn't overflow).
   if W > AvailWidth then
   begin
     var Ratio := AvailWidth / W;

@@ -9083,17 +9083,28 @@ begin
     var SavedAnchorX := FStickyAnchorX;
     var SavedAnchorBottom := FStickyAnchorBottom;
     var SavedAnchorRight  := FStickyAnchorRight;
+    // The sticky anchor is the VISIBLE top/left of the scroll container —
+    // i.e. its content-edge clamped to the viewport (0..Width / 0..Height).
+    // If the container has scrolled above the viewport top (CY < 0 — which
+    // happens when an outer FScrollY moves the whole page up), the visible
+    // top of the container is still Y=0, so sticky should pin at the
+    // viewport edge. Without this clamp, an outer-scrolling page leaves
+    // FStickyAnchorY at -FScrollY and the pin target ends up off-screen,
+    // making the sticky element invisible — which is exactly the
+    // "sticky header doesn't pin" symptom for body{overflow:auto;
+    // height:100%} where percentage height doesn't constrain body and
+    // the OUTER render scroll handles overflow.
     if (Box.Style.OverflowY = 'auto') or (Box.Style.OverflowY = 'scroll') or
        (Box.Style.Overflow  = 'auto') or (Box.Style.Overflow  = 'scroll') then
     begin
-      FStickyAnchorY := CY;
-      FStickyAnchorBottom := CY + Box.ContentHeight;
+      FStickyAnchorY      := Max(0, CY);
+      FStickyAnchorBottom := Min(Height, CY + Box.ContentHeight);
     end;
     if (Box.Style.OverflowX = 'auto') or (Box.Style.OverflowX = 'scroll') or
        (Box.Style.Overflow  = 'auto') or (Box.Style.Overflow  = 'scroll') then
     begin
-      FStickyAnchorX := CX;
-      FStickyAnchorRight := CX + Box.ContentWidth;
+      FStickyAnchorX     := Max(0, CX);
+      FStickyAnchorRight := Min(Width, CX + Box.ContentWidth);
     end;
     try
       Canvas.IntersectClipRect(RectF(CX, CY, CX + Box.ContentWidth, CY + Box.ContentHeight));

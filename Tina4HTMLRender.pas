@@ -10037,6 +10037,24 @@ begin
 
     if (BmpW <= 0) or (BmpH <= 0) or (BoxW <= 0) or (BoxH <= 0) then Exit;
 
+    // BELT-AND-BRACES CLAMP: enforce the CSS-declared / HTML-attribute
+    // dimensions at paint time, regardless of what Box.ContentWidth/Height
+    // ended up at. This protects against any layout-side path where a
+    // <img>'s explicit width/height didn't make it into ContentWidth (eg
+    // a code path that doesn't read max-width, or an upstream cache that
+    // held a pre-bitmap-load dimension). If we have an ExplicitWidth/Height
+    // on the style, that's an absolute upper bound; same for MaxWidth/
+    // MaxHeight. The image will paint into the SMALLER box even if the
+    // layout box reports something larger.
+    if (Box.Style.ExplicitWidth > 0) and (BoxW > Box.Style.ExplicitWidth) then
+      BoxW := Box.Style.ExplicitWidth;
+    if (Box.Style.ExplicitHeight > 0) and (BoxH > Box.Style.ExplicitHeight) then
+      BoxH := Box.Style.ExplicitHeight;
+    if (Box.Style.MaxWidth >= 0) and (BoxW > Box.Style.MaxWidth) then
+      BoxW := Box.Style.MaxWidth;
+    if (Box.Style.MaxHeight >= 0) and (BoxH > Box.Style.MaxHeight) then
+      BoxH := Box.Style.MaxHeight;
+
     if Box.Style.ObjectFit = 'cover' then
     begin
       // Scale to cover the entire box, crop overflow

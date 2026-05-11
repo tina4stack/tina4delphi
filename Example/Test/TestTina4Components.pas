@@ -113,6 +113,7 @@ type
     procedure TestImgWithBothExplicitDimensionsIgnoresBitmapSize;
     procedure TestStickyTheadGetsProperBoundsForPinning;
     procedure TestStickyBottomAndRightCssCaptured;
+    procedure TestTfootRendersBelowTbodyRegardlessOfSourceOrder;
     // CSS position (absolute / fixed / relative)
     procedure TestPositionAbsoluteOutOfFlowSiblingsUnaffected;
     procedure TestPositionAbsoluteTopLeftAnchored;
@@ -3093,6 +3094,61 @@ begin
       Format('thead must have CSSTop=0, got %.1f', [Thead.Style.CSSTop]));
   finally
     StyleSheet.Free;
+    Engine.Free;
+    Parser.Free;
+  end;
+end;
+
+// Helper used by the tfoot test (unit-level so we don't need nested funcs).
+function FindLayoutBoxByTag(Box: Tina4HtmlRender.TLayoutBox;
+  const TagName: string): Tina4HtmlRender.TLayoutBox;
+var
+  Sub: Tina4HtmlRender.TLayoutBox;
+begin
+  Result := nil;
+  if Box = nil then Exit;
+  if Assigned(Box.Tag) and SameText(Box.Tag.TagName, TagName) then Exit(Box);
+  for var I := 0 to Box.Children.Count - 1 do
+  begin
+    Sub := FindLayoutBoxByTag(Box.Children[I], TagName);
+    if Assigned(Sub) then Exit(Sub);
+  end;
+end;
+
+procedure TestTTina4Components.TestTfootRendersBelowTbodyRegardlessOfSourceOrder;
+var
+  Parser: Tina4HtmlRender.THTMLParser;
+  Engine: Tina4HtmlRender.TLayoutEngine;
+  HeadGroup, BodyGroup, FootGroup: Tina4HtmlRender.TLayoutBox;
+begin
+  Parser := Tina4HtmlRender.THTMLParser.Create;
+  Engine := Tina4HtmlRender.TLayoutEngine.Create(nil);
+  try
+    // CSS spec: <tfoot> renders below <tbody> even when declared before
+    // it in source order. Here we declare tfoot BEFORE tbody and assert
+    // the laid-out group order is still: head.Y < body.Y < foot.Y.
+    RunLayout(Parser, Engine,
+      '<table style="width:200px">' +
+      '  <thead><tr><td style="height:20px">H</td></tr></thead>' +
+      '  <tfoot><tr><td style="height:20px">F</td></tr></tfoot>' +
+      '  <tbody><tr><td style="height:20px">B</td></tr></tbody>' +
+      '</table>', 400);
+
+    HeadGroup := FindLayoutBoxByTag(Engine.Root, 'thead');
+    BodyGroup := FindLayoutBoxByTag(Engine.Root, 'tbody');
+    FootGroup := FindLayoutBoxByTag(Engine.Root, 'tfoot');
+    Check(Assigned(HeadGroup) and Assigned(BodyGroup) and Assigned(FootGroup),
+      'all three groups must be present in the layout tree');
+
+    // Spec order, table-relative (each group's Y was set by the
+    // row-group promotion in LayoutTable):
+    Check(HeadGroup.Y < BodyGroup.Y,
+      Format('thead must lay out above tbody: head.Y=%.1f, body.Y=%.1f',
+             [HeadGroup.Y, BodyGroup.Y]));
+    Check(BodyGroup.Y < FootGroup.Y,
+      Format('tfoot must lay out below tbody EVEN THOUGH declared FIRST: ' +
+             'body.Y=%.1f, foot.Y=%.1f', [BodyGroup.Y, FootGroup.Y]));
+  finally
     Engine.Free;
     Parser.Free;
   end;

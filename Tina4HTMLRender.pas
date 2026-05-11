@@ -5313,42 +5313,68 @@ begin
     // Collect all row boxes (flattening thead/tbody/tfoot). Orphan cells
     // — direct table-cell children of a `display:table` parent without a
     // `display:table-row` wrapper — get rolled up into anonymous rows.
-    var CurrentSyn: TLayoutBox := nil;
-    for var Child in Box.Children do
-    begin
-      if Child.Kind = lbkTableRow then
+    //
+    // CSS / HTML spec: <tfoot> renders below <tbody> regardless of source
+    // order. <thead> renders above. So we bucket by group identity (read
+    // off the underlying THTMLTag name) and only concatenate at the end
+    // in `thead -> body+anonymous -> tfoot` order.
+    var HeadRows := TList<TLayoutBox>.Create;
+    var BodyRows := TList<TLayoutBox>.Create;
+    var FootRows := TList<TLayoutBox>.Create;
+    try
+      var CurrentSyn: TLayoutBox := nil;
+      for var Child in Box.Children do
       begin
-        CurrentSyn := nil;  // a real row terminates any synthetic-row run
-        // Check if this is a row group (thead/tbody/tfoot) containing actual rows
-        var HasSubRows := False;
-        for var Sub in Child.Children do
+        if Child.Kind = lbkTableRow then
         begin
-          if Sub.Kind = lbkTableRow then
+          CurrentSyn := nil;  // a real row terminates any synthetic-row run
+          // Identify the group this row(s) belongs to by the HTML tag.
+          var Target: TList<TLayoutBox> := BodyRows;
+          if Assigned(Child.Tag) then
           begin
-            Rows.Add(Sub);
-            HasSubRows := True;
+            if SameText(Child.Tag.TagName, 'thead') then Target := HeadRows
+            else if SameText(Child.Tag.TagName, 'tfoot') then Target := FootRows;
           end;
-        end;
-        if not HasSubRows then
-          Rows.Add(Child);
-      end
-      else if Child.Kind = lbkTableCell then
-      begin
-        // Orphan cell — start (or continue) an anonymous row.
-        if CurrentSyn = nil then
+          // Check if this is a row group (thead/tbody/tfoot) containing actual rows
+          var HasSubRows := False;
+          for var Sub in Child.Children do
+          begin
+            if Sub.Kind = lbkTableRow then
+            begin
+              Target.Add(Sub);
+              HasSubRows := True;
+            end;
+          end;
+          if not HasSubRows then
+            Target.Add(Child);
+        end
+        else if Child.Kind = lbkTableCell then
         begin
-          CurrentSyn := TLayoutBox.Create(nil, lbkTableRow);
-          CurrentSyn.Children.OwnsObjects := False;
-          CurrentSyn.Style := TComputedStyle.Default;
-          SyntheticRows.Add(CurrentSyn);
-          Rows.Add(CurrentSyn);
+          // Orphan cell — start (or continue) an anonymous row.
+          if CurrentSyn = nil then
+          begin
+            CurrentSyn := TLayoutBox.Create(nil, lbkTableRow);
+            CurrentSyn.Children.OwnsObjects := False;
+            CurrentSyn.Style := TComputedStyle.Default;
+            SyntheticRows.Add(CurrentSyn);
+            BodyRows.Add(CurrentSyn);
+          end;
+          CurrentSyn.Children.Add(Child);
         end;
-        CurrentSyn.Children.Add(Child);
+        // Other kinds (whitespace text nodes, stray inline elements between
+        // cells, etc.) don't break the synthetic-row run — only an explicit
+        // <tr> does. This matches browser behaviour and survives the HTML
+        // parser inserting #text nodes for inter-element whitespace.
       end;
-      // Other kinds (whitespace text nodes, stray inline elements between
-      // cells, etc.) don't break the synthetic-row run — only an explicit
-      // <tr> does. This matches browser behaviour and survives the HTML
-      // parser inserting #text nodes for inter-element whitespace.
+
+      // Concatenate in spec order: head, body+anonymous, foot.
+      for var R in HeadRows do Rows.Add(R);
+      for var R in BodyRows do Rows.Add(R);
+      for var R in FootRows do Rows.Add(R);
+    finally
+      HeadRows.Free;
+      BodyRows.Free;
+      FootRows.Free;
     end;
 
     // Count columns

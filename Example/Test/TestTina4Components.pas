@@ -111,6 +111,7 @@ type
     procedure TestClassRuleReassignmentReflectsNewColour;
     procedure TestVerbatimBrandLogoRepro;
     procedure TestImgWithBothExplicitDimensionsIgnoresBitmapSize;
+    procedure TestStickyTheadGetsProperBoundsForPinning;
     // CSS position (absolute / fixed / relative)
     procedure TestPositionAbsoluteOutOfFlowSiblingsUnaffected;
     procedure TestPositionAbsoluteTopLeftAnchored;
@@ -3008,6 +3009,87 @@ begin
     Check(FirstColor <> SecondColor,
       Format('class-rule colour must update across renders: first=%x second=%x',
              [FirstColor, SecondColor]));
+  finally
+    StyleSheet.Free;
+    Engine.Free;
+    Parser.Free;
+  end;
+end;
+
+procedure TestTTina4Components.TestStickyTheadGetsProperBoundsForPinning;
+var
+  Parser: Tina4HtmlRender.THTMLParser;
+  Engine: Tina4HtmlRender.TLayoutEngine;
+  StyleSheet: Tina4HtmlRender.TCSSStyleSheet;
+
+  function FindThead(Box: Tina4HtmlRender.TLayoutBox): Tina4HtmlRender.TLayoutBox;
+  var Sub: Tina4HtmlRender.TLayoutBox;
+  begin
+    Result := nil;
+    if Box = nil then Exit;
+    if Assigned(Box.Tag) and SameText(Box.Tag.TagName, 'thead') then Exit(Box);
+    for var I := 0 to Box.Children.Count - 1 do
+    begin
+      Sub := FindThead(Box.Children[I]);
+      if Assigned(Sub) then Exit(Sub);
+    end;
+  end;
+
+var
+  Thead: Tina4HtmlRender.TLayoutBox;
+begin
+  Parser := Tina4HtmlRender.THTMLParser.Create;
+  Engine := Tina4HtmlRender.TLayoutEngine.Create(nil);
+  StyleSheet := Tina4HtmlRender.TCSSStyleSheet.Create;
+  try
+    // The bug: when <thead> has position:sticky, the sticky paint logic
+    // pins thead.AbsY — but if thead's ContentHeight is zero and its TR
+    // children's Y is table-relative (not thead-relative), pinning the
+    // 0x0 thead does nothing useful and the header TR stays positioned
+    // in table coordinates → it scrolls away with the table.
+    //
+    // After the fix in LayoutTable, thead must have:
+    //   * a non-zero ContentHeight (sum of header-row heights)
+    //   * a Y representing the first header row's table-relative position
+    //   * its TR children's Y rewritten to be thead-relative
+    Parser.Parse(
+      '<style>thead { position:sticky; top:0 }</style>' +
+      '<table style="width:300px">' +
+      '  <thead><tr><td style="height:30px">Header</td></tr></thead>' +
+      '  <tbody>' +
+      '    <tr><td style="height:25px">Row 1</td></tr>' +
+      '    <tr><td style="height:25px">Row 2</td></tr>' +
+      '  </tbody>' +
+      '</table>');
+    for var I := 0 to Parser.StyleBlocks.Count - 1 do
+      StyleSheet.AddCSS(Parser.StyleBlocks[I]);
+    Engine.Layout(Parser.Root, 400, StyleSheet);
+
+    Thead := FindThead(Engine.Root);
+    Check(Assigned(Thead), 'thead box must exist in layout tree');
+
+    // After the fix, thead must have a non-zero ContentHeight covering
+    // its header row. Without the fix it would have been 0 (the default
+    // for a row-group that was never explicitly sized) and sticky
+    // pinning would apply to a 0-height box — the underlying TR (still
+    // positioned in TABLE coordinates) would scroll away.
+    Check(Thead.ContentHeight > 0,
+      Format('thead must have non-zero ContentHeight covering its header row, got %.1f',
+             [Thead.ContentHeight]));
+
+    // Verify the inner TR's Y is now thead-relative (= 0), not
+    // table-relative (which would also be 0 for a single thead row but
+    // would explicitly be 0 here regardless — confirm the rewrite ran).
+    Check(Thead.Children.Count > 0, 'thead must contain its tr');
+    var Tr := Thead.Children[0];
+    Check(Abs(Tr.Y) < 0.5,
+      Format('first thead tr should be at Y=0 within thead, got %.1f', [Tr.Y]));
+
+    // Confirm sticky CSS made it through.
+    CheckEquals('sticky', Thead.Style.CSSPosition,
+      'thead must keep its sticky position');
+    Check(Abs(Thead.Style.CSSTop) < 0.5,
+      Format('thead must have CSSTop=0, got %.1f', [Thead.Style.CSSTop]));
   finally
     StyleSheet.Free;
     Engine.Free;

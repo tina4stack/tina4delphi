@@ -5635,6 +5635,58 @@ begin
         Cell.Y := Cell.Y + SynRow.Y;
     end;
 
+    // Promote <thead>/<tbody>/<tfoot> row groups from "zero-height phantom
+    // pass-through" to proper containers with Y and ContentHeight derived
+    // from their TR children. This is what makes `position: sticky` work
+    // on `<thead>` — without it, sticky pinning would apply to a 0x0
+    // box and the underlying TR (still positioned in TABLE coordinates)
+    // would scroll away with the rest of the table.
+    //
+    // After this pass, each row-group container:
+    //   * Y     = the Y of its first <tr> (table-relative)
+    //   * Hgt   = sum of its <tr> heights
+    //   * Each <tr> child has its Y rewritten to be *container-relative*,
+    //     so paint produces the same absolute Y as before (the rendering
+    //     hierarchy is now consistent with the CSS box model).
+    for var GroupCandidate in Box.Children do
+    begin
+      if GroupCandidate.Kind <> lbkTableRow then Continue;
+      // Only operate on row GROUPS (thead/tbody/tfoot whose children are
+      // themselves table-rows). Plain <tr> children of the table are
+      // skipped — their Y is already correct (table-relative).
+      var HasSubRowChildren := False;
+      for var Sub in GroupCandidate.Children do
+        if Sub.Kind = lbkTableRow then
+        begin
+          HasSubRowChildren := True;
+          Break;
+        end;
+      if not HasSubRowChildren then Continue;
+
+      // Compute the group's bounding box from its sub-row positions.
+      var MinSubY: Single := MaxSingle;
+      var MaxSubBottom: Single := 0;
+      for var Sub in GroupCandidate.Children do
+      begin
+        if Sub.Kind <> lbkTableRow then Continue;
+        if Sub.Y < MinSubY then MinSubY := Sub.Y;
+        if Sub.Y + Sub.ContentHeight > MaxSubBottom then
+          MaxSubBottom := Sub.Y + Sub.ContentHeight;
+      end;
+      if MinSubY = MaxSingle then Continue;  // no rows actually found
+
+      GroupCandidate.X := 0;
+      GroupCandidate.Y := MinSubY;
+      GroupCandidate.ContentWidth := TableContentW;
+      GroupCandidate.ContentHeight := MaxSubBottom - MinSubY;
+
+      // Rewrite each sub-row's Y to be relative to its container instead
+      // of the table.
+      for var Sub in GroupCandidate.Children do
+        if Sub.Kind = lbkTableRow then
+          Sub.Y := Sub.Y - MinSubY;
+    end;
+
     Box.ContentWidth := TableContentW;
     Box.ContentHeight := CursorY;
   finally

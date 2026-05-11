@@ -109,6 +109,7 @@ type
     procedure TestBackgroundShorthandInCssClassRuleHonoured;
     procedure TestImgSizingWithRealLoadedBitmap;
     procedure TestClassRuleReassignmentReflectsNewColour;
+    procedure TestVerbatimBrandLogoRepro;
     // CSS position (absolute / fixed / relative)
     procedure TestPositionAbsoluteOutOfFlowSiblingsUnaffected;
     procedure TestPositionAbsoluteTopLeftAnchored;
@@ -3010,6 +3011,65 @@ begin
     StyleSheet.Free;
     Engine.Free;
     Parser.Free;
+  end;
+end;
+
+procedure TestTTina4Components.TestVerbatimBrandLogoRepro;
+var
+  Cache: Tina4HtmlRender.TImageCache;
+  Parser: Tina4HtmlRender.THTMLParser;
+  Engine: Tina4HtmlRender.TLayoutEngine;
+  StyleSheet: Tina4HtmlRender.TCSSStyleSheet;
+  Img: Tina4HtmlRender.TLayoutBox;
+const
+  // 4x4 PNG as a stand-in. The dimensions don't matter for the layout
+  // math — the bug is "ExplicitWidth/Height ignored regardless of
+  // source size", so a tiny bitmap reproduces the same code path.
+  TINY_PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAQAAAAYUotyAAAAEElEQVR42mNg+M+AwH8GdAAACx0BAdMJpdQAAAAASUVORK5CYII=';
+begin
+  // Verbatim repro of the user's voucher-header bug-13 claim:
+  //   * .brand-logo inline-block with width:80px height:80px overflow:hidden
+  //   * .brand-logo img with all four declared dimensions
+  //   * img tag with width="80" height="80" attributes
+  //   * inline style="width:80px;height:80px;max-width:80px;max-height:80px"
+  // All three sources should converge on the same 80x80. We just need
+  // any of them to win.
+  Cache := Tina4HtmlRender.TImageCache.Create;
+  Parser := Tina4HtmlRender.THTMLParser.Create;
+  Engine := Tina4HtmlRender.TLayoutEngine.Create(Cache);
+  StyleSheet := Tina4HtmlRender.TCSSStyleSheet.Create;
+  try
+    Cache.RequestImage(TINY_PNG);
+
+    Parser.Parse(
+      '<style>' +
+      '.brand-logo { display:inline-block; width:80px; height:80px; overflow:hidden }' +
+      '.brand-logo img {' +
+      '  width:80px; height:80px;' +
+      '  max-width:80px; max-height:80px;' +
+      '  vertical-align:top;' +
+      '}' +
+      '</style>' +
+      '<span class="brand-logo">' +
+      '<img id="logo" src="' + TINY_PNG + '"' +
+      ' width="80" height="80"' +
+      ' style="width:80px;height:80px;max-width:80px;max-height:80px">' +
+      '</span>');
+    for var I := 0 to Parser.StyleBlocks.Count - 1 do
+      StyleSheet.AddCSS(Parser.StyleBlocks[I]);
+    Engine.Layout(Parser.Root, 400, StyleSheet);
+
+    Img := FindBoxById(Engine.Root, 'logo');
+    Check(Assigned(Img), 'logo img box must exist');
+    Check(Abs(Img.ContentWidth - 80) < 1,
+      Format('img must be 80 wide (verbatim bug-13 repro): got %.1f', [Img.ContentWidth]));
+    Check(Abs(Img.ContentHeight - 80) < 1,
+      Format('img must be 80 tall (verbatim bug-13 repro): got %.1f', [Img.ContentHeight]));
+  finally
+    StyleSheet.Free;
+    Engine.Free;
+    Parser.Free;
+    Cache.Free;
   end;
 end;
 

@@ -6089,6 +6089,12 @@ begin
     end;
   end;
 
+  // Defend against a TBitmap that reports zero/negative dimensions for
+  // some pathological PNG. Anything <= 0 falls back to the 100px default
+  // so we don't divide by zero below or end up with an Infinity rect.
+  if W <= 0 then W := 100;
+  if H <= 0 then H := 100;
+
   // Resolve explicit dimensions (may be percentages)
   ExplW := Box.Style.ExplicitWidth;
   ExplH := Box.Style.ExplicitHeight;
@@ -6097,19 +6103,29 @@ begin
   if IsPercentageValue(ExplH) then
     ExplH := 0; // Percentage height on images is not meaningful without container height
 
-  if ExplW > 0 then
+  // FAST PATH: both dimensions explicitly declared (the common case for
+  // `<img width="80" height="80">`, `<img style="width:80px;height:80px">`,
+  // and the class-CSS `.foo img { width:80; height:80 }` pattern). No
+  // bitmap-natural-size math involved — the declared values are
+  // authoritative regardless of what TBitmap.Width / Height happen to
+  // report for the source PNG. Eliminates any chance of source-size
+  // pollution in the result.
+  if (ExplW > 0) and (ExplH > 0) then
+  begin
+    W := ExplW;
+    H := ExplH;
+  end
+  else if ExplW > 0 then
   begin
     var Ratio := ExplW / W;
     W := ExplW;
-    if ExplH <= 0 then
-      H := H * Ratio;
-  end;
-  if ExplH > 0 then
+    H := H * Ratio;
+  end
+  else if ExplH > 0 then
   begin
     var Ratio := ExplH / H;
     H := ExplH;
-    if ExplW <= 0 then
-      W := W * Ratio;
+    W := W * Ratio;
   end;
 
   // Apply max-width / max-height / min-width / min-height. The previous

@@ -110,6 +110,7 @@ type
     procedure TestImgSizingWithRealLoadedBitmap;
     procedure TestClassRuleReassignmentReflectsNewColour;
     procedure TestVerbatimBrandLogoRepro;
+    procedure TestImgWithBothExplicitDimensionsIgnoresBitmapSize;
     // CSS position (absolute / fixed / relative)
     procedure TestPositionAbsoluteOutOfFlowSiblingsUnaffected;
     procedure TestPositionAbsoluteTopLeftAnchored;
@@ -3011,6 +3012,42 @@ begin
     StyleSheet.Free;
     Engine.Free;
     Parser.Free;
+  end;
+end;
+
+procedure TestTTina4Components.TestImgWithBothExplicitDimensionsIgnoresBitmapSize;
+var
+  Cache: Tina4HtmlRender.TImageCache;
+  Parser: Tina4HtmlRender.THTMLParser;
+  Engine: Tina4HtmlRender.TLayoutEngine;
+  Img: Tina4HtmlRender.TLayoutBox;
+const
+  // The literal Bmp.Width / Bmp.Height values are irrelevant because
+  // BOTH explicit dimensions are set — the fast path takes effect and
+  // never touches the bitmap natural size. This test would catch any
+  // future regression that re-introduced source-size pollution into
+  // the final ContentWidth/Height.
+  ANY_PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAQAAAAYUotyAAAAEElEQVR42mNg+M+AwH8GdAAACx0BAdMJpdQAAAAASUVORK5CYII=';
+begin
+  Cache := Tina4HtmlRender.TImageCache.Create;
+  Parser := Tina4HtmlRender.THTMLParser.Create;
+  Engine := Tina4HtmlRender.TLayoutEngine.Create(Cache);
+  try
+    Cache.RequestImage(ANY_PNG);
+    Parser.Parse(
+      '<img id="i" src="' + ANY_PNG + '" width="80" height="80">');
+    Engine.Layout(Parser.Root, 400, nil);
+
+    Img := FindBoxById(Engine.Root, 'i');
+    Check(Assigned(Img), 'img box must exist');
+    Check(Abs(Img.ContentWidth - 80) < 0.001,
+      Format('BOTH explicit dimensions must produce EXACTLY 80, not %.4f', [Img.ContentWidth]));
+    Check(Abs(Img.ContentHeight - 80) < 0.001,
+      Format('BOTH explicit dimensions must produce EXACTLY 80, not %.4f', [Img.ContentHeight]));
+  finally
+    Engine.Free;
+    Parser.Free;
+    Cache.Free;
   end;
 end;
 

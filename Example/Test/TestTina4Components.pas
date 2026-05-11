@@ -106,6 +106,8 @@ type
     procedure TestImgWidthAttrConstrainsLargeSourceImage;
     procedure TestImgMaxWidthClampsLargeSource;
     procedure TestSpanBackgroundImagePaintsWithFixedSize;
+    procedure TestBackgroundShorthandInCssClassRuleHonoured;
+    procedure TestImgSizingWithRealLoadedBitmap;
     // CSS position (absolute / fixed / relative)
     procedure TestPositionAbsoluteOutOfFlowSiblingsUnaffected;
     procedure TestPositionAbsoluteTopLeftAnchored;
@@ -2864,6 +2866,89 @@ begin
   finally
     Engine.Free;
     Parser.Free;
+  end;
+end;
+
+procedure TestTTina4Components.TestBackgroundShorthandInCssClassRuleHonoured;
+var
+  Parser: Tina4HtmlRender.THTMLParser;
+  Engine: Tina4HtmlRender.TLayoutEngine;
+  StyleSheet: Tina4HtmlRender.TCSSStyleSheet;
+  D: Tina4HtmlRender.TLayoutBox;
+begin
+  Parser := Tina4HtmlRender.THTMLParser.Create;
+  Engine := Tina4HtmlRender.TLayoutEngine.Create(nil);
+  StyleSheet := Tina4HtmlRender.TCSSStyleSheet.Create;
+  try
+    // Bug 13 from the 2026-05-10 addendum: a CSS *class* rule (not
+    // inline style) that combines `background:` shorthand with other
+    // declarations. The header's background colour should come through.
+    Parser.Parse(
+      '<style>' +
+      '.header {' +
+      '  background: #ff8200;' +
+      '  color: white;' +
+      '  padding: 8px 16px;' +
+      '  height: 96px;' +
+      '}' +
+      '</style>' +
+      '<div id="d" class="header">Header text</div>');
+    for var I := 0 to Parser.StyleBlocks.Count - 1 do
+      StyleSheet.AddCSS(Parser.StyleBlocks[I]);
+    Engine.Layout(Parser.Root, 400, StyleSheet);
+
+    D := FindBoxById(Engine.Root, 'd');
+    Check(Assigned(D), 'header box must exist');
+    Check(D.Style.BackgroundColor <> 0,
+      'background colour from class-rule shorthand must apply (got Null)');
+    Check(Abs(D.ContentHeight - 96) < 2,
+      Format('height from same rule (sibling decl) should apply too: got %.1f, expected 96',
+             [D.ContentHeight]));
+  finally
+    StyleSheet.Free;
+    Engine.Free;
+    Parser.Free;
+  end;
+end;
+
+procedure TestTTina4Components.TestImgSizingWithRealLoadedBitmap;
+var
+  Parser: Tina4HtmlRender.THTMLParser;
+  Engine: Tina4HtmlRender.TLayoutEngine;
+  Img: Tina4HtmlRender.TLayoutBox;
+  Cache: Tina4HtmlRender.TImageCache;
+const
+  // 4x4 PNG (small but real) — base64-encoded. The natural bitmap
+  // dimensions (4x4) must NOT override the declared 80x80.
+  TINY_PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAQAAAAYUotyAAAAEElEQVR42mNg+M+AwH8GdAAACx0BAdMJpdQAAAAASUVORK5CYII=';
+begin
+  Cache := Tina4HtmlRender.TImageCache.Create;
+  Parser := Tina4HtmlRender.THTMLParser.Create;
+  Engine := Tina4HtmlRender.TLayoutEngine.Create(Cache);
+  try
+    Cache.RequestImage(TINY_PNG);  // populate cache so LayoutImage sees a real bitmap
+
+    // Bug 15 from the 2026-05-10 addendum: declared width/height on
+    // <img> must override the bitmap's natural dimensions. The 4x4
+    // source must scale up to 80x80 (not stay at 4x4 nor pass through).
+    Parser.Parse(
+      '<img id="i" src="' + TINY_PNG + '" ' +
+      'width="80" height="80" ' +
+      'style="width:80px;height:80px;max-width:80px;max-height:80px">');
+    Engine.Layout(Parser.Root, 400, nil);
+
+    Img := FindBoxById(Engine.Root, 'i');
+    Check(Assigned(Img), 'img box must exist');
+    Check(Abs(Img.ContentWidth - 80) < 2,
+      Format('declared width must override loaded bitmap natural size: got %.1f, expected 80',
+             [Img.ContentWidth]));
+    Check(Abs(Img.ContentHeight - 80) < 2,
+      Format('declared height must override loaded bitmap natural size: got %.1f, expected 80',
+             [Img.ContentHeight]));
+  finally
+    Engine.Free;
+    Parser.Free;
+    Cache.Free;
   end;
 end;
 

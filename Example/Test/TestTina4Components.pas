@@ -112,6 +112,7 @@ type
     procedure TestVerbatimBrandLogoRepro;
     procedure TestImgWithBothExplicitDimensionsIgnoresBitmapSize;
     procedure TestStickyTheadGetsProperBoundsForPinning;
+    procedure TestStickyBottomAndRightCssCaptured;
     // CSS position (absolute / fixed / relative)
     procedure TestPositionAbsoluteOutOfFlowSiblingsUnaffected;
     procedure TestPositionAbsoluteTopLeftAnchored;
@@ -3092,6 +3093,52 @@ begin
       Format('thead must have CSSTop=0, got %.1f', [Thead.Style.CSSTop]));
   finally
     StyleSheet.Free;
+    Engine.Free;
+    Parser.Free;
+  end;
+end;
+
+procedure TestTTina4Components.TestStickyBottomAndRightCssCaptured;
+var
+  Parser: Tina4HtmlRender.THTMLParser;
+  Engine: Tina4HtmlRender.TLayoutEngine;
+  Footer, FreezeCol: Tina4HtmlRender.TLayoutBox;
+begin
+  Parser := Tina4HtmlRender.THTMLParser.Create;
+  Engine := Tina4HtmlRender.TLayoutEngine.Create(nil);
+  try
+    // Two sticky boxes — one pinned to the bottom edge of a scrolling
+    // container (sticky action bar / total row), one pinned to its
+    // right edge (right-side freeze column). Layout test pins parsing
+    // of bottom: / right: into Style.CSSBottom / Style.CSSRight; the
+    // paint-side logic for "BoxBottom > AnchorBottom" pinning lives
+    // in PaintBox and can't be unit-tested without a real canvas, but
+    // the CSS capture verifies the inputs are correct.
+    RunLayout(Parser, Engine,
+      '<div style="overflow-y:auto; height:100px">' +
+      '  <div id="foot" style="position:sticky; bottom:0; height:30px">Footer</div>' +
+      '  <div id="col"  style="position:sticky; right:0; width:80px">FreezeCol</div>' +
+      '</div>', 400);
+
+    Footer := FindBoxById(Engine.Root, 'foot');
+    FreezeCol := FindBoxById(Engine.Root, 'col');
+    Check(Assigned(Footer) and Assigned(FreezeCol),
+      'sticky footer + freeze column boxes must exist');
+
+    CheckEquals('sticky', Footer.Style.CSSPosition,
+      'sticky position must be captured on footer');
+    Check(Footer.Style.CSSBottom > -9990,
+      Format('bottom:0 must capture into CSSBottom, got %.1f', [Footer.Style.CSSBottom]));
+    Check(Abs(Footer.Style.CSSBottom) < 0.5,
+      Format('bottom:0 must resolve to 0, got %.1f', [Footer.Style.CSSBottom]));
+
+    CheckEquals('sticky', FreezeCol.Style.CSSPosition,
+      'sticky position must be captured on freeze column');
+    Check(FreezeCol.Style.CSSRight > -9990,
+      Format('right:0 must capture into CSSRight, got %.1f', [FreezeCol.Style.CSSRight]));
+    Check(Abs(FreezeCol.Style.CSSRight) < 0.5,
+      Format('right:0 must resolve to 0, got %.1f', [FreezeCol.Style.CSSRight]));
+  finally
     Engine.Free;
     Parser.Free;
   end;

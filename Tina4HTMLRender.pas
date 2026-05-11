@@ -536,6 +536,13 @@ type
     // an extra parameter, since most callers don't care.
     FStickyAnchorY: Single;
     FStickyAnchorX: Single;  // mirror of FStickyAnchorY for horizontal sticky
+    // Bottom / right edges of the nearest scroll-ancestor's content area
+    // in absolute paint coords. Used for bottom-sticky (`<tfoot>` pinned
+    // to the bottom of a scroll container) and right-sticky (last column
+    // pinned to the right of a horizontal scroll strip). Saved/restored
+    // alongside the top/left anchors per scroll subtree.
+    FStickyAnchorBottom: Single;
+    FStickyAnchorRight: Single;
     // Pseudo-class state tracking. The renderer owns the chain of currently
     // hovered / active tags so :hover / :active selectors update at runtime
     // without a full DOM rebuild. Each entry's IsHovered / IsActive flag is
@@ -8733,6 +8740,13 @@ begin
     // freed box.
     FStickyAnchorY := 0;
     FStickyAnchorX := 0;
+    // Bottom/right anchors default to "no clamp" (negative infinity-ish).
+    // They get populated only when descending into a scroll container.
+    // Sticky elements with `bottom:` / `right:` set outside any scroll
+    // container have no meaningful pin target, so we leave them
+    // unconstrained on those axes.
+    FStickyAnchorBottom := -1e30;
+    FStickyAnchorRight  := -1e30;
 
     // Paint layout tree
     if Assigned(FLayoutEngine.Root) then
@@ -8791,10 +8805,12 @@ begin
   if Box.Style.Display = 'none' then Exit;
   if Box.Style.Visibility = 'hidden' then Exit;
 
-  // Sticky on either axis qualifies — `top` only (vertical scroll-pinned
-  // header), `left` only (horizontal scroll-pinned freeze column), or both.
+  // Sticky on ANY of the four edges qualifies — `top` (header), `left`
+  // (freeze column), `bottom` (sticky tfoot / action bar), `right`
+  // (right-side freeze column), or any combination.
   IsSticky := (Box.Style.CSSPosition = 'sticky') and
-    ((Box.Style.CSSTop > -9990) or (Box.Style.CSSLeft > -9990));
+    ((Box.Style.CSSTop > -9990) or (Box.Style.CSSLeft > -9990) or
+     (Box.Style.CSSBottom > -9990) or (Box.Style.CSSRight > -9990));
 
   // Mode 1 (non-sticky pass): a sticky element and its entire subtree are
   // skipped — they get painted in mode 2 on top of the background pass.
@@ -8862,11 +8878,18 @@ begin
     AbsY := Box.Y;
   end;
 
-  // Sticky positioning: pin to the nearest scroll-ancestor's content edges
-  // (FStickyAnchorX/Y, in absolute paint coordinates) plus the element's
-  // `top` / `left` offsets. Both axes are independent — a sticky cell in a
-  // horizontally-scrolling row uses `left: 0`; a sticky table header uses
-  // `top: 0`; a sticky corner uses both.
+  // Sticky positioning on all four edges. The element pins to whichever
+  // edge of the nearest scroll-ancestor's content area it's declared
+  // against:
+  //   * `top: N`    — when the box would scroll above the ancestor's
+  //                   top edge, hold it at AnchorTop + N
+  //   * `bottom: N` — when the box would scroll below the ancestor's
+  //                   bottom edge, hold it at AnchorBottom - N - height
+  //   * `left: N`   — horizontal mirror of top
+  //   * `right: N`  — horizontal mirror of bottom
+  // The four axes are independent — sticky corners (top+left), sticky
+  // footers (bottom-only), sticky headers (top-only), and sticky
+  // freeze-columns (left-only) all work.
   if Box.Style.CSSPosition = 'sticky' then
   begin
     if Box.Style.CSSTop > -9990 then
@@ -8875,11 +8898,35 @@ begin
       if AbsY < StickyAnchorY then
         AbsY := StickyAnchorY;
     end;
+    if Box.Style.CSSBottom > -9990 then
+    begin
+      // Pin the bottom edge of the margin box at AnchorBottom - CSSBottom.
+      // FStickyAnchorBottom = the scroll-ancestor's content-bottom in abs
+      // paint coords. If outside any scroll ancestor it stays at -1e30
+      // (effectively no clamp).
+      if FStickyAnchorBottom > -1e29 then
+      begin
+        var BoxBottom := AbsY + Box.MarginBoxHeight;
+        var StickyAnchorBottom := FStickyAnchorBottom - Box.Style.CSSBottom;
+        if BoxBottom > StickyAnchorBottom then
+          AbsY := StickyAnchorBottom - Box.MarginBoxHeight;
+      end;
+    end;
     if Box.Style.CSSLeft > -9990 then
     begin
       var StickyAnchorX := FStickyAnchorX + Box.Style.CSSLeft;
       if AbsX < StickyAnchorX then
         AbsX := StickyAnchorX;
+    end;
+    if Box.Style.CSSRight > -9990 then
+    begin
+      if FStickyAnchorRight > -1e29 then
+      begin
+        var BoxRight := AbsX + Box.MarginBoxWidth;
+        var StickyAnchorRight := FStickyAnchorRight - Box.Style.CSSRight;
+        if BoxRight > StickyAnchorRight then
+          AbsX := StickyAnchorRight - Box.MarginBoxWidth;
+      end;
     end;
   end;
 
@@ -9008,12 +9055,20 @@ begin
     // don't see a stale anchor.
     var SavedAnchorY := FStickyAnchorY;
     var SavedAnchorX := FStickyAnchorX;
+    var SavedAnchorBottom := FStickyAnchorBottom;
+    var SavedAnchorRight  := FStickyAnchorRight;
     if (Box.Style.OverflowY = 'auto') or (Box.Style.OverflowY = 'scroll') or
        (Box.Style.Overflow  = 'auto') or (Box.Style.Overflow  = 'scroll') then
+    begin
       FStickyAnchorY := CY;
+      FStickyAnchorBottom := CY + Box.ContentHeight;
+    end;
     if (Box.Style.OverflowX = 'auto') or (Box.Style.OverflowX = 'scroll') or
        (Box.Style.Overflow  = 'auto') or (Box.Style.Overflow  = 'scroll') then
+    begin
       FStickyAnchorX := CX;
+      FStickyAnchorRight := CX + Box.ContentWidth;
+    end;
     try
       Canvas.IntersectClipRect(RectF(CX, CY, CX + Box.ContentWidth, CY + Box.ContentHeight));
       // Two-pass deep paint when there's a sticky descendant inside this
@@ -9081,6 +9136,8 @@ begin
       Canvas.RestoreState(SaveState);
       FStickyAnchorY := SavedAnchorY;
       FStickyAnchorX := SavedAnchorX;
+      FStickyAnchorBottom := SavedAnchorBottom;
+      FStickyAnchorRight  := SavedAnchorRight;
     end;
     // Paint scrollbars OUTSIDE the clip so they're always visible regardless
     // of how far the content has been scrolled.

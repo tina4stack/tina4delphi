@@ -432,6 +432,14 @@ type
     FImageCache: TImageCache;
     FStyleSheet: TCSSStyleSheet;
     FTotalHeight: Single;
+    // Pooled TTextLayout used for width/height measurements during layout.
+    // Constructing TTextLayout is expensive on FMX (allocates HarfBuzz /
+    // platform-specific layout engine), so we lazy-create one per engine
+    // and reset it via BeginUpdate/EndUpdate per measurement. The pool
+    // pays off because MeasureTextWidth fires once per word during inline
+    // layout — hundreds of times on a text-heavy page.
+    FMeasureLayout: TTextLayout;
+    function GetMeasureLayout: TTextLayout;
     function BuildBoxTree(Tag: THTMLTag; const ParentStyle: TComputedStyle): TLayoutBox;
     procedure LayoutBlock(Box: TLayoutBox; AvailWidth: Single);
     procedure LayoutInlineChildren(Box: TLayoutBox; AvailWidth: Single);
@@ -512,6 +520,12 @@ type
     FFileCache: TFileCache;
     FCacheEnabled: Boolean;
     FCacheDir: string;
+    // Pooled TTextLayout for paint — mirror of TLayoutEngine.FMeasureLayout
+    // but lives on the renderer because paint sites need it. PaintText
+    // and the ellipsis / shadow / form-control paths all share it; they
+    // run sequentially within a single paint pass, so reconfiguring
+    // between uses is safe.
+    FPaintLayout: TTextLayout;
     FScrollX: Single;
     FScrollY: Single;
     // Absolute Y of the nearest scroll-ancestor's content-top during paint.
@@ -710,6 +724,7 @@ type
     function GetViewportWidth: Single;
     function GetViewportHeight: Single;
     function FindLayoutBoxByTag(Box: TLayoutBox; Target: THTMLTag): TLayoutBox;
+    function GetPaintLayout: TTextLayout;
     function HitTestTagAt(Box: TLayoutBox; OffX, OffY, X, Y: Single): THTMLTag;
     procedure UpdatePseudoChain(Chain: TList<THTMLTag>; NewLeaf: THTMLTag;
       const FlagName: string);
@@ -4132,6 +4147,7 @@ end;
 
 destructor TLayoutEngine.Destroy;
 begin
+  FMeasureLayout.Free;
   FRoot.Free;
   inherited;
 end;
@@ -4141,28 +4157,36 @@ begin
   Result := Style.FontSize * Style.LineHeight;
 end;
 
+function TLayoutEngine.GetMeasureLayout: TTextLayout;
+// Lazy-create-and-reuse a single TTextLayout for all text measurement
+// during this engine's lifetime. Callers MUST fully reconfigure it via
+// BeginUpdate/EndUpdate — properties may carry over from the previous
+// use. The pool saves one FMX TextLayout allocation per word measured
+// during inline layout (and per text fragment overall).
+begin
+  if not Assigned(FMeasureLayout) then
+    FMeasureLayout := TTextLayoutManager.DefaultTextLayout.Create;
+  Result := FMeasureLayout;
+end;
+
 function TLayoutEngine.MeasureTextWidth(const Text: string; const Style: TComputedStyle): Single;
 var
   Layout: TTextLayout;
 begin
-  Layout := TTextLayoutManager.DefaultTextLayout.Create;
-  try
-    Layout.BeginUpdate;
-    Layout.Text := Text;
-    Layout.Font.Family := Style.FontFamily;
-    Layout.Font.Size := Style.FontSize;
-    Layout.Font.Style := [];
-    if Style.Bold then Layout.Font.Style := Layout.Font.Style + [TFontStyle.fsBold];
-    if Style.Italic then Layout.Font.Style := Layout.Font.Style + [TFontStyle.fsItalic];
-    Layout.WordWrap := False;
-    Layout.MaxSize := PointF(10000, 10000);
-    Layout.EndUpdate;
-    Result := Layout.Width;
-    if (Style.LetterSpacing <> 0) and (Text.Length > 1) then
-      Result := Result + Style.LetterSpacing * (Text.Length - 1);
-  finally
-    Layout.Free;
-  end;
+  Layout := GetMeasureLayout;
+  Layout.BeginUpdate;
+  Layout.Text := Text;
+  Layout.Font.Family := Style.FontFamily;
+  Layout.Font.Size := Style.FontSize;
+  Layout.Font.Style := [];
+  if Style.Bold then Layout.Font.Style := Layout.Font.Style + [TFontStyle.fsBold];
+  if Style.Italic then Layout.Font.Style := Layout.Font.Style + [TFontStyle.fsItalic];
+  Layout.WordWrap := False;
+  Layout.MaxSize := PointF(10000, 10000);
+  Layout.EndUpdate;
+  Result := Layout.Width;
+  if (Style.LetterSpacing <> 0) and (Text.Length > 1) then
+    Result := Result + Style.LetterSpacing * (Text.Length - 1);
 end;
 
 function TLayoutEngine.MeasureTextHeight(const Text: string; const Style: TComputedStyle; MaxWidth: Single): Single;
@@ -4170,22 +4194,18 @@ var
   Layout: TTextLayout;
 begin
   if MaxWidth <= 0 then MaxWidth := 10000;
-  Layout := TTextLayoutManager.DefaultTextLayout.Create;
-  try
-    Layout.BeginUpdate;
-    Layout.Text := Text;
-    Layout.Font.Family := Style.FontFamily;
-    Layout.Font.Size := Style.FontSize;
-    Layout.Font.Style := [];
-    if Style.Bold then Layout.Font.Style := Layout.Font.Style + [TFontStyle.fsBold];
-    if Style.Italic then Layout.Font.Style := Layout.Font.Style + [TFontStyle.fsItalic];
-    Layout.WordWrap := True;
-    Layout.MaxSize := PointF(MaxWidth, 100000);
-    Layout.EndUpdate;
-    Result := Layout.Height;
-  finally
-    Layout.Free;
-  end;
+  Layout := GetMeasureLayout;
+  Layout.BeginUpdate;
+  Layout.Text := Text;
+  Layout.Font.Family := Style.FontFamily;
+  Layout.Font.Size := Style.FontSize;
+  Layout.Font.Style := [];
+  if Style.Bold then Layout.Font.Style := Layout.Font.Style + [TFontStyle.fsBold];
+  if Style.Italic then Layout.Font.Style := Layout.Font.Style + [TFontStyle.fsItalic];
+  Layout.WordWrap := True;
+  Layout.MaxSize := PointF(MaxWidth, 100000);
+  Layout.EndUpdate;
+  Result := Layout.Height;
 end;
 
 function TLayoutEngine.BuildBoxTree(Tag: THTMLTag; const ParentStyle: TComputedStyle): TLayoutBox;
@@ -6407,6 +6427,7 @@ begin
   FClickableRegions.Free;
   FRegisteredObjects.Free;
   FHoverChain.Free;
+  FPaintLayout.Free;
   FActiveChain.Free;
   FBoxScrollState.Free;
   FStyleSheet.Free;
@@ -9814,6 +9835,18 @@ begin
   Canvas.Stroke.Dash := TStrokeDash.Solid;
 end;
 
+function TTina4HTMLRender.GetPaintLayout: TTextLayout;
+// Lazy-create-and-reuse the paint TTextLayout. Mirrors the engine's
+// FMeasureLayout pattern. Callers must reconfigure via BeginUpdate /
+// EndUpdate — properties carry over. Constructing TTextLayout is the
+// single most expensive step in paint when many text fragments are
+// drawn (every fragment, every tile, every paint pass).
+begin
+  if not Assigned(FPaintLayout) then
+    FPaintLayout := TTextLayoutManager.DefaultTextLayout.Create;
+  Result := FPaintLayout;
+end;
+
 procedure TTina4HTMLRender.PaintText(Canvas: TCanvas; Box: TLayoutBox; X, Y: Single);
 var
   Layout: TTextLayout;
@@ -9826,12 +9859,14 @@ begin
   if Box.Style.Bold then Include(FontStyles, TFontStyle.fsBold);
   if Box.Style.Italic then Include(FontStyles, TFontStyle.fsItalic);
 
+  // Hoist the pooled paint layout once for the whole fragment list.
+  // Shadow + main use the same instance — they're sequential per fragment.
+  Layout := GetPaintLayout;
   for var I := 0 to Box.Fragments.Count - 1 do
   begin
     Frag := Box.Fragments[I];
 
-    Layout := TTextLayoutManager.DefaultTextLayout.Create;
-    try
+    begin  // (former try block kept as bare block — no allocation to free)
       if (Box.Style.LetterSpacing <> 0) and (Frag.Text.Length > 1) then
       begin
         // Render character-by-character with spacing
@@ -9859,28 +9894,25 @@ begin
         // BEFORE the main layer so the regular colour sits on top. We
         // approximate the CSS blur with a "ring" of repeats (4 cardinal
         // directions, opacity proportional to blur radius) — enough for
-        // legibility on busy backgrounds without a full Gaussian.
+        // legibility on busy backgrounds without a full Gaussian. Uses
+        // the same pooled Layout — we render the shadow first, then
+        // reconfigure for the main pass below.
         if Box.Style.TextShadowActive then
         begin
-          var ShadowLayout := TTextLayoutManager.DefaultTextLayout.Create;
-          try
-            ShadowLayout.BeginUpdate;
-            ShadowLayout.Text := Frag.Text;
-            ShadowLayout.Font.Family := Box.Style.FontFamily;
-            ShadowLayout.Font.Size := Box.Style.FontSize;
-            ShadowLayout.Font.Style := FontStyles;
-            ShadowLayout.Color := Box.Style.TextShadowColor;
-            ShadowLayout.WordWrap := Box.Style.WhiteSpace <> 'pre';
-            ShadowLayout.HorizontalAlign := TTextAlign.Leading;
-            ShadowLayout.MaxSize := PointF(Frag.W + 2, Frag.H + 2);
-            ShadowLayout.TopLeft := PointF(
-              X + Box.ContentLeft + Frag.X + Box.Style.TextShadowOffsetX,
-              Y + Box.ContentTop  + Frag.Y + Box.Style.TextShadowOffsetY);
-            ShadowLayout.EndUpdate;
-            ShadowLayout.RenderLayout(Canvas);
-          finally
-            ShadowLayout.Free;
-          end;
+          Layout.BeginUpdate;
+          Layout.Text := Frag.Text;
+          Layout.Font.Family := Box.Style.FontFamily;
+          Layout.Font.Size := Box.Style.FontSize;
+          Layout.Font.Style := FontStyles;
+          Layout.Color := Box.Style.TextShadowColor;
+          Layout.WordWrap := Box.Style.WhiteSpace <> 'pre';
+          Layout.HorizontalAlign := TTextAlign.Leading;
+          Layout.MaxSize := PointF(Frag.W + 2, Frag.H + 2);
+          Layout.TopLeft := PointF(
+            X + Box.ContentLeft + Frag.X + Box.Style.TextShadowOffsetX,
+            Y + Box.ContentTop  + Frag.Y + Box.Style.TextShadowOffsetY);
+          Layout.EndUpdate;
+          Layout.RenderLayout(Canvas);
         end;
 
         Layout.BeginUpdate;
@@ -9921,9 +9953,7 @@ begin
           PointF(X + Box.ContentLeft + Frag.X + Frag.W, SY),
           1.0);
       end;
-    finally
-      Layout.Free;
-    end;
+    end;  // (former finally Layout.Free was here — Layout is pooled now)
   end;
 end;
 

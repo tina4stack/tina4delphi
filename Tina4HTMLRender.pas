@@ -4813,6 +4813,18 @@ var
     WordW, WordH: Single;
     Frag: TTextFragment;
   begin
+    // Absolutely-positioned / fixed children are OUT OF FLOW. They must
+    // not advance CursorX, must not force a line break, and must not
+    // contribute to line height. LayoutAbsoluteChildren positions them
+    // afterwards against the containing block. Without this skip an
+    // absolute badge inside a text paragraph would steal inline space
+    // (and a block-level absolute child would even force a line break)
+    // — which looks like "position:absolute doesn't work" because the
+    // surrounding content gets pushed around.
+    if (Child.Style.CSSPosition = 'absolute') or
+       (Child.Style.CSSPosition = 'fixed') then
+      Exit;
+
     if Child.Kind = lbkBR then
     begin
       CursorY := CursorY + LineH;
@@ -5587,6 +5599,11 @@ begin
         begin
           for var CellChild in Cell.Children do
           begin
+            // Absolute / fixed cell children are out of flow — don't
+            // advance the in-flow cursor; LayoutAbsoluteChildren places
+            // them below once the cell's content size is known.
+            if (CellChild.Style.CSSPosition = 'absolute') or
+               (CellChild.Style.CSSPosition = 'fixed') then Continue;
             case CellChild.Kind of
               lbkBlock: LayoutBlock(CellChild, CellContentW);
               lbkTable: LayoutTable(CellChild, CellContentW);
@@ -5602,6 +5619,10 @@ begin
         end;
         if CellCursorY > Cell.ContentHeight then
           Cell.ContentHeight := CellCursorY;
+
+        // Position absolute / fixed descendants of the cell against the
+        // cell's content area (the cell is their containing block).
+        LayoutAbsoluteChildren(Cell);
 
         Cell.X := CellX;
         Cell.Y := 0;  // Cell position is relative to the row, not the table

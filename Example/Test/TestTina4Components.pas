@@ -120,6 +120,8 @@ type
     procedure TestPositionAbsoluteRightBottomAnchored;
     procedure TestPositionAbsoluteLeftAndRightDerivesWidth;
     procedure TestPositionRelativeShiftsButLeavesSiblings;
+    procedure TestAbsoluteInsideInlineContentDoesNotStealSpace;
+    procedure TestAbsoluteInsideTableCellPositioned;
     // Pseudo-classes (:hover/:active/:focus runtime matching)
     procedure TestHoverPseudoClassAppliesWhenFlagSet;
     procedure TestActivePseudoClassAppliesWhenFlagSet;
@@ -2346,6 +2348,87 @@ begin
       Format('A is in flow, layout Y stays 0 (relative is paint-only), got %.1f', [A.Y]));
     Check(Abs(B.Y - 30) < 1,
       Format('B.Y should be 30 (after A''s 30px height), got %.1f', [B.Y]));
+  finally
+    Engine.Free;
+    Parser.Free;
+  end;
+end;
+
+procedure TestTTina4Components.TestAbsoluteInsideInlineContentDoesNotStealSpace;
+var
+  Parser: Tina4HtmlRender.THTMLParser;
+  Engine: Tina4HtmlRender.TLayoutEngine;
+  Parent, Badge: Tina4HtmlRender.TLayoutBox;
+begin
+  Parser := Tina4HtmlRender.THTMLParser.Create;
+  Engine := Tina4HtmlRender.TLayoutEngine.Create(nil);
+  try
+    // The real bug: an absolute child INSIDE a parent that also has inline
+    // text content. The parent goes through LayoutInlineChildren — which
+    // used to process the absolute child as a normal inline/block box,
+    // stealing CursorX space and (for a block-level absolute) forcing a
+    // line break. That pushed surrounding content around and made
+    // position:absolute look broken.
+    //
+    // After the fix, the absolute badge is skipped by inline layout and
+    // positioned by LayoutAbsoluteChildren. The parent's own content
+    // height must reflect ONLY the text line — not text + badge stacked.
+    RunLayout(Parser, Engine,
+      '<div id="p" style="position:relative; width:200px; padding:0">' +
+      '  Some flowing text content here' +
+      '  <div id="badge" style="position:absolute; top:4px; right:4px; ' +
+      '       width:40px; height:18px; padding:0">NEW</div>' +
+      '</div>', 400);
+
+    Parent := FindBoxById(Engine.Root, 'p');
+    Badge := FindBoxById(Engine.Root, 'badge');
+    Check(Assigned(Parent) and Assigned(Badge), 'parent + badge must exist');
+
+    // Parent's content height must be a single text line (~16-24px), NOT
+    // text line + 18px badge stacked (~34-42px). The 18px badge is
+    // out of flow so it must not add to the parent's height.
+    Check(Parent.ContentHeight < 30,
+      Format('absolute badge must not inflate parent height: got %.1f (expected single text line)',
+             [Parent.ContentHeight]));
+
+    // Badge anchored top:4 right:4 → X = 200 - 40 - 4 = 156, Y = 4.
+    Check(Abs(Badge.X - 156) < 2,
+      Format('badge X (right:4 in 200px parent, 40px wide) expected 156, got %.1f', [Badge.X]));
+    Check(Abs(Badge.Y - 4) < 2,
+      Format('badge Y (top:4) expected 4, got %.1f', [Badge.Y]));
+  finally
+    Engine.Free;
+    Parser.Free;
+  end;
+end;
+
+procedure TestTTina4Components.TestAbsoluteInsideTableCellPositioned;
+var
+  Parser: Tina4HtmlRender.THTMLParser;
+  Engine: Tina4HtmlRender.TLayoutEngine;
+  Badge: Tina4HtmlRender.TLayoutBox;
+begin
+  Parser := Tina4HtmlRender.THTMLParser.Create;
+  Engine := Tina4HtmlRender.TLayoutEngine.Create(nil);
+  try
+    // Absolute element inside a <td>. LayoutTable now calls
+    // LayoutAbsoluteChildren on each cell, so a badge in a cell pins to
+    // the cell's content area.
+    RunLayout(Parser, Engine,
+      '<table style="width:200px"><tr>' +
+      '  <td style="padding:0; height:50px">' +
+      '    Cell text' +
+      '    <div id="b" style="position:absolute; top:2px; left:3px; ' +
+      '         width:20px; height:10px; padding:0">B</div>' +
+      '  </td>' +
+      '</tr></table>', 400);
+
+    Badge := FindBoxById(Engine.Root, 'b');
+    Check(Assigned(Badge), 'badge inside table cell must exist');
+    Check(Abs(Badge.X - 3) < 2,
+      Format('cell badge X (left:3) expected 3, got %.1f', [Badge.X]));
+    Check(Abs(Badge.Y - 2) < 2,
+      Format('cell badge Y (top:2) expected 2, got %.1f', [Badge.Y]));
   finally
     Engine.Free;
     Parser.Free;

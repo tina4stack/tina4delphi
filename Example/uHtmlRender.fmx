@@ -32,6 +32,33 @@ object Form3: TForm3
     TabOrder = 6
     object Tina4HTMLRender1: TTina4HTMLRender
       Touch.InteractiveGestures = [Pan]
+      HTML.Strings = (
+        '<h0> 0 Hello </h0>'
+        ''
+        '<h1> 1 Hello </h1>'
+        ''
+        '<h2> 2 Hello </h2>'
+        ''
+        '<h3> 3 Hello </h3>'
+        ''
+        '<h4> 4 Hello </h4>'
+        ''
+        '<h5> 5 Hello </h5>'
+        ''
+        '<h6> 6 Hello </h6>'
+        ''
+        '<h7> 7 Hello </h7>'
+        ''
+        '<h8> 8 Hello </h8>'
+        ''
+        '<h9> 9 Hello </h9>'
+        ''
+        '<h10> 10 Hello </h10>'
+        '')
+      Twig.Strings = (
+        '{% for a in 0..10 %}'
+        '<h{{a}}> {{a}} Hello </h{{a}}>'
+        '{% endfor %}')
       Align = Client
       ClipChildren = True
       Size.Width = 834.000000000000000000
@@ -42,9 +69,10 @@ object Form3: TForm3
   object Tina4HTMLPages1: TTina4HTMLPages
     Pages = <
       item
+        PageName = 'page'
       end>
-    Left = 376
-    Top = 408
+    Left = 416
+    Top = 128
   end
   object Tina4JSONAdapter1: TTina4JSONAdapter
     SyncMode = Clear

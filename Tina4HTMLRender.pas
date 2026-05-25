@@ -4506,7 +4506,13 @@ begin
   var HasBlock := False;
   for var Child in Box.Children do
   begin
-    if Child.Style.CSSFloat <> 'none' then Continue;  // out of flow
+    if Child.Style.CSSFloat <> 'none' then Continue;  // out of flow (float)
+    // Absolutely-positioned / fixed children are ALSO out of flow — they
+    // must not influence the parent's block-vs-inline formatting context
+    // (otherwise an absolute <span> sibling wrongly forces inline layout
+    // and the block-only auto-margin vertical-centre never runs).
+    if (Child.Style.CSSPosition = 'absolute') or
+       (Child.Style.CSSPosition = 'fixed') then Continue;
     case Child.Kind of
       lbkBlock, lbkTable, lbkListItem, lbkHR:
         HasBlock := True;
@@ -4527,7 +4533,9 @@ begin
     HasInline := False;
     for var Child in Box.Children do
     begin
-      if Child.Style.CSSFloat <> 'none' then Continue;  // out of flow
+      if Child.Style.CSSFloat <> 'none' then Continue;  // out of flow (float)
+      if (Child.Style.CSSPosition = 'absolute') or
+         (Child.Style.CSSPosition = 'fixed') then Continue;  // out of flow
       if (Child.Kind = lbkImage) or (Child.Kind = lbkFormControl) or
          (Child.Kind = lbkBR) or (Child.Kind = lbkInline) or
          (Child.Kind = lbkInlineBlock) then

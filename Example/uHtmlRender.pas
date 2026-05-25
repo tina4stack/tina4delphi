@@ -1,4 +1,4 @@
-unit uHtmlRender;
+﻿unit uHtmlRender;
 
 interface
 

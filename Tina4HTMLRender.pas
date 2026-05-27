@@ -13,7 +13,11 @@ uses
   FMX.Edit, FMX.StdCtrls, FMX.Memo, FMX.ListBox, FMX.Layouts, FMX.Objects, FMX.Forms,
   FMX.DialogService, FMX.Dialogs, Fmx.Surfaces,
   FMX.VirtualKeyboard, FMX.Platform,
-  System.IOUtils;
+  System.IOUtils
+  {$IFDEF ANDROID}
+  , Androidapi.Log
+  {$ENDIF}
+  ;
 
 type
   // ─────────────────────────────────────────────────────────────────────────
@@ -610,12 +614,29 @@ type
     // position in inner divs would reset every relayout. Keyed by DOM tag.
     FBoxScrollState: TDictionary<THTMLTag, TPointF>;
     FFormControls: TList<TNativeFormControl>;
+    // Bumped every time ClearFormControls runs (i.e. every relayout that
+    // rebuilds the native peers). Deferred actions that captured a TEdit
+    // reference compare the gen they saw at queue-time against the
+    // current one — if it advanced, the captured edit may already be
+    // DisposeOf'd, so they must no-op.
+    FFormControlsGen: NativeUInt;
     FClickableRegions: TList<TClickableRegion>;
     FRegisteredObjects: TDictionary<string, TObject>;
     FOnChange: THTMLFormControlEvent;
     FOnClick: THTMLFormControlEvent;
     FOnEnter: THTMLFormControlEvent;
     FOnExit: THTMLFormControlEvent;
+    // When True (default), the renderer rebuilds its native form
+    // controls whenever focus leaves the renderer entirely (i.e. the
+    // newly focused control is NOT another input inside this same
+    // renderer's child tree). Defends against the FMX Android
+    // Platform-TEdit refocus AV at presenter offset 0x0C: after a
+    // visibility/focus cycle, the stale presenter is replaced by a
+    // fresh one before the user's next tap.
+    FRerenderOnFocus: Boolean;
+    // Used by HandleFormControlExit's deferred check to verify focus
+    // has truly left the renderer (vs. simply moved to a sibling input).
+    FPendingRerender: Boolean;
     FOnSubmit: THTMLFormSubmitEvent;
     FOnElementClick: THTMLElementClickEvent;
     FOnUnresolvedClick: THTMLUnresolvedClickEvent;
@@ -658,6 +679,10 @@ type
     procedure HandleFileInputClick(Sender: TObject);
     procedure HandleFormControlEnter(Sender: TObject);
     procedure HandleFormControlExit(Sender: TObject);
+    // RerenderOnFocus implementation — full DOM/form-control rebuild
+    // with id-based value preservation. Internal use only; the
+    // public surface is the RerenderOnFocus property.
+    procedure RebuildFormControlsPreservingValues;
     procedure HandleFormControlKeyDown(Sender: TObject; var Key: Word;
       var KeyChar: WideChar; Shift: TShiftState);
     procedure ApplyHtmlInputAttrsToEdit(Box: TLayoutBox; Ed: TEdit);
@@ -758,6 +783,24 @@ type
     destructor Destroy; override;
     /// <summary>Clears the in-memory image cache and the on-disk file cache.</summary>
     procedure ClearCache;
+    /// <summary>
+    /// Demotes every native form-control TEdit/TMemo to ControlType.Styled so
+    /// the Android peer is cleanly torn down. Call this immediately BEFORE
+    /// hiding the renderer (Visible := False), so the IME doesn't end up
+    /// bound to a peer that's about to be detached from the view hierarchy.
+    /// On non-Android/iOS platforms this is a no-op.
+    /// </summary>
+    procedure DeactivateNativePeers;
+    /// <summary>
+    /// Promotes every native form-control TEdit/TMemo back to
+    /// ControlType.Platform so the OS picks up the configured keyboard hint
+    /// and the native EditText auto-shows on first focus. Call this
+    /// immediately AFTER showing the renderer (Visible := True). Done
+    /// OUTSIDE any FMX focus event so the presenter rebuild can't tear
+    /// down a live focus chain (which AVs at offset 0x0C on Sunmi Android
+    /// 11 when triggered from inside OnEnter).
+    /// </summary>
+    procedure ActivateNativePeers;
     /// <summary>
     /// Registers a Delphi object for direct RTTI method invocation from HTML
     /// onclick attributes. Format: onclick="ObjectName:MethodName(params)".
@@ -950,6 +993,21 @@ type
     property OnFormControlEnter: THTMLFormControlEvent read FOnEnter write FOnEnter;
     /// <summary>Fires when a form control loses focus.</summary>
     property OnFormControlExit: THTMLFormControlEvent read FOnExit write FOnExit;
+    /// <summary>
+    /// When True (default), the renderer rebuilds its native form
+    /// controls whenever focus leaves the renderer entirely — i.e. the
+    /// newly focused control isn't another input inside this same
+    /// renderer. Existing input values are snapshotted by id and
+    /// restored into the freshly-built controls, so the user sees no
+    /// data loss. Defends against the FMX Android Platform-TEdit
+    /// refocus AV at presenter offset 0x0C: instead of relying on
+    /// FMX's broken presenter-rebuild path between focus cycles, we
+    /// dispose every native peer and create new ones at a quiet
+    /// moment (deferred via ForceQueue after the focus event chain
+    /// unwinds). Set to False if you have an alternative strategy
+    /// or are targeting a platform without this AV (desktop, iOS).
+    /// </summary>
+    property RerenderOnFocus: Boolean read FRerenderOnFocus write FRerenderOnFocus default True;
     /// <summary>Fires when a submit button is clicked with form name and name=value data.</summary>
     property OnFormSubmit: THTMLFormSubmitEvent read FOnSubmit write FOnSubmit;
     /// <summary>Fires when an element with onclick attribute is clicked (RTTI fallback).</summary>
@@ -1025,6 +1083,22 @@ uses
 procedure Register;
 begin
   RegisterComponents('Tina4Delphi', [TTina4HTMLRender]);
+end;
+
+// Instrumentation logger — routes to Android logcat under the same
+// `CuttlefishV2` tag the host uses, so a single `adb logcat -s
+// CuttlefishV2:*` filter captures both. No-op on non-Android builds.
+procedure TraceLog(const Msg: string);
+begin
+  {$IFDEF ANDROID}
+  try
+    __android_log_write(
+      android_LogPriority.ANDROID_LOG_INFO,
+      MarshaledAString('CuttlefishV2'),
+      MarshaledAString(PAnsiChar(AnsiString('Tina4: ' + Msg))));
+  except
+  end;
+  {$ENDIF}
 end;
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -6448,6 +6522,11 @@ begin
   Width := 320;
   Height := 240;
   FFormControls := TList<TNativeFormControl>.Create;
+  // RerenderOnFocus default = False now that ControlType stays
+  // Styled on Android. The rebuild was a workaround for the Platform
+  // presenter refocus AV, which no longer exists.
+  FRerenderOnFocus := False;
+  FPendingRerender := False;
   FClickableRegions := TList<TClickableRegion>.Create;
   FRegisteredObjects := TDictionary<string, TObject>.Create;
   FHoverChain := TList<THTMLTag>.Create;
@@ -7766,8 +7845,109 @@ begin
   Result := True;
 end;
 
+// Rebuilds every native form control from scratch — used by the
+// RerenderOnFocus path to defeat the Sunmi Android 11 refocus AV at
+// SetControlType+0x0C. Snapshots id→value before disposal, blows
+// away the entire form-control set (which DisposeOfs each TEdit
+// AND its FMX presenter), then triggers a relayout + restores the
+// captured values into the fresh TEdits.
+procedure TTina4HTMLRender.RebuildFormControlsPreservingValues;
+var
+  Snapshot: TDictionary<string, string>;
+  Id, Val: string;
+begin
+  TraceLog(Format('RebuildFormControlsPreservingValues count=%d',
+    [FFormControls.Count]));
+
+  // 1. Snapshot id → current value for every form control with an id.
+  Snapshot := TDictionary<string, string>.Create;
+  try
+    for var Rec in FFormControls do
+    begin
+      if (Rec.Box = nil) or (Rec.Box.Tag = nil) then Continue;
+      Id := Rec.Box.Tag.GetAttribute('id', '');
+      if Id = '' then Continue;
+      try
+        if Rec.Control is TEdit then
+          Snapshot.AddOrSetValue(Id, TEdit(Rec.Control).Text)
+        else if Rec.Control is TMemo then
+          Snapshot.AddOrSetValue(Id, TMemo(Rec.Control).Text);
+      except
+      end;
+    end;
+
+    // 2. Force a full relayout — clears + re-creates the form
+    // controls inside DoLayout (which calls ClearFormControls then
+    // CreateFormControls). FNeedRelayout := True signals the next
+    // paint pass to rebuild from the cached parsed DOM.
+    FNeedRelayout := True;
+    Repaint;
+
+    // 3. Restore values into the freshly-built TEdits. The new
+    // FFormControls list now references brand-new controls. Walk it
+    // and match by id.
+    for var Rec in FFormControls do
+    begin
+      if (Rec.Box = nil) or (Rec.Box.Tag = nil) then Continue;
+      Id := Rec.Box.Tag.GetAttribute('id', '');
+      if Id = '' then Continue;
+      if not Snapshot.TryGetValue(Id, Val) then Continue;
+      try
+        if Rec.Control is TEdit then
+          TEdit(Rec.Control).Text := Val
+        else if Rec.Control is TMemo then
+          TMemo(Rec.Control).Text := Val;
+      except
+      end;
+    end;
+  finally
+    Snapshot.Free;
+  end;
+end;
+
+procedure TTina4HTMLRender.DeactivateNativePeers;
+begin
+  // 2026-05-27 — body removed. This used to swap TEdit ControlType to
+  // Styled before a Visible:=False, when we were trying to keep
+  // ControlType=Platform for the native Android EditText (autofill,
+  // native password mask). That whole design lost: Platform produced
+  // the bleed-through bug AND the offset-0x0C refocus AV. We now
+  // leave ControlType at FMX default (Styled) for the entire
+  // lifetime of every TEdit. Method kept on the public surface so
+  // existing host call sites compile unchanged; on Android/iOS
+  // it's now a no-op.
+  TraceLog(Format('DeactivateNativePeers count=%d (no-op)',
+    [FFormControls.Count]));
+end;
+
+procedure TTina4HTMLRender.ActivateNativePeers;
+begin
+  // 2026-05-27 — body removed. See DeactivateNativePeers comment.
+  // PREVIOUSLY this promoted every TEdit back to ControlType.Platform
+  // after a Visible:=True. On the SECOND show of a renderer (when
+  // FFormControls already holds the existing TEdit instances), that
+  // swap was flipping our Styled TEdits back to Platform — which
+  // brought the bleed-through bug back. Tester repro:
+  //   Login → Global → Menu (no bleed) → Tap Out → Airtime → Global →
+  //   Menu (BLEEDS)
+  // First show: count=0, loop no-ops, TEdit created Styled by
+  //             ApplyHtmlInputAttrsToEdit, no bleed.
+  // Second show: count=1, loop promotes existing Styled TEdit to
+  //              Platform, native EditText created, bleeds.
+  // Fix: leave ControlType alone, always Styled.
+  TraceLog(Format('ActivateNativePeers count=%d (no-op)',
+    [FFormControls.Count]));
+end;
+
 procedure TTina4HTMLRender.ClearFormControls;
 begin
+  TraceLog(Format('ClearFormControls count=%d gen=%d',
+    [FFormControls.Count, FFormControlsGen]));
+  // Advance the generation BEFORE we DisposeOf anything. Any deferred
+  // action that captured the old gen will now skip its dereference of
+  // the (about-to-be-freed) control — see HandleFormControlExit's
+  // ForceQueue closure.
+  Inc(FFormControlsGen);
   for var I := FFormControls.Count - 1 downto 0 do
   begin
     FFormControls[I].Control.Parent := nil;
@@ -8209,15 +8389,22 @@ begin
     FKeyboardBounds := VKMsg.KeyboardBounds
   else
     FKeyboardBounds := TRect.Empty;
+  TraceLog(Format('VKStateChange visible=%s bounds=(%d,%d %dx%d)',
+    [BoolToStr(FKeyboardVisible, True),
+     FKeyboardBounds.Left, FKeyboardBounds.Top,
+     FKeyboardBounds.Width, FKeyboardBounds.Height]));
 
-  // When the keyboard comes up, the focused input may be below it.
-  // Defer the scroll a tick so any layout triggered by adjustResize
-  // on Android has a chance to settle first.
+  // Re-enabled now that ControlType is Styled (no presenter chain
+  // to deref). Scrolls the focused input above the IME if it lands
+  // below the keyboard bounds.
   if FKeyboardVisible then
     TThread.ForceQueue(nil,
       procedure
       begin
-        ScrollFocusedControlAboveKeyboard;
+        try
+          ScrollFocusedControlAboveKeyboard;
+        except
+        end;
       end);
 end;
 
@@ -8296,6 +8483,8 @@ var
   MaxLen: Integer;
 begin
   if (Box = nil) or (Box.Tag = nil) or (Ed = nil) then Exit;
+  TraceLog(Format('ApplyHtmlInputAttrsToEdit id=%s ed=%p',
+    [Box.Tag.GetAttribute('id', ''), Pointer(Ed)]));
 
   InputType    := Box.Tag.GetAttribute('type', 'text').ToLower;
   InputMode    := Box.Tag.GetAttribute('inputmode', '').ToLower;
@@ -8354,30 +8543,55 @@ begin
   if (MaxLenStr <> '') and TryStrToInt(MaxLenStr, MaxLen) and (MaxLen > 0) then
     Ed.MaxLength := MaxLen;
 
-  // Native platform control on mobile: gives us OS autofill, password
-  // managers, dictation, emoji picker, and the real keyboard types we
-  // just set. Styled controls ignore most of these hints.
-  {$IF defined(ANDROID) or defined(IOS)}
-  Ed.ControlType := TControlType.Platform;
-  {$ENDIF}
+  // 2026-05-27 — ControlType stays at FMX default (Styled) on
+  // Android. Platform mode produced THREE unfixable problems on
+  // Sunmi V2s (Android 11):
+  //   1. Bleed-through — native Android EditText renders in its own
+  //      view above the FMX OpenGL surface, so FMX overlays
+  //      (side menu, modals) cannot cover it.
+  //   2. Refocus AV — after the renderer Visible toggled, the stale
+  //      Platform presenter AV'd at SetControlType+0x0C on next
+  //      focus, even with every Tina4 focus/VK handler stripped.
+  //   3. Java proxy crash — tight DisposeOf/recreate cycles
+  //      (used to dodge #2) dangled the Android GestureDetector
+  //      proxy: NativeDispatchException 'onSingleTapConfirmed
+  //      not found' on the next user tap.
+  // Sticking with Styled fixes all three. KeyboardType is still
+  // honoured via IFMXVirtualKeyboardService on Styled controls, so
+  // numeric / tel / email keyboards still pop up correctly. Trade-off
+  // is no native autofill / native password mask — acceptable for
+  // HTML inputs which already manage their own presentation.
 end;
 
 procedure TTina4HTMLRender.HandleFormControlEnter(Sender: TObject);
 var
   N, V: string;
-  {$IF defined(ANDROID) or defined(IOS)}
-  KbSvc: IFMXVirtualKeyboardService;
-  {$ENDIF}
 begin
+  TraceLog(Format('OnEnter ENTRY sender=%p class=%s',
+    [Pointer(Sender), Sender.ClassName]));
   if Assigned(FOnEnter) and (Sender is TControl) and
      GetFormControlNameValue(TControl(Sender), N, V) then
     FOnEnter(Sender, N, V);
+  TraceLog('OnEnter after-user-cb');
 
-  // FMX usually auto-shows the VK when a native edit gains focus, but
-  // behaviour has historically been flaky on Android when focus moves
-  // between controls without a tap (e.g. programmatic SetFocus from
-  // autofocus=""). Ask the service to show explicitly — idempotent.
+  // Re-promote to ControlType.Platform — but DEFERRED via ForceQueue.
+  //
+  // Doing the swap synchronously inside the OnEnter event chain is
+  // unsafe: the property setter rebuilds the native presenter, which
+  // tears down the very focus state that fired the event. On Sunmi
+  // Android 11 this AVs inside SetControlType at presenter offset 0x0C
+  // (the cached focus reference is dereferenced while nil). Queuing
+  // the swap lets the focus event finish, the IME bind, and only then
+  // do we re-spin the presenter to Platform. Belt-and-braces: gen
+  // snapshot + still-owned check, same as the OnExit path.
   {$IF defined(ANDROID) or defined(IOS)}
+  // Styled inputs don't auto-show the IME from a native onFocusChange
+  // (there's no native EditText). Ask FMX's keyboard service to
+  // bring up the on-screen keyboard for whichever TControl just
+  // gained focus. The KeyboardType set in ApplyHtmlInputAttrsToEdit
+  // is read by the IME hint at this point, so numeric / tel / email
+  // keyboards still come up correctly.
+  var KbSvc: IFMXVirtualKeyboardService;
   if Sender is TControl then
   begin
     if TPlatformServices.Current.SupportsPlatformService(
@@ -8385,18 +8599,19 @@ begin
       KbSvc.ShowVirtualKeyboard(TControl(Sender));
   end;
 
-  // If the keyboard is already visible (focus moved via enterkeyhint
-  // Next, or the user tapped a different input while typing), the
-  // TVKStateChangeMessage won't fire again — so the new field could
-  // land under the keyboard. Re-scroll on every focus change to keep
-  // the focused input in view. Queued so any platform-level focus
-  // fallout settles first.
+  // After the IME is up, the focused input may be below the keyboard.
+  // Defer the scroll a tick so any layout settle on Android finishes
+  // first. Safe with Styled controls (no presenter chain).
   TThread.ForceQueue(nil,
     procedure
     begin
-      ScrollFocusedControlAboveKeyboard;
+      try
+        ScrollFocusedControlAboveKeyboard;
+      except
+      end;
     end);
   {$ENDIF}
+  TraceLog('OnEnter EXIT (handler complete)');
 end;
 
 procedure TTina4HTMLRender.HandleFormControlExit(Sender: TObject);
@@ -8406,9 +8621,118 @@ var
   KbSvc: IFMXVirtualKeyboardService;
   {$ENDIF}
 begin
+  TraceLog(Format('OnExit ENTRY sender=%p class=%s',
+    [Pointer(Sender), Sender.ClassName]));
   if Assigned(FOnExit) and (Sender is TControl) and
      GetFormControlNameValue(TControl(Sender), N, V) then
     FOnExit(Sender, N, V);
+
+  // Demote the just-defocused edit to ControlType.Styled so the
+  // native widget stops rendering above the FMX surface — overlays
+  // (side menus, modals) can paint cleanly over it. Deferred via
+  // ForceQueue so it runs AFTER the current focus event chain
+  // finishes (changing ControlType mid-event tears down the peer
+  // while there are live messages and FMX throws). Re-check focus
+  // inside the queued action: if a sibling control grabbed focus,
+  // skip the demote so the new edit doesn't get stuck Styled.
+  {$IF defined(ANDROID) or defined(IOS)}
+  // 2026-05-27 DIAG — focus-driven ControlType demote removed
+  // entirely. See HandleFormControlEnter comment.
+  if False and (Sender is TEdit) and
+     (TEdit(Sender).ControlType <> TControlType.Styled) then
+  begin
+    var EdRef := TEdit(Sender);
+    var GenSnap := FFormControlsGen;
+    TThread.ForceQueue(nil,
+      procedure
+      begin
+        try
+          if (FFormControlsGen <> GenSnap) then Exit; // control disposed
+          // Belt-and-braces: only proceed if the renderer still owns
+          // this control via FFormControls. A re-entrant code path
+          // could remove the control without bumping the gen.
+          var StillOwned := False;
+          for var Rec in FFormControls do
+            if Rec.Control = EdRef then
+            begin StillOwned := True; Break; end;
+          if not StillOwned then Exit;
+          if (not EdRef.IsFocused) and
+             (EdRef.ControlType <> TControlType.Styled) then
+            EdRef.ControlType := TControlType.Styled;
+        except
+        end;
+      end);
+  end
+  else if False and (Sender is TMemo) and
+          (TMemo(Sender).ControlType <> TControlType.Styled) then
+  begin
+    var MmRef := TMemo(Sender);
+    var GenSnap := FFormControlsGen;
+    TThread.ForceQueue(nil,
+      procedure
+      begin
+        try
+          if (FFormControlsGen <> GenSnap) then Exit;
+          var StillOwned := False;
+          for var Rec in FFormControls do
+            if Rec.Control = MmRef then
+            begin StillOwned := True; Break; end;
+          if not StillOwned then Exit;
+          if (not MmRef.IsFocused) and
+             (MmRef.ControlType <> TControlType.Styled) then
+            MmRef.ControlType := TControlType.Styled;
+        except
+        end;
+      end);
+  end;
+  {$ENDIF}
+
+  // RerenderOnFocus — when enabled, rebuild the entire form-control
+  // set if focus has truly left this renderer (i.e. went to a control
+  // outside our child tree, e.g. side menu, a button on the host
+  // frame, or nil). This dodges the Sunmi Android 11 refocus AV at
+  // SetControlType+0x0C: we replace every TEdit + presenter with
+  // brand-new instances before the user has a chance to tap back in.
+  // Deferred via ForceQueue so the focus event chain finishes first
+  // and Screen.FocusControl reflects the new focused control.
+  // FPendingRerender prevents reentrancy if multiple OnExit fires
+  // collapse onto the same queue tick.
+  if FRerenderOnFocus and (not FPendingRerender) then
+  begin
+    FPendingRerender := True;
+    TraceLog('OnExit queueing rerender-on-focus check');
+    TThread.ForceQueue(nil,
+      procedure
+      var
+        FocusedNow: TControl;
+        StillInRenderer: Boolean;
+      begin
+        try
+          FPendingRerender := False;
+          FocusedNow := nil;
+          if (Screen <> nil) then
+            FocusedNow := TControl(Screen.FocusControl);
+          // If focus landed on another control that we manage,
+          // skip — user just tabbed between fields.
+          StillInRenderer := False;
+          if Assigned(FocusedNow) then
+          begin
+            for var Rec in FFormControls do
+              if Rec.Control = FocusedNow then
+              begin StillInRenderer := True; Break; end;
+          end;
+          TraceLog(Format('OnExit deferred check focusedNow=%p stillIn=%s',
+            [Pointer(FocusedNow), BoolToStr(StillInRenderer, True)]));
+          if StillInRenderer then Exit;
+          // Focus has left the renderer — rebuild.
+          RebuildFormControlsPreservingValues;
+        except
+          on E: Exception do
+            TraceLog('OnExit deferred rerender EXCEPT: ' + E.ClassName +
+              ' ' + E.Message);
+        end;
+      end);
+  end;
 
   // Hide the VK when focus leaves an input and isn't landing on
   // another form control. Without this, tapping outside the render
@@ -8642,9 +8966,10 @@ begin
       // to sentence-case + regular alphabet; enterkeyhint still applies
       // even though Enter on a textarea usually inserts a newline.
       //Mem.KeyboardAutoCap := TAutoCapitalizationType.Sentences;
-      {$IF defined(ANDROID) or defined(IOS)}
-      Mem.ControlType := TControlType.Platform;
-      {$ENDIF}
+      // Native (ControlType.Platform) renders in its own Android view
+      // above the FMX OpenGL surface — breaks in-scene z-order with
+      // the side menu / modals. Stay styled. (See the matching TEdit
+      // branch above for full reasoning.)
       Ctl := Mem;
     end
     else if TN = 'select' then

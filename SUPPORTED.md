@@ -53,7 +53,9 @@ something isn't listed it's almost certainly a no-op or unimplemented.
 | `static` (default) | ✅ | |
 | `sticky` | ✅ | both axes — `top` to nearest scroll-ancestor's top, `left` to its left. Two-pass deep paint keeps sticky elements above non-sticky siblings. |
 | **`relative`** | ✅ | paint-only shift via top/left/right/bottom; siblings unaffected |
-| **`absolute`** | ✅ | out-of-flow; positioned against immediate parent's content area; left+right derives width |
+| **`absolute`** | ✅ | out-of-flow; positioned against immediate parent's content area; left+right derives width; top+bottom derives height |
+| **`top` / `right` / `bottom` / `left`** | ✅ | longhands |
+| **`inset`** shorthand | ✅ | 1/2/3/4-value pattern (like `margin`). `inset: 0` on an `absolute` child stretches it to fill the containing block. Per-side longhands declared after `inset` override the shorthand. |
 | **`fixed`** | ✅ | viewport-relative regardless of scroll |
 
 ### Float

@@ -3534,6 +3534,38 @@ begin
   if Decls.TryGetValue('bottom', Temp) and not ShouldSkip(Temp) then
     Style.CSSBottom := ParseLength(Temp, Style.FontSize);
 
+  // CSS `inset` shorthand for top/right/bottom/left. Same 1-2-3-4 value
+  // pattern as `margin` / `padding`:
+  //   1 value  -> all four sides
+  //   2 values -> top/bottom, left/right
+  //   3 values -> top, left/right, bottom
+  //   4 values -> top, right, bottom, left
+  // Most common usage is `inset: 0` to stretch an absolute child to fill
+  // its containing block. Without this, `inset:0` is silently dropped and
+  // authors are forced to write the four longhands explicitly.
+  // Per CSS cascade order, longhand `top` / `right` / `bottom` / `left`
+  // declarations after `inset` should win — but in practice we keep the
+  // longhand block ABOVE so authors who explicitly set both get the
+  // longhand value (a deliberate one-off override beats the shorthand).
+  if Decls.TryGetValue('inset', Temp) and not ShouldSkip(Temp) then
+  begin
+    var Parts := Temp.Trim.Split([' '], TStringSplitOptions.ExcludeEmpty);
+    var T, R, B, L: string;
+    case Length(Parts) of
+      1: begin T := Parts[0]; R := Parts[0]; B := Parts[0]; L := Parts[0]; end;
+      2: begin T := Parts[0]; B := Parts[0]; R := Parts[1]; L := Parts[1]; end;
+      3: begin T := Parts[0]; R := Parts[1]; L := Parts[1]; B := Parts[2]; end;
+    else
+      T := Parts[0]; R := Parts[1]; B := Parts[2]; L := Parts[3];
+    end;
+    // Only fill sides the longhand block didn't already set, so an
+    // explicit `top: 10px` after `inset: 0` keeps the 10px.
+    if Style.CSSTop    <= -9990 then Style.CSSTop    := ParseLength(T, Style.FontSize);
+    if Style.CSSRight  <= -9990 then Style.CSSRight  := ParseLength(R, Style.FontSize);
+    if Style.CSSBottom <= -9990 then Style.CSSBottom := ParseLength(B, Style.FontSize);
+    if Style.CSSLeft   <= -9990 then Style.CSSLeft   := ParseLength(L, Style.FontSize);
+  end;
+
   if Decls.TryGetValue('text-transform', Temp) and not ShouldSkip(Temp) then
     Style.TextTransform := Temp.ToLower;
 
@@ -6165,6 +6197,20 @@ begin
       DerivedW := CW - Child.Style.CSSLeft - Child.Style.CSSRight;
       if DerivedW < 0 then DerivedW := 0;
       Child.Style.ExplicitWidth := DerivedW;
+    end;
+
+    // Likewise if both `top` and `bottom` are set the height is derived.
+    // Without this, `inset:0` stretches width but the child still sits at
+    // its natural content height — so a `<span style="position:absolute;
+    // inset:0; background:red">` only paints red across the top portion
+    // of its container, not the full box. That's the difference between
+    // "absolute works" and "absolute works the way every author expects".
+    if (Child.Style.CSSTop > -9990) and (Child.Style.CSSBottom > -9990) and
+       (Child.Style.ExplicitHeight <= 0) then
+    begin
+      var DerivedH := CH - Child.Style.CSSTop - Child.Style.CSSBottom;
+      if DerivedH < 0 then DerivedH := 0;
+      Child.Style.ExplicitHeight := DerivedH;
     end;
 
     // Lay out the child at the containing-block width.

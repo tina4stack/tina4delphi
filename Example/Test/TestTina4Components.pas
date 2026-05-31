@@ -122,6 +122,7 @@ type
     procedure TestPositionRelativeShiftsButLeavesSiblings;
     procedure TestAbsoluteInsideInlineContentDoesNotStealSpace;
     procedure TestAbsoluteInsideTableCellPositioned;
+    procedure TestInsetShorthandStretchesAbsoluteChild;
     // Pseudo-classes (:hover/:active/:focus runtime matching)
     procedure TestHoverPseudoClassAppliesWhenFlagSet;
     procedure TestActivePseudoClassAppliesWhenFlagSet;
@@ -2429,6 +2430,41 @@ begin
       Format('cell badge X (left:3) expected 3, got %.1f', [Badge.X]));
     Check(Abs(Badge.Y - 2) < 2,
       Format('cell badge Y (top:2) expected 2, got %.1f', [Badge.Y]));
+  finally
+    Engine.Free;
+    Parser.Free;
+  end;
+end;
+
+procedure TestTTina4Components.TestInsetShorthandStretchesAbsoluteChild;
+var
+  Parser: Tina4HtmlRender.THTMLParser;
+  Engine: Tina4HtmlRender.TLayoutEngine;
+  Overlay: Tina4HtmlRender.TLayoutBox;
+begin
+  Parser := Tina4HtmlRender.THTMLParser.Create;
+  Engine := Tina4HtmlRender.TLayoutEngine.Create(nil);
+  try
+    // CSS `inset: 0` shorthand on an absolutely-positioned child should
+    // stretch it to FILL the containing block — both axes derived from
+    // the top/right/bottom/left = 0 anchors. Without the derivation, the
+    // span would have full width (left+right derive width — already
+    // worked) but only natural content height, painting just the top
+    // sliver. Common pattern for full-bleed overlays.
+    RunLayout(Parser, Engine,
+      '<div style="position:relative; width:200px; height:100px; padding:0">' +
+      '  <span id="ov" style="position:absolute; inset:0; padding:0">x</span>' +
+      '</div>', 400);
+
+    Overlay := FindBoxById(Engine.Root, 'ov');
+    Check(Assigned(Overlay), 'overlay box must exist');
+
+    // inset:0 → top/right/bottom/left all 0. With a 200x100 container
+    // the derived content size is 200x100.
+    Check(Abs(Overlay.ContentWidth - 200) < 1,
+      Format('inset:0 must stretch width to container: got %.1f, expected 200', [Overlay.ContentWidth]));
+    Check(Abs(Overlay.ContentHeight - 100) < 1,
+      Format('inset:0 must stretch height to container: got %.1f, expected 100', [Overlay.ContentHeight]));
   finally
     Engine.Free;
     Parser.Free;

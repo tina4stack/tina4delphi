@@ -132,7 +132,7 @@ const
 
 procedure TForm3.Button1Click(Sender: TObject);
 begin
-  Tina4HTMLRender1.HTML.LoadFromFile('..\..\test_all_features.html')
+  Tina4HTMLRender1.HTML.LoadFromFile('..\..\bootstrap_test.html')
 end;
 
 procedure TForm3.Button2Click(Sender: TObject);

@@ -6,6 +6,7 @@ uses
   System.SysUtils, System.Classes, System.SyncObjs, System.Net.Socket,
   System.Types, System.NetEncoding, System.Hash, System.DateUtils,
   {$IFDEF POSIX}Posix.NetDB, Posix.SysSocket, Posix.ArpaInet,{$ENDIF}
+  {$IFDEF IOS}Tina4iOSNetwork,{$ENDIF}
   Tina4OpenSSL, Tina4WebSocketFrames;
 
 type
@@ -66,6 +67,14 @@ type
 
     FSocket: TSocket;
     FSSL: TTina4SSLContext;
+    {$IFDEF IOS}
+    // On iOS the entire TCP+TLS transport is handed off to
+    // Network.framework via TTina4NWConnection. FSocket and FSSL stay
+    // nil. We keep them in the field list so call sites that read them
+    // continue to compile, but every code path that would touch them
+    // checks {$IFDEF IOS} first and routes through FNWConn instead.
+    FNWConn: TTina4NWConnection;
+    {$ENDIF}
     FUseTLS: Boolean;
     FHost: string;
     FPort: Integer;
@@ -362,17 +371,33 @@ begin
   if Assigned(FReadThread) then
   begin
     FReadThread.Terminate;
-    // Only close socket if networking is still available.
-    // During app finalization Winsock may already be torn down.
+    // Close transport so the read thread's blocking recv returns. On iOS
+    // the cancel signals through Network.framework; on other platforms
+    // we close the TSocket directly (winsock may already be torn down
+    // during finalization).
+    {$IFDEF IOS}
+    if Assigned(FNWConn) then
+    begin
+      try FNWConn.Close; except end;
+    end;
+    {$ELSE}
     if (not UnitFinalized) and Assigned(FSocket) then
     begin
       try FSocket.Close(True); except end;
     end;
+    {$ENDIF}
     try FReadThread.WaitFor; except end;
     FreeAndNil(FReadThread);
   end;
 
-  // 3. Shut down and free SSL (only if OpenSSL is still loaded)
+  // 3. Shut down and free TLS / transport
+  {$IFDEF IOS}
+  // iOS: TTina4NWConnection owns both TCP and TLS. Its Close (called
+  // above) already cancelled the Network.framework connection; here we
+  // free the wrapper.
+  if Assigned(FNWConn) then
+    FreeAndNil(FNWConn);
+  {$ELSE}
   if not UnitFinalized then
   begin
     if Assigned(FSSL) then
@@ -390,6 +415,7 @@ begin
     FSSL := nil;
     FSocket := nil;
   end;
+  {$ENDIF}
 
   FPingWake.Free;
   FWriteLock.Free;
@@ -520,6 +546,22 @@ begin
 end;
 
 procedure TTina4WebSocketClient.DoTCPConnect;
+{$IFDEF IOS}
+begin
+  // iOS path: Network.framework owns the whole TCP + TLS handshake. We
+  // skip TSocket + TTina4SSLContext entirely. TLS is established by
+  // TTina4NWConnection.Connect when FUseTLS is True, so DoTLSHandshake
+  // becomes a no-op on iOS.
+  FNWConn := TTina4NWConnection.Create;
+  if not FNWConn.Connect(FHost, FPort, FUseTLS) then
+  begin
+    var Err := FNWConn.LastError;
+    FreeAndNil(FNWConn);
+    if Err = '' then Err := 'Network.framework connect failed';
+    raise Exception.Create(Err);
+  end;
+end;
+{$ELSE}
 var
   Endpoint: TNetEndpoint;
   ResolvedIP: string;
@@ -540,8 +582,16 @@ begin
     end;
   end;
 end;
+{$ENDIF}
 
 procedure TTina4WebSocketClient.DoTLSHandshake;
+{$IFDEF IOS}
+begin
+  // iOS: TLS handshake already completed by TTina4NWConnection.Connect
+  // during DoTCPConnect (Network.framework wraps TCP + TLS into a single
+  // connection-establishment step). Nothing to do here.
+end;
+{$ELSE}
 var
   Err: string;
 begin
@@ -567,6 +617,7 @@ begin
       raise Exception.Create('TLS handshake failed');
   end;
 end;
+{$ENDIF}
 
 procedure TTina4WebSocketClient.DoWSHandshake;
 var
@@ -679,6 +730,18 @@ begin
   if FState in [wsClosed, wsClosing] then Exit;
   FWriteLock.Enter;
   try
+    {$IFDEF IOS}
+    if not Assigned(FNWConn) then Exit;
+    Total := Length(AData);
+    Sent := 0;
+    while Sent < Total do
+    begin
+      Ret := FNWConn.Send(@AData[Sent], Total - Sent);
+      if Ret <= 0 then
+        raise Exception.Create('Network.framework send failed');
+      Inc(Sent, Ret);
+    end;
+    {$ELSE}
     if not Assigned(FSocket) then Exit; // socket already freed
     Total := Length(AData);
     Sent := 0;
@@ -693,6 +756,7 @@ begin
         raise Exception.Create('Socket send failed');
       Inc(Sent, Ret);
     end;
+    {$ENDIF}
   finally
     FWriteLock.Leave;
   end;
@@ -706,6 +770,11 @@ begin
   Received := 0;
   while Received < ALen do
   begin
+    {$IFDEF IOS}
+    if not Assigned(FNWConn) then
+      raise Exception.Create('Network.framework connection closed');
+    Ret := FNWConn.Receive(@Result[Received], ALen - Received);
+    {$ELSE}
     if FUseTLS and Assigned(FSSL) then
       Ret := FSSL.Read(@Result[Received], ALen - Received)
     else
@@ -716,6 +785,7 @@ begin
       if Ret > 0 then
         Move(Buf[0], Result[Received], Ret);
     end;
+    {$ENDIF}
 
     if Ret <= 0 then
       raise Exception.Create('Socket receive failed');
@@ -871,7 +941,13 @@ begin
   if Assigned(FReadThread) then
     FReadThread.Terminate;
 
-  // 3. Close socket to unblock recv
+  // 3. Close transport to unblock the read thread's pending recv
+  {$IFDEF IOS}
+  if Assigned(FNWConn) then
+  begin
+    try FNWConn.Close; except end;
+  end;
+  {$ELSE}
   if Assigned(FSocket) then
   begin
     try
@@ -879,6 +955,7 @@ begin
     except
     end;
   end;
+  {$ENDIF}
 
   // 4. Join read thread
   if Assigned(FReadThread) and not CalledFromReader then
@@ -895,7 +972,13 @@ begin
     FReadThread := nil;
   end;
 
-  // 5. Shut down and free SSL (skip if OpenSSL DLL already unloaded)
+  // 5. Shut down + free transport
+  {$IFDEF IOS}
+  // Network.framework wrapper owns both TCP and TLS; close already
+  // cancelled the framework connection above.
+  if Assigned(FNWConn) then
+    FreeAndNil(FNWConn);
+  {$ELSE}
   if not UnitFinalized then
   begin
     if Assigned(FSSL) then
@@ -910,6 +993,7 @@ begin
     FSSL := nil;
     FSocket := nil;
   end;
+  {$ENDIF}
 
   // 7. Notify — but not during destruction (main thread may be gone)
   if not (csDestroying in ComponentState) then

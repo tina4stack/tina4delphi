@@ -66,6 +66,11 @@ type
 
     FSocket: TSocket;
     FSSL: TTina4SSLContext;
+    {$IFDEF IOS}
+    // On iOS, wss:// is handled end-to-end by Apple's Network.framework
+    // (TCP + TLS together) — there is no socket fd to wrap with OpenSSL.
+    FNWConn: TTina4NWConnection;
+    {$ENDIF}
     FUseTLS: Boolean;
     FHost: string;
     FPort: Integer;
@@ -368,6 +373,13 @@ begin
     begin
       try FSocket.Close(True); except end;
     end;
+    {$IFDEF IOS}
+    // Cancel the NW connection to unblock the read thread's pending receive.
+    if Assigned(FNWConn) then
+    begin
+      try FNWConn.Shutdown; except end;
+    end;
+    {$ENDIF}
     try FReadThread.WaitFor; except end;
     FreeAndNil(FReadThread);
   end;
@@ -390,6 +402,10 @@ begin
     FSSL := nil;
     FSocket := nil;
   end;
+  {$IFDEF IOS}
+  if Assigned(FNWConn) then
+    FreeAndNil(FNWConn);
+  {$ENDIF}
 
   FPingWake.Free;
   FWriteLock.Free;
@@ -500,6 +516,13 @@ begin
           FireError('Connect failed: ' + E.Message);
           // Clean up partial connection
           FreeAndNil(FSSL);
+          {$IFDEF IOS}
+          if Assigned(FNWConn) then
+          begin
+            try FNWConn.Shutdown; except end;
+            FreeAndNil(FNWConn);
+          end;
+          {$ENDIF}
           if Assigned(FSocket) then
           begin
             try
@@ -524,6 +547,22 @@ var
   Endpoint: TNetEndpoint;
   ResolvedIP: string;
 begin
+  {$IFDEF IOS}
+  // wss:// on iOS: Network.framework owns DNS + TCP + TLS in one step.
+  // ws:// falls through to the normal cross-platform TSocket path below.
+  if FUseTLS then
+  begin
+    FNWConn := TTina4NWConnection.Create;
+    if not FNWConn.Connect(FHost, FPort, True, FConnectTimeout) then
+    begin
+      var NWErr := FNWConn.GetLastError;
+      FreeAndNil(FNWConn);
+      raise Exception.Create('Network.framework connect failed: ' + NWErr);
+    end;
+    Exit;
+  end;
+  {$ENDIF}
+
   ResolvedIP := ResolveHostName(FHost);
   if ResolvedIP = '' then
     raise Exception.Create('DNS resolution failed for ' + FHost);
@@ -545,6 +584,11 @@ procedure TTina4WebSocketClient.DoTLSHandshake;
 var
   Err: string;
 begin
+  {$IFDEF IOS}
+  // Network.framework already completed the TLS handshake during connect.
+  if Assigned(FNWConn) then Exit;
+  {$ENDIF}
+
   FSSL := TTina4SSLContext.Create;
   FSSL.HostName := FHost;
   if not FSSL.Init(FSocket.Handle) then
@@ -679,11 +723,20 @@ begin
   if FState in [wsClosed, wsClosing] then Exit;
   FWriteLock.Enter;
   try
+    {$IFDEF IOS}
+    if (not Assigned(FSocket)) and (not Assigned(FNWConn)) then Exit;
+    {$ELSE}
     if not Assigned(FSocket) then Exit; // socket already freed
+    {$ENDIF}
     Total := Length(AData);
     Sent := 0;
     while Sent < Total do
     begin
+      {$IFDEF IOS}
+      if Assigned(FNWConn) then
+        Ret := FNWConn.Write(@AData[Sent], Total - Sent)
+      else
+      {$ENDIF}
       if FUseTLS and Assigned(FSSL) then
         Ret := FSSL.Write(@AData[Sent], Total - Sent)
       else
@@ -706,6 +759,11 @@ begin
   Received := 0;
   while Received < ALen do
   begin
+    {$IFDEF IOS}
+    if Assigned(FNWConn) then
+      Ret := FNWConn.Read(@Result[Received], ALen - Received)
+    else
+    {$ENDIF}
     if FUseTLS and Assigned(FSSL) then
       Ret := FSSL.Read(@Result[Received], ALen - Received)
     else
@@ -879,6 +937,14 @@ begin
     except
     end;
   end;
+  {$IFDEF IOS}
+  // Cancel the Network.framework connection so the read thread's pending
+  // receive completes and the thread can exit.
+  if Assigned(FNWConn) then
+  begin
+    try FNWConn.Shutdown; except end;
+  end;
+  {$ENDIF}
 
   // 4. Join read thread
   if Assigned(FReadThread) and not CalledFromReader then
@@ -910,6 +976,12 @@ begin
     FSSL := nil;
     FSocket := nil;
   end;
+  {$IFDEF IOS}
+  // Network.framework is a system framework — always safe to free, even at
+  // unit finalization (no DLL to have been unloaded).
+  if Assigned(FNWConn) then
+    FreeAndNil(FNWConn);
+  {$ENDIF}
 
   // 7. Notify — but not during destruction (main thread may be gone)
   if not (csDestroying in ComponentState) then

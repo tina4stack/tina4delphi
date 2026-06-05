@@ -8589,24 +8589,21 @@ begin
   if (MaxLenStr <> '') and TryStrToInt(MaxLenStr, MaxLen) and (MaxLen > 0) then
     Ed.MaxLength := MaxLen;
 
-  // 2026-05-27 — ControlType stays at FMX default (Styled) on
-  // Android. Platform mode produced THREE unfixable problems on
-  // Sunmi V2s (Android 11):
-  //   1. Bleed-through — native Android EditText renders in its own
-  //      view above the FMX OpenGL surface, so FMX overlays
-  //      (side menu, modals) cannot cover it.
-  //   2. Refocus AV — after the renderer Visible toggled, the stale
-  //      Platform presenter AV'd at SetControlType+0x0C on next
-  //      focus, even with every Tina4 focus/VK handler stripped.
-  //   3. Java proxy crash — tight DisposeOf/recreate cycles
-  //      (used to dodge #2) dangled the Android GestureDetector
-  //      proxy: NativeDispatchException 'onSingleTapConfirmed
-  //      not found' on the next user tap.
-  // Sticking with Styled fixes all three. KeyboardType is still
-  // honoured via IFMXVirtualKeyboardService on Styled controls, so
-  // numeric / tel / email keyboards still pop up correctly. Trade-off
-  // is no native autofill / native password mask — acceptable for
-  // HTML inputs which already manage their own presentation.
+  // ControlType decision is platform-specific. Android: stay Styled (the
+  // Sunmi V2s/Android 11 native EditText causes three unfixable bugs —
+  // bleed-through, refocus AV at SetControlType+0x0C, Java GestureDetector
+  // proxy crash; see the full write-up below for history). iOS: go
+  // Platform. With Styled on iOS, FMX.VirtualKeyboard.iOS attaches a
+  // UIToolbar with a blue "Done" UIBarButtonItem to the offscreen
+  // UITextField it uses as the keyboard responder — which surfaced as
+  // unwanted chrome above the keyboard for TestFlight users. The native
+  // UITextField that ControlType.Platform produces gets no automatic
+  // accessory bar, so the Done button doesn't appear. The iOS-specific
+  // Sunmi bugs don't exist on iOS so there's no downside to Platform
+  // mode there.
+  {$IFDEF IOS}
+  Ed.ControlType := TControlType.Platform;
+  {$ENDIF}
 end;
 
 procedure TTina4HTMLRender.HandleFormControlEnter(Sender: TObject);
@@ -9012,10 +9009,13 @@ begin
       // to sentence-case + regular alphabet; enterkeyhint still applies
       // even though Enter on a textarea usually inserts a newline.
       //Mem.KeyboardAutoCap := TAutoCapitalizationType.Sentences;
-      // Native (ControlType.Platform) renders in its own Android view
-      // above the FMX OpenGL surface — breaks in-scene z-order with
-      // the side menu / modals. Stay styled. (See the matching TEdit
-      // branch above for full reasoning.)
+      // ControlType: see the TEdit branch above for full reasoning.
+      // Android: stay Styled (the Sunmi V2s Platform-EditText bugs).
+      // iOS: Platform — avoids FMX's auto-attached keyboard accessory
+      // toolbar (the blue "Done" button TestFlight users were seeing).
+      {$IFDEF IOS}
+      Mem.ControlType := TControlType.Platform;
+      {$ENDIF}
       Ctl := Mem;
     end
     else if TN = 'select' then

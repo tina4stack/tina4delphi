@@ -13,6 +13,7 @@ This is not another framework for Delphi
   - Copy the appropriate DLLs next to your executable, or install system-wide:
     - **32-bit** DLLs (`libssl-3.dll`, `libcrypto-3.dll`) to `C:\Windows\SysWOW64` or next to your 32-bit exe
     - **64-bit** DLLs (`libssl-3-x64.dll`, `libcrypto-3-x64.dll`) to `C:\Windows\System32` or next to your 64-bit exe
+  - **iOS / iPadOS — no OpenSSL needed.** `wss://` on Apple devices uses Apple's [Network.framework](https://developer.apple.com/documentation/network) (built into iOS 12+ / iPadOS 13+) for TCP + TLS. No `.dylib` to ship, no static link, no Info.plist tweaks for typical setups. App Store reviewer-friendly. `LoadOpenSSL` returns `False` on iOS by design.
 
 ## Components
 
@@ -1108,7 +1109,16 @@ Template syntax supports: `{{ variable }}`, `{% if %}`, `{% for %}`, `{% include
 
 ## TTina4WebSocketClient -- WebSocket Client
 
-A cross-platform WebSocket client component using `System.Net.Socket` (no Indy dependency). Supports `ws://` and `wss://` (TLS via OpenSSL), auto-reconnect, custom headers, and ping/pong keep-alive.
+A cross-platform WebSocket client component using `System.Net.Socket` (no Indy dependency). Supports `ws://` and `wss://`, auto-reconnect, custom headers, and ping/pong keep-alive.
+
+TLS backend by platform:
+
+| Platform | TLS implementation | Library required |
+|---|---|---|
+| Windows / Linux / Android / macOS | OpenSSL (loaded at runtime via `Tina4OpenSSL`) | Yes — see the OpenSSL section below |
+| iOS / iPadOS | Apple Network.framework (`nw_connection_t`) | None — built into iOS |
+
+The developer-facing API is identical on every platform — set `URL := 'wss://your.host/path'`, call `Connect`, and the right backend is selected automatically. No `{$IFDEF IOS}` in your own code.
 
 ### Basic Usage (Console)
 
@@ -1223,9 +1233,9 @@ end;
 | `wsClosing` | Close handshake in progress |
 | `wsReconnecting` | Waiting to reconnect after unexpected disconnect |
 
-### OpenSSL / TLS
+### TLS — OpenSSL on most platforms, Network.framework on iOS
 
-The `Tina4OpenSSL` unit dynamically loads OpenSSL at runtime. No compile-time linking is required. The loader searches for libraries in this order:
+On Windows / Linux / Android / macOS the `Tina4OpenSSL` unit dynamically loads OpenSSL at runtime. No compile-time linking required. The loader searches for libraries in this order:
 
 | Platform | Libraries tried |
 |---|---|
@@ -1233,6 +1243,7 @@ The `Tina4OpenSSL` unit dynamically loads OpenSSL at runtime. No compile-time li
 | Windows 32-bit | `libssl-3.dll`, `libssl-1_1.dll`, `libssl-3-x64.dll`, `libssl-1_1-x64.dll` |
 | macOS | `libssl.3.dylib`, `libssl.1.1.dylib` |
 | Linux | `libssl.so.3`, `libssl.so.1.1` |
+| Android | `libssl.so`, `libcrypto.so` (must be packed into the APK as `lib/armeabi-v7a/...` or `lib/arm64-v8a/...`) |
 
 Pre-built OpenSSL 3.x DLLs are bundled in `lib/win32` and `lib/win64`. Copy the appropriate pair next to your executable if OpenSSL is not installed system-wide.
 
@@ -1246,6 +1257,33 @@ if LoadOpenSSL then
 else
   WriteLn('OpenSSL not found - wss:// will not work');
 ```
+
+#### iOS / iPadOS — Apple Network.framework
+
+`Tina4OpenSSL.LoadOpenSSL` deliberately returns `False` on iOS — Apple's code-signing policy forbids `dlopen` of arbitrary libraries, the system doesn't ship OpenSSL for apps to load, and bundling OpenSSL on iOS makes you responsible for shipping CVE patches on every release.
+
+Instead, `TTina4WebSocketClient` routes `wss://` connections through `TTina4NWConnection` — a Network.framework wrapper declared in `Tina4OpenSSL.pas`. It uses `nw_connection_t` (iOS 12+) which handles TCP, TLS, certificate validation against the system trust store, App Transport Security compliance, and TLS cipher-suite updates entirely through the OS.
+
+What a developer does to use `wss://` on iOS: **nothing extra**. Same code as every other platform:
+
+```delphi
+WS := TTina4WebSocketClient.Create(Self);
+WS.URL := 'wss://your.host/path';
+WS.Connect;
+WS.Send('hello');
+```
+
+No library to ship, no static link, no Info.plist tweaks for typical production setups (servers with public-CA-issued certificates Just Work). The TLS handshake validates against the iOS system trust store and inherits ATS rules automatically.
+
+**Caveats inherited from the Network.framework approach:**
+
+- System trust store only — self-signed certs aren't trusted unless installed in the device profile.
+- No client-certificate authentication (mTLS) helper yet.
+- Custom CA bundles aren't supported through the Tina4 API.
+
+For the common case — `wss://` against a server with a real cert — none of this matters.
+
+`TTina4WebSocketServer`'s TLS path remains OpenSSL-backed; running a TLS-enabled WebSocket server *on iOS* is not currently supported. iOS apps typically consume `wss://` rather than serve it, so this hasn't been a blocker in practice.
 
 
 
@@ -1483,3 +1521,5 @@ See the [claude-pascal-mcp](https://github.com/tina4stack/tina4delphi/tree/maste
 - 2026-03-02 TTina4WebSocketClient: New WebSocket client component with RFC 6455 protocol, `ws://` and `wss://` support
 - 2026-03-02 Tina4OpenSSL: New OpenSSL dynamic loader for TLS — supports OpenSSL 3.x and 1.1.x on Windows, macOS, Linux
 - 2026-03-02 Bundled OpenSSL 3.6.1 DLLs for Windows (32-bit in `lib/win32`, 64-bit in `lib/win64`)
+- 2026-06-05 TTina4WebSocketClient: Added iOS / iPadOS `wss://` support via Apple Network.framework (`TTina4NWConnection` in `Tina4OpenSSL.pas`, contributed by @mgreyling in PR #4). No OpenSSL on iOS — TLS handled by the OS against the system trust store. `LoadOpenSSL` returns `False` on iOS by design. Plain `ws://` continues to use `TSocket`. Same `URL := 'wss://...'` developer API as every other platform.
+- 2026-06-05 TTina4HTMLRender: Split `ControlType` IFDEF so iOS `TEdit` / `TMemo` go back to `TControlType.Platform`, hiding the FMX-attached blue "Done" toolbar above the on-screen keyboard. Android continues to use `TControlType.Styled` to work around Sunmi V2s bleed-through.

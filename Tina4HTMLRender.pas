@@ -12466,7 +12466,11 @@ begin
         Exit;
   {$ENDIF}
 
-  FNeedRelayout := True;
+  // CRITICAL: do NOT set FNeedRelayout here. It would make any Paint during
+  // the keyboard animation run a full DoLayout, whose bounds change triggers
+  // View.layout -> onLayoutChange -> onVirtualKeyboardFrameChanged AGAIN,
+  // re-entrant -> infinite recursion -> ANR. Only ResizeSettleTick marks the
+  // relayout, after the size stops changing. Taller keyboards expose this.
   // Coalesce: restart the settle timer instead of relaying out synchronously.
   // During the keyboard slide animation FMX fires many resize events; this
   // collapses them into a single relayout once the size settles, keeping the
@@ -12480,7 +12484,10 @@ begin
     FResizeTimer.Enabled := True;
   end
   else
+  begin
+    FNeedRelayout := True;
     Repaint;
+  end;
 end;
 
 end.

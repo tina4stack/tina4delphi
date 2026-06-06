@@ -677,6 +677,20 @@ type
     // starving input -> ANR on slow devices. Only one scroll may be in
     // flight at a time.
     FScrollAboveKbQueued: Boolean;
+    // Controls detached during a relayout while the soft keyboard was up,
+    // awaiting safe disposal. A focused TEdit must NOT be freed while the
+    // Android IME still holds its InputConnection (async release) — doing so
+    // crashes (sync) or hangs the IME (next-tick defer). We hold it here,
+    // detached from view, and free it only once the keyboard is confirmed
+    // DOWN (VKStateChange visible=False) — the definite IME-release point.
+    FPendingDispose: TArray<TControl>;
+    // Set by DoLayout to the currently-focused form control (and its DOM id)
+    // so a relayout REUSES it instead of disposing + recreating it. Keeps
+    // the Android IME bound to one live TEdit across an in-render value
+    // change / re-render (lookup result, live balance) — the core of the
+    // "transfer corrupts the IME, next screen crashes" fix.
+    FReuseCtl: TControl;
+    FReuseId: string;
     /// <summary>
     /// "We've already asked FMX to show the soft keyboard for the
     /// currently-focused input" flag. Set by RequestKeyboardShow when
@@ -717,6 +731,7 @@ type
     procedure OnImageLoaded(Sender: TObject);
     procedure DoLayout;
     procedure ClearFormControls;
+    procedure DrainPendingDispose;
     procedure CreateFormControls(Box: TLayoutBox; OffX, OffY: Single);
     function CreateStyledButton(Box: TLayoutBox; const BtnText: string): TControl;
     procedure PositionFormControls;
@@ -6842,6 +6857,7 @@ begin
   if Assigned(FScrollbarFadeTimer) then
     FScrollbarFadeTimer.Enabled := False;
   ClearFormControls;
+  DrainPendingDispose;  // free any control still queued for keyboard-down
   FFormControls.Free;
   FClickableRegions.Free;
   FRegisteredObjects.Free;
@@ -7611,10 +7627,54 @@ begin
     ClampScroll;
     FNeedRelayout := False;
 
-    // Create native FMX controls for form elements
+    // Create native FMX controls for form elements.
+    //
+    // REUSE the currently-focused input across this rebuild instead of
+    // disposing + recreating it. Disposing a TEdit that the Android IME has
+    // an active InputConnection to corrupts the IME for the next screen (the
+    // transfer -> Global Airtime crash). By capturing it here, having
+    // ClearFormControls leave it alone, and CreateFormControls re-adopt it
+    // (matched by stable DOM id), the IME stays bound to ONE live control
+    // through the whole relayout. Only used when the focused element still
+    // exists in the new layout (same id); if it's gone (step hidden), the
+    // post-rebuild block below hands it to the keyboard-down deferral.
+    FReuseCtl := nil;
+    FReuseId := '';
+    {$IF defined(ANDROID) or defined(IOS)}
+    for var RRec in FFormControls do
+      if (RRec.Control <> nil) and RRec.Control.IsFocused and
+         Assigned(RRec.Box) and Assigned(RRec.Box.Tag) then
+      begin
+        var Rid := RRec.Box.Tag.GetAttribute('id', '');
+        if Rid <> '' then
+        begin
+          FReuseCtl := RRec.Control;
+          FReuseId := Rid;
+        end;
+        Break;
+      end;
+    {$ENDIF}
+
     ClearFormControls;
     if Assigned(FLayoutEngine.Root) then
       CreateFormControls(FLayoutEngine.Root, 0, 0);
+
+    {$IF defined(ANDROID) or defined(IOS)}
+    // If CreateFormControls did NOT re-adopt the preserved control (its
+    // element is gone from the new layout — e.g. a transfer step was
+    // hidden), it's now orphaned and possibly still IME-bound. Detach it and
+    // hand it to the keyboard-down deferral so it's freed only once the IME
+    // has released (never synchronously here).
+    if Assigned(FReuseCtl) then
+    begin
+      FReuseCtl.Parent := nil;
+      if FReuseCtl.Owner = Self then
+        RemoveComponent(FReuseCtl);
+      FPendingDispose := FPendingDispose + [FReuseCtl];
+      FReuseCtl := nil;
+      FReuseId := '';
+    end;
+    {$ENDIF}
 
     // Flash scrollbars briefly on load so the user sees what's scrollable,
     // then let them fade out.
@@ -8260,6 +8320,20 @@ begin
     [FFormControls.Count]));
 end;
 
+procedure TTina4HTMLRender.DrainPendingDispose;
+var
+  Old: TArray<TControl>;
+begin
+  if Length(FPendingDispose) = 0 then Exit;
+  // Snapshot + clear first, so a re-entrant ClearFormControls during disposal
+  // doesn't see the same controls twice.
+  Old := FPendingDispose;
+  FPendingDispose := nil;
+  for var C in Old do
+    if C <> nil then
+      try C.DisposeOf; except end;
+end;
+
 procedure TTina4HTMLRender.ClearFormControls;
 begin
   TraceLog(Format('ClearFormControls count=%d gen=%d',
@@ -8303,13 +8377,14 @@ begin
   //      freed by a prior ClearFormControls, making the getter a
   //      use-after-free. Instead we detect focus via OUR OWN controls'
   //      IsFocused flag (always safe — reads the control's own field).
+  var FocusedCtl: TControl := nil;
   {$IF defined(ANDROID) or defined(IOS)}
-  var HaveFocused := False;
   for var I := 0 to FFormControls.Count - 1 do
     if (FFormControls[I].Control <> nil) and
        FFormControls[I].Control.IsFocused then
-    begin HaveFocused := True; Break; end;
-  if HaveFocused then
+    begin FocusedCtl := FFormControls[I].Control; Break; end;
+  // Leave FReuseCtl untouched (kept focused + IME-bound for reuse this pass).
+  if (FocusedCtl <> nil) and (FocusedCtl <> FReuseCtl) then
   begin
     TraceLog('ClearFormControls: focused ctl present — hide IME + clear focus');
     try
@@ -8325,12 +8400,21 @@ begin
     except
     end;
   end;
+  // If the keyboard is already DOWN, anything deferred earlier is safe now.
+  if (not FKeyboardVisible) and (Length(FPendingDispose) > 0) then
+    DrainPendingDispose;
   {$ENDIF}
 
+  // Dispose all tracked controls synchronously, EXCEPT the focused one —
+  // it is detached now and freed later (FPendingDispose, below).
   for var I := FFormControls.Count - 1 downto 0 do
   begin
-    FFormControls[I].Control.Parent := nil;
-    FFormControls[I].Control.DisposeOf;
+    var C := FFormControls[I].Control;
+    if C = nil then Continue;
+    if C = FReuseCtl then Continue;  // preserved for reuse: keep parented + bound
+    C.Parent := nil;
+    if C = FocusedCtl then Continue;
+    C.DisposeOf;
   end;
   FFormControls.Clear;
 
@@ -8339,6 +8423,8 @@ begin
   for var I := ControlsCount - 1 downto 0 do
   begin
     var C := Controls[I];
+    if C = FReuseCtl then Continue;  // preserved for reuse
+    if C = FocusedCtl then Continue;
     if (C is TEdit) or (C is TButton) or (C is TMemo) or (C is TComboBox)
       or (C is TCheckBox) or (C is TRadioButton) or (C is TRectangle)
       or (C is TLayout) then
@@ -8347,6 +8433,26 @@ begin
       C.DisposeOf;
     end;
   end;
+
+  {$IF defined(ANDROID) or defined(IOS)}
+  // Defer the focused (IME-bound) control: detach from view now, transfer
+  // ownership out of Self (so the destructor can't double-free it), and hold
+  // it in FPendingDispose. It is freed only when the keyboard is confirmed
+  // DOWN (VKStateChangeHandler -> DrainPendingDispose) — the definite IME
+  // release point. Freeing it while the IME is still bound crashes the
+  // process (sync) or hangs the IME on the next focus (early defer); waiting
+  // for keyboard-down avoids both. This is what makes the Transfer screen's
+  // step transitions (which dispose focused inputs) stop corrupting the IME
+  // for the next screen (the transfer -> Global Airtime crash). FReuseCtl is
+  // excluded: it is being preserved for reuse, not removed.
+  if (FocusedCtl <> nil) and (FocusedCtl <> FReuseCtl) then
+  begin
+    FocusedCtl.Parent := nil;
+    if FocusedCtl.Owner = Self then
+      RemoveComponent(FocusedCtl);
+    FPendingDispose := FPendingDispose + [FocusedCtl];
+  end;
+  {$ENDIF}
 end;
 
 function TTina4HTMLRender.GetFormControlNameValue(Control: TControl;
@@ -8784,6 +8890,17 @@ begin
     // — typing → tapping Lookup → error re-stamp → keyboard back
     // — is now handled by the user re-tapping the input. One tap
     // is cheaper than the IME-stuck-up bug we introduced.
+
+    // Keyboard is fully DOWN now -> the Android IME has released its
+    // InputConnection. Free any focused TEdit we detached during a relayout
+    // while the keyboard was up (held in FPendingDispose to avoid freeing it
+    // mid-IME-bind, which crashes/hangs on the Sunmi V2s). Deferred a tick so
+    // the current message completes first. Runs for every renderer, so each
+    // drains its OWN pending list (e.g. the Transfer renderer frees the
+    // inputs it disposed across its step transitions, leaving the IME clean
+    // for the next screen -> the transfer -> Global Airtime crash fix).
+    if Length(FPendingDispose) > 0 then
+      TThread.ForceQueue(nil, procedure begin DrainPendingDispose; end);
   end;
   // CRITICAL (2026-06-06, Sunmi V2s keyboard-frame ANR):
   // TVKStateChangeMessage is a GLOBAL broadcast — EVERY live
@@ -9481,18 +9598,38 @@ begin
       end
       else
       begin
-        var Ed := TEdit.Create(Self);
-        if InputType = 'password' then Ed.Password := True;
-        Ed.TextPrompt := Placeholder;
-        if Val <> '' then Ed.Text := Val;
-        Ed.OnChange  := HandleFormControlChange;
-        Ed.OnEnter   := HandleFormControlEnter;
-        Ed.OnExit    := HandleFormControlExit;
-        Ed.OnKeyDown := HandleFormControlKeyDown;
-        // Translate HTML attributes (type / inputmode / enterkeyhint /
-        // autocapitalize / maxlength) into FMX keyboard properties so
-        // the mobile soft keyboard comes up with the right layout.
-        ApplyHtmlInputAttrsToEdit(Box, Ed);
+        var Ed: TEdit := nil;
+        {$IF defined(ANDROID) or defined(IOS)}
+        // REUSE the preserved focused control if this is its element (same
+        // DOM id). Re-adopting the SAME live TEdit means the Android IME's
+        // InputConnection is never broken across this relayout — the fix for
+        // the "in-render change disposes the IME-bound input -> next screen
+        // crashes" bug. Keep its current Text (what the user has typed) and
+        // its already-wired handlers; just clear the reuse slot so it's not
+        // double-adopted, and skip ApplyHtmlInputAttrsToEdit (unchanged).
+        if Assigned(FReuseCtl) and (FReuseCtl is TEdit) and (FReuseId <> '') and
+           Assigned(Box.Tag) and (Box.Tag.GetAttribute('id', '') = FReuseId) then
+        begin
+          Ed := TEdit(FReuseCtl);
+          FReuseCtl := nil;
+          FReuseId := '';
+        end;
+        {$ENDIF}
+        if Ed = nil then
+        begin
+          Ed := TEdit.Create(Self);
+          if InputType = 'password' then Ed.Password := True;
+          Ed.TextPrompt := Placeholder;
+          if Val <> '' then Ed.Text := Val;
+          Ed.OnChange  := HandleFormControlChange;
+          Ed.OnEnter   := HandleFormControlEnter;
+          Ed.OnExit    := HandleFormControlExit;
+          Ed.OnKeyDown := HandleFormControlKeyDown;
+          // Translate HTML attributes (type / inputmode / enterkeyhint /
+          // autocapitalize / maxlength) into FMX keyboard properties so
+          // the mobile soft keyboard comes up with the right layout.
+          ApplyHtmlInputAttrsToEdit(Box, Ed);
+        end;
         Ctl := Ed;
       end;
     end

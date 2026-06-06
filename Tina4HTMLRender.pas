@@ -7457,29 +7457,16 @@ end;
 procedure TTina4HTMLRender.UpdateBoxTextInPlace(Box: TLayoutBox;
   const NewText: string);
 
-  procedure ReplaceFragments(B: TLayoutBox; const Txt: string);
+  // AvailW is the width available to B's fragment, measured from B's own X to
+  // the right edge of its formatting context. We re-apply text-align WITHIN
+  // that width so a right-aligned / centred value stays put as its width
+  // changes — without a full relayout (which we can't do here: the amount
+  // input is focused). The layout engine right-aligns the same way (shift =
+  // AvailWidth - lineRight); computing it from the box geometry directly is
+  // robust, where preserving the old fragment's edge drifted.
+  procedure ReplaceFragments(B: TLayoutBox; const Txt: string; AvailW: Single);
   begin
     if not Assigned(B) or not Assigned(B.Fragments) then Exit;
-
-    // Capture the OUTGOING fragment's alignment anchor before we clear it.
-    // The layout engine right-aligns (text-align: right / Trailing) by
-    // shifting the fragment so its RIGHT edge sits at the content edge, and
-    // centres by anchoring the MIDPOINT. An in-place text swap that just
-    // reset Frag.X := 0 threw that shift away, so a right-aligned value
-    // (e.g. the live Closing Balance while typing an amount) snapped to the
-    // LEFT every keystroke. Preserve the anchor instead: keep the right
-    // edge for Trailing, the midpoint for Center, the left edge otherwise —
-    // so the value stays put as its width changes, without a full relayout
-    // (which we can't do here because the amount input is focused).
-    var HadFrag := B.Fragments.Count > 0;
-    var OldX: Single := 0;
-    var OldW: Single := 0;
-    if HadFrag then
-    begin
-      OldX := B.Fragments[0].X;
-      OldW := B.Fragments[0].W;
-    end;
-
     B.Fragments.Clear;
     var Frag: TTextFragment;
     Frag.Text := Txt;
@@ -7487,33 +7474,30 @@ procedure TTina4HTMLRender.UpdateBoxTextInPlace(Box: TLayoutBox;
     Frag.W := FLayoutEngine.MeasureTextWidth(Txt, B.Style);
     Frag.H := FLayoutEngine.GetLineHeight(B.Style);
     Frag.X := 0;
-    if HadFrag then
-    begin
+    if (AvailW > 0) and (Frag.W < AvailW) then
       case B.Style.TextAlign of
-        TTextAlign.Trailing: Frag.X := (OldX + OldW) - Frag.W;        // keep right edge
-        TTextAlign.Center:   Frag.X := (OldX + OldW / 2) - Frag.W / 2; // keep centre
-      else
-        Frag.X := OldX;                                               // keep left edge
+        TTextAlign.Trailing: Frag.X := AvailW - Frag.W;
+        TTextAlign.Center:   Frag.X := (AvailW - Frag.W) / 2;
       end;
-      if Frag.X < 0 then Frag.X := 0;
-    end;
+    if Frag.X < 0 then Frag.X := 0;
     B.Fragments.Add(Frag);
   end;
 
 begin
   if not Assigned(Box) then Exit;
-  // The visible text of an element lives in its #text child box's
-  // fragments. Find the first such child and replace its fragments
-  // with a single measured fragment carrying NewText.
+  // The visible text of an element lives in its #text child box's fragments.
+  // The child's fragment X is relative to the child's own X, so the width
+  // available for right/centre alignment is the parent's content width minus
+  // where the child starts.
   for var Child in Box.Children do
     if (Child.Tag <> nil) and (Child.Tag.TagName = '#text') then
     begin
       Child.Tag.Text := NewText;
-      ReplaceFragments(Child, NewText);
+      ReplaceFragments(Child, NewText, Box.ContentWidth - Child.X);
       Exit;
     end;
-  // No #text child — the box may carry its own fragments directly.
-  ReplaceFragments(Box, NewText);
+  // No #text child — the box carries its own fragments directly.
+  ReplaceFragments(Box, NewText, Box.ContentWidth);
 end;
 
 procedure TTina4HTMLRender.SetElementStyle(const Id, StyleProp, StyleValue: string);

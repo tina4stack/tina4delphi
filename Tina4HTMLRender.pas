@@ -614,6 +614,13 @@ type
     // compositor (sync-point timeout -> process killed). Restart this short
     // timer on every resize and relayout only ONCE after the size settles.
     FResizeTimer: TTimer;
+    // Set when a settle-timer relayout was suppressed because the soft keyboard
+    // was up (a keyboard-driven resize needs no relayout — the HTML content
+    // doesn't reflow for a keyboard overlay). Serviced once on keyboard-down so
+    // any genuine geometry change that happened to land during the keyboard
+    // window is still reflected. Defeats the N-renderer relayout storm that
+    // saturates the MTK surface transaction and steals focus mid-IME-bind.
+    FRelayoutAfterKbd: Boolean;
     FScrollBarsVisible: Boolean;
     FScrollBarOverlay: Boolean;
     // Preserves per-box ScrollX/ScrollY across relayouts. The layout tree is
@@ -676,6 +683,16 @@ type
     // shrinks Self.Height so the math falls through naturally).
     FKeyboardVisible: Boolean;
     FKeyboardBounds: TRect;
+    // The native input the Android IME is (or is about to be) bound to. Set
+    // from OnEnter (the focus tap that starts the IME bind) and held until the
+    // keyboard is confirmed DOWN (VKStateChangeHandler visible=False = IME
+    // released). FKeyboardVisible alone is NOT enough: it only goes True once
+    // the keyboard is fully up, leaving the slide-up window (IME binding, but
+    // FKeyboardVisible still False) unguarded — and that is exactly when a
+    // relayout storm disposed a just-tapped, just-blurred input out from under
+    // the binding IME and killed the process. ClearFormControls never frees
+    // this control inline; it defers it to keyboard-down like the focused one.
+    FImeBoundCtl: TControl;
     FVKSubscriptionId: Integer;
     // Coalescing flag for ScrollFocusedControlAboveKeyboard. FMX re-fires
     // the virtual-keyboard frame-change message on every decor-view layout
@@ -7652,6 +7669,33 @@ begin
         end;
         Break;
       end;
+    // CRITICAL (2026-06-06, Sunmi V2s mid-bind dispose crash): if nothing is
+    // focused right now but the IME is still bound to a control we own
+    // (FImeBoundCtl — set on the focus tap, held until keyboard-down), reuse
+    // THAT control too. The keyboard slide-up briefly drops focus from the
+    // just-tapped input (OnExit) a few ms before a relayout storm; without
+    // this, ClearFormControls would detach (Parent:=nil) and free a control
+    // the Android IME's InputConnection is still bound to -> silent process
+    // death with no tombstone. Reusing it keeps it parented + bound + intact
+    // across the rebuild (re-adopted by stable id in CreateFormControls),
+    // exactly like the focused-control case. Only when its element survives in
+    // the new layout (same id); if gone, the post-rebuild block defers it.
+    if (FReuseCtl = nil) and Assigned(FImeBoundCtl) then
+      for var RRec in FFormControls do
+        if (RRec.Control = FImeBoundCtl) and
+           Assigned(RRec.Box) and Assigned(RRec.Box.Tag) then
+        begin
+          var Rid := RRec.Box.Tag.GetAttribute('id', '');
+          if Rid <> '' then
+          begin
+            FReuseCtl := RRec.Control;
+            FReuseId := Rid;
+            TraceLog('DoLayout: reusing IME-bound (blurred) ctl id=' + Rid);
+          end;
+          Break;
+        end;
+    TraceLog(Format('DoLayout pre-clear: reuse=%p reuseId=%s imebound=%p fcount=%d',
+      [Pointer(FReuseCtl), FReuseId, Pointer(FImeBoundCtl), FFormControls.Count]));
     {$ENDIF}
 
     ClearFormControls;
@@ -8413,6 +8457,41 @@ begin
     if C = FReuseCtl then Continue;  // preserved for reuse: keep parented + bound
     C.Parent := nil;
     if C = FocusedCtl then Continue;
+    {$IF defined(ANDROID) or defined(IOS)}
+    // CRITICAL (2026-06-06, Sunmi V2s silent crash entering an input screen):
+    // While the soft keyboard is UP, the Android IME may still hold a live
+    // InputConnection to a TEdit that only JUST lost focus — focus leaves the
+    // old input the instant the keyboard pops / the next screen autofocuses,
+    // BEFORE the IME rebinds. That control is no longer IsFocused, so it is
+    // not the FocusedCtl captured above, yet DisposeOf-ing it out from under
+    // the bound IME kills the process with no exception and no tombstone
+    // (debuggerd locked down). Observed as: POS -> 1Voucher (or Global
+    // Airtime), its autofocus input pops the keyboard, a relayout storm runs
+    // ClearFormControls, and a just-unfocused IME-bound TEdit is freed -> die.
+    // So while the keyboard is up — OR is mid-bind to this control (tapped but
+    // VKStateChange not yet fired: FImeBoundCtl) — NEVER free an IME-capable
+    // control inline; detach it, take it out of Self's ownership, and defer to
+    // FPendingDispose (drained on keyboard-down, the definite IME-release
+    // point). The FImeBoundCtl clause closes the slide-up window that
+    // FKeyboardVisible alone misses.
+    // Defer when the keyboard is up OR ANY input in this renderer is IME-bound /
+    // binding (FImeBoundCtl set, held from the focus tap until keyboard-down).
+    // It is not enough to spare only the bound control: freeing a SIBLING
+    // input during the focus transition disturbs the FMX focus / Android IME
+    // InputConnection chain and kills the process just the same (observed:
+    // tapping txAmount, then a relayout frees lookupNo -> die). So while any
+    // input here is IME-active, defer EVERY IME-capable control to keyboard-down.
+    if ((C is TEdit) or (C is TMemo)) and (FKeyboardVisible or Assigned(FImeBoundCtl)) then
+    begin
+      if C.Owner = Self then RemoveComponent(C);
+      FPendingDispose := FPendingDispose + [C];
+      Continue;
+    end;
+    if (C is TEdit) or (C is TMemo) then
+      TraceLog(Format('ClearFormControls: INLINE FREE edit=%p imebound=%p reuse=%p kbd=%s',
+        [Pointer(C), Pointer(FImeBoundCtl), Pointer(FReuseCtl),
+         BoolToStr(FKeyboardVisible, True)]));
+    {$ENDIF}
     C.DisposeOf;
   end;
   FFormControls.Clear;
@@ -8429,6 +8508,17 @@ begin
       or (C is TLayout) then
     begin
       C.Parent := nil;
+      {$IF defined(ANDROID) or defined(IOS)}
+      // Same keyboard-up / IME-active deferral as the tracked loop: while any
+      // input here is IME-bound/binding, freeing ANY IME-capable control (even
+      // an untracked lingering one) can disturb the IME chain. Defer to kbd-down.
+      if ((C is TEdit) or (C is TMemo)) and (FKeyboardVisible or Assigned(FImeBoundCtl)) then
+      begin
+        if C.Owner = Self then RemoveComponent(C);
+        FPendingDispose := FPendingDispose + [C];
+        Continue;
+      end;
+      {$ENDIF}
       C.DisposeOf;
     end;
   end;
@@ -8811,7 +8901,7 @@ const
   MIN_CLEARANCE_PX     = 48;   // Material touch-target min
 var
   FocusedCtl: TControl;
-  Overlap, Clearance: Single;
+  Overlap, Clearance, CtlBottom, KbTop: Single;
   TargetId: string;
   Scr: TCommonCustomForm;
 begin
@@ -8826,6 +8916,30 @@ begin
   if Scr <> nil then
     FocusedCtl := TControl(Scr.Focused);  // may be nil
   if FocusedCtl = nil then Exit;
+
+  // GetKeyboardOverlapHeight above only tells us the keyboard covers the
+  // RENDERER's rect (the full-screen frame is always covered at the bottom).
+  // That is NOT the same as the focused INPUT being occluded. Measure the
+  // focused control's own on-screen bottom against the keyboard top: if the
+  // input already sits entirely above the keyboard there is nothing to
+  // scroll. Crucially this avoids a spurious ScrollToElement ->
+  // PositionFormControls + Repaint firing DURING the keyboard's window-surface
+  // transaction — the exact moment the MTK compositor stalls on. On Android
+  // (adjustResize) the window shrinks when the IME appears, so a focused input
+  // is almost never truly occluded and this gate skips the scroll entirely.
+  CtlBottom := 0;
+  try
+    CtlBottom := FocusedCtl.AbsoluteRect.Bottom;
+  except
+    CtlBottom := 0;
+  end;
+  KbTop := TRectF.Create(FKeyboardBounds).Top;
+  if (CtlBottom > 0) and (KbTop > 0) and (CtlBottom <= KbTop + 1) then
+  begin
+    TraceLog(Format('ScrollAboveKb: focused ctl already above kb ' +
+      '(ctlBottom=%.0f kbTop=%.0f) — skip scroll', [CtlBottom, KbTop]));
+    Exit;
+  end;
 
   // Walk our form-control list to find the focused one and grab its id.
   // If the author didn't give the input an id we can't address it in
@@ -8857,6 +8971,8 @@ begin
   // No follow-up ScrollBy — the old version layered a ScrollBy on
   // top of an already-valid scroll position and over-shot into the
   // gutter, which is why the keyboard kept dismissing itself.
+  TraceLog(Format('ScrollAboveKb: scrolling id=%s (overlap=%.0f clearance=%.0f)',
+    [TargetId, Overlap, Clearance]));
   ScrollToElement(TargetId, Overlap + Clearance + KEYBOARD_PADDING_PX);
 end;
 
@@ -8874,6 +8990,11 @@ begin
   else
   begin
     FKeyboardBounds := TRect.Empty;
+    // Keyboard is fully DOWN -> the IME has released its InputConnection, so
+    // the control it was bound to is safe to free inline again. Clear the
+    // IME-target pointer (its disposal will be drained below via
+    // DrainPendingDispose if it was deferred).
+    FImeBoundCtl := nil;
     // Keyboard went down — clear the "we asked" flag so the next
     // focus event is free to fire ShowVirtualKeyboard again.
     FKbdShowAsked := False;
@@ -8900,6 +9021,24 @@ begin
     // for the next screen -> the transfer -> Global Airtime crash fix).
     if Length(FPendingDispose) > 0 then
       TThread.ForceQueue(nil, procedure begin DrainPendingDispose; end);
+
+    // Service any relayout that ResizeSettleTick deferred while the keyboard
+    // was up. The keyboard is fully down now: the window is back to its
+    // pre-keyboard size, the IME has released, and nothing is focused — so a
+    // DoLayout here is safe and reflects any genuine geometry change that
+    // landed during the keyboard window. Deferred a tick so the current VK
+    // message finishes first. ParentedVisible-gated inside Paint/DoLayout.
+    if FRelayoutAfterKbd then
+    begin
+      FRelayoutAfterKbd := False;
+      TThread.ForceQueue(nil,
+        procedure
+        begin
+          if csDestroying in ComponentState then Exit;
+          FNeedRelayout := True;
+          Repaint;
+        end);
+    end;
   end;
   // CRITICAL (2026-06-06, Sunmi V2s keyboard-frame ANR):
   // TVKStateChangeMessage is a GLOBAL broadcast — EVERY live
@@ -9199,6 +9338,15 @@ var
 begin
   TraceLog(Format('OnEnter ENTRY sender=%p class=%s',
     [Pointer(Sender), Sender.ClassName]));
+  {$IF defined(ANDROID) or defined(IOS)}
+  // Remember which control the IME is now binding to. The bind starts HERE
+  // (the focus tap), well before VKStateChangeHandler reports the keyboard
+  // visible. Held until keyboard-down so ClearFormControls won't free this
+  // control inline during the slide-up window (the Transfer/1Voucher/Global
+  // Airtime mid-bind dispose crash).
+  if (Sender is TEdit) or (Sender is TMemo) then
+    FImeBoundCtl := TControl(Sender);
+  {$ENDIF}
   if Assigned(FOnEnter) and (Sender is TControl) and
      GetFormControlNameValue(TControl(Sender), N, V) then
     FOnEnter(Sender, N, V);
@@ -12398,6 +12546,32 @@ procedure TTina4HTMLRender.ResizeSettleTick(Sender: TObject);
 begin
   FResizeTimer.Enabled := False;
   if csDestroying in ComponentState then Exit;
+  {$IF defined(ANDROID) or defined(IOS)}
+  // CRITICAL (2026-06-06, Sunmi V2s multi-renderer relayout storm crash):
+  // If the soft keyboard is up, the resize that armed this timer was the
+  // keyboard's window-surface shrink (adjustResize). Relaying out NOW runs a
+  // full DoLayout (ClearFormControls + CreateFormControls) on EVERY
+  // ParentedVisible renderer at once — the heavy POS grid still visible under
+  // an input overlay, plus any sibling overlays. On a slow MTK GPU that N-way
+  // storm, fired during the keyboard's in-flight surface transaction, either
+  // stalls the compositor (sync-point timeout -> process killed, no tombstone)
+  // or briefly steals focus from the input that just popped the keyboard,
+  // leaving its IME-bound TEdit unguarded and disposed -> silent native crash.
+  // Reproduced: POS -> 1Voucher, its autofocus pops the keyboard, ~70ms later
+  // 5+ ClearFormControls fire across renderers -> crash.
+  //
+  // A keyboard overlay does NOT change the HTML layout (the content just gets
+  // covered / scrolled), so this relayout buys nothing. Defer it: mark
+  // FRelayoutAfterKbd and do it ONCE when the keyboard goes back down
+  // (VKStateChangeHandler), when the IME has released and no input is focused.
+  if FKeyboardVisible then
+  begin
+    TraceLog('ResizeSettleTick: kbd up — defer relayout to kbd-down');
+    FRelayoutAfterKbd := True;
+    Exit;
+  end;
+  {$ENDIF}
+  TraceLog('ResizeSettleTick: relayout now');
   FNeedRelayout := True;
   Repaint;
 end;

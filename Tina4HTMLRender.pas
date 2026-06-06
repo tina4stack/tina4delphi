@@ -607,6 +607,13 @@ type
     // repaints.
     FScrollbarLastActivity: Cardinal;
     FScrollbarFadeTimer: TTimer;
+    // Coalesces resize-driven relayouts. The soft-keyboard slide animation
+    // fires many resize events; relaying out (esp. the heavy POS grid still
+    // visible under an overlay) on each one saturates the UI thread during
+    // the keyboard's window-surface transaction and stalls the MTK
+    // compositor (sync-point timeout -> process killed). Restart this short
+    // timer on every resize and relayout only ONCE after the size settles.
+    FResizeTimer: TTimer;
     FScrollBarsVisible: Boolean;
     FScrollBarOverlay: Boolean;
     // Preserves per-box ScrollX/ScrollY across relayouts. The layout tree is
@@ -732,6 +739,7 @@ type
     procedure DoLayout;
     procedure ClearFormControls;
     procedure DrainPendingDispose;
+    procedure ResizeSettleTick(Sender: TObject);
     procedure CreateFormControls(Box: TLayoutBox; OffX, OffY: Single);
     function CreateStyledButton(Box: TLayoutBox; const BtnText: string): TControl;
     procedure PositionFormControls;
@@ -6731,6 +6739,11 @@ begin
   FInertiaTimer.Interval := 16;  // ~60 fps
   FInertiaTimer.Enabled := False;
   FInertiaTimer.OnTimer := InertiaTimerTick;
+  // Resize-relayout coalescing — see FResizeTimer declaration.
+  FResizeTimer := TTimer.Create(Self);
+  FResizeTimer.Interval := 90;
+  FResizeTimer.Enabled := False;
+  FResizeTimer.OnTimer := ResizeSettleTick;
   FInertiaBox := nil;
   FScrollBarsVisible := True;
   FScrollBarOverlay := False;
@@ -6856,6 +6869,8 @@ begin
       TVKStateChangeMessage, FVKSubscriptionId);
   if Assigned(FScrollbarFadeTimer) then
     FScrollbarFadeTimer.Enabled := False;
+  if Assigned(FResizeTimer) then
+    FResizeTimer.Enabled := False;
   ClearFormControls;
   DrainPendingDispose;  // free any control still queued for keyboard-down
   FFormControls.Free;
@@ -12379,6 +12394,14 @@ end;
 // Keeping the override stub so the class compiles if InteractiveGestures
 // were ever re-enabled, but it just calls inherited.
 
+procedure TTina4HTMLRender.ResizeSettleTick(Sender: TObject);
+begin
+  FResizeTimer.Enabled := False;
+  if csDestroying in ComponentState then Exit;
+  FNeedRelayout := True;
+  Repaint;
+end;
+
 procedure TTina4HTMLRender.Resize;
 begin
   inherited;
@@ -12444,7 +12467,20 @@ begin
   {$ENDIF}
 
   FNeedRelayout := True;
-  Repaint;
+  // Coalesce: restart the settle timer instead of relaying out synchronously.
+  // During the keyboard slide animation FMX fires many resize events; this
+  // collapses them into a single relayout once the size settles, keeping the
+  // UI thread free for the keyboard's window-surface transaction (the MTK
+  // sync-point-timeout stall fix). The active focused renderer never gets
+  // here (focus guard above); this mainly spares the heavy POS grid that is
+  // still visible underneath an input overlay.
+  if Assigned(FResizeTimer) then
+  begin
+    FResizeTimer.Enabled := False;
+    FResizeTimer.Enabled := True;
+  end
+  else
+    Repaint;
 end;
 
 end.

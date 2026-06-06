@@ -622,6 +622,24 @@ type
     FFormControlsGen: NativeUInt;
     FClickableRegions: TList<TClickableRegion>;
     FRegisteredObjects: TDictionary<string, TObject>;
+    /// <summary>
+    /// Long-lived TRttiContext shared across every onclick="Object:Method()"
+    /// dispatch. Pre-2026-06-05 we created+freed a per-call TRttiContext
+    /// inside FireOnClick, but TRttiContext is a record wrapper over a
+    /// REFERENCE-COUNTED pool — if the invoked method (e.g. an
+    /// HtmlBackClick handler) itself uses RTTI on any code path, the
+    /// nested Create/Free can drop the pool ref count to zero mid-call
+    /// and invalidate the TRttiMethod we're holding. The next time
+    /// anything tries to dereference it (or the Delphi RTL tries to
+    /// destroy the now-orphaned TRttiObject during teardown), we crash
+    /// with EAccessViolation followed by
+    ///     EInvalidOpException: RTTI objects cannot be manually destroyed
+    ///     by application code
+    /// Owning the context for the renderer's whole lifetime keeps the
+    /// pool ref count >= 1 throughout, so no nested Create/Free can
+    /// ever drop it to zero while a dispatch is in flight.
+    /// </summary>
+    FRttiCtx: TRttiContext;
     FOnChange: THTMLFormControlEvent;
     FOnClick: THTMLFormControlEvent;
     FOnEnter: THTMLFormControlEvent;
@@ -652,6 +670,34 @@ type
     FKeyboardVisible: Boolean;
     FKeyboardBounds: TRect;
     FVKSubscriptionId: Integer;
+    // Coalescing flag for ScrollFocusedControlAboveKeyboard. FMX re-fires
+    // the virtual-keyboard frame-change message on every decor-view layout
+    // change (every frame of the keyboard slide-in animation). Without
+    // this, each fire queues another scroll, flooding the message loop and
+    // starving input -> ANR on slow devices. Only one scroll may be in
+    // flight at a time.
+    FScrollAboveKbQueued: Boolean;
+    /// <summary>
+    /// "We've already asked FMX to show the soft keyboard for the
+    /// currently-focused input" flag. Set by RequestKeyboardShow when
+    /// it dispatches a ShowVirtualKeyboard call; cleared by
+    /// VKStateChangeHandler when the platform reports the keyboard
+    /// has gone down (visible=False). RequestKeyboardShow gates on
+    /// this — if True, it skips the Show entirely, so back-to-back
+    /// focus events (taps between inputs, programmatic re-focus on
+    /// re-render) don't redundantly poke the IMM.
+    /// </summary>
+    FKbdShowAsked: Boolean;
+    /// <summary>
+    /// "We wanted the keyboard but skipped Show because FKbdShowAsked
+    /// was already True." Set by RequestKeyboardShow on the skip-path.
+    /// Consulted by VKStateChangeHandler on visible=False: if True and
+    /// a TEdit/TMemo currently has focus, the dismiss was likely a
+    /// side effect of a re-render-driven button tap (not a deliberate
+    /// user dismiss), so re-fire ShowVirtualKeyboard on the focused
+    /// control. Cleared after re-summon or after a successful Show.
+    /// </summary>
+    FKbdResummonPending: Boolean;
     procedure ScrollbarFadeTimerTick(Sender: TObject);
     procedure BumpScrollbarVisibility;
     function GetScrollbarOpacity: Single;
@@ -679,6 +725,33 @@ type
     procedure HandleFileInputClick(Sender: TObject);
     procedure HandleFormControlEnter(Sender: TObject);
     procedure HandleFormControlExit(Sender: TObject);
+    /// <summary>
+    /// Idempotently request the Android/iOS soft keyboard for a
+    /// TControl that just received focus. Never calls
+    /// HideVirtualKeyboard (which would visibly bounce the IME when
+    /// it's already up). Instead, fires ShowVirtualKeyboard at three
+    /// staggered main-thread ticks via TTimer — first immediately
+    /// (queued), then ~80ms later, then ~200ms later. If the first
+    /// Show races a pending dismiss from a prior button tap and
+    /// loses, one of the later re-fires lands after the dismiss
+    /// completes. When the IME is already visible (e.g. user is
+    /// tapping between two TEdits without dismissing), each Show is
+    /// a no-op and Android re-binds the IME to the new control
+    /// automatically — zero visible toggle. No-op on platforms
+    /// without IFMXVirtualKeyboardService.
+    /// </summary>
+    procedure RequestKeyboardShow(ACtl: TControl);
+    {$IFDEF ANDROID}
+    /// <summary>
+    /// Force-shows the Android soft keyboard via direct JNI to
+    /// InputMethodManager.showSoftInput with SHOW_FORCED on the
+    /// activity's decor view. Bypasses Android's anti-spawn check
+    /// that silently drops Show requests from un-touched windows
+    /// (the root cause of "autofocus doesn't work on screen entry").
+    /// Idempotent when the keyboard is already up.
+    /// </summary>
+    procedure ForceShowSoftKeyboard;
+    {$ENDIF}
     // RerenderOnFocus implementation — full DOM/form-control rebuild
     // with id-based value preservation. Internal use only; the
     // public surface is the RerenderOnFocus property.
@@ -756,6 +829,14 @@ type
     function GetViewportWidth: Single;
     function GetViewportHeight: Single;
     function FindLayoutBoxByTag(Box: TLayoutBox; Target: THTMLTag): TLayoutBox;
+    /// <summary>
+    /// In-place text update of a laid-out box's text fragment WITHOUT a
+    /// relayout. Used by SetElementText when a form control is focused
+    /// (IME bound) — a full relayout would dispose the focused TEdit and
+    /// hang the IME. Single-fragment replacement; correct for single-line
+    /// display elements (e.g. a balance label).
+    /// </summary>
+    procedure UpdateBoxTextInPlace(Box: TLayoutBox; const NewText: string);
     function GetPaintLayout: TTextLayout;
     function HitTestTagAt(Box: TLayoutBox; OffX, OffY, X, Y: Single): THTMLTag;
     procedure UpdatePseudoChain(Chain: TList<THTMLTag>; NewLeaf: THTMLTag;
@@ -1073,12 +1154,38 @@ type
     property Width;
   end;
 
+var
+  /// <summary>
+  /// Host-provided sink for Tina4 trace messages — wire to a
+  /// persistent log file (e.g. the app's debug.log writer) so
+  /// renderer diagnostics survive a process kill. Assign once at
+  /// startup; nil = file logging disabled (logcat still works).
+  /// Uses System.SysUtils.TProc<string> to avoid declaring a new
+  /// `reference to procedure (...)` type that confused the
+  /// compiler's overload resolution for TThread.Synchronize in
+  /// downstream units.
+  /// </summary>
+  Tina4LogSink: TProc<string> = nil;
+  /// <summary>
+  /// Master tracing switch. When False, TraceLog short-circuits
+  /// without touching logcat OR the sink — the cost of every trace
+  /// call becomes a single boolean check. Host should set this False
+  /// in Release builds to keep the production runtime quiet. Default
+  /// is True so library development / Debug builds get full output
+  /// out of the box.
+  /// </summary>
+  Tina4TracingEnabled: Boolean = True;
+
 procedure Register;
 
 implementation
 
 uses
-  Tina4Frond;
+  Tina4Frond
+  {$IFDEF ANDROID}
+  , Tina4AndroidIME
+  {$ENDIF}
+  ;
 
 procedure Register;
 begin
@@ -1090,6 +1197,12 @@ end;
 // CuttlefishV2:*` filter captures both. No-op on non-Android builds.
 procedure TraceLog(const Msg: string);
 begin
+  // Master gate — Release builds set Tina4TracingEnabled := False so
+  // the renderer goes quiet. Skip every downstream cost: no logcat
+  // syscall, no sink callback, no string concatenation. Single
+  // boolean check per call.
+  if not Tina4TracingEnabled then Exit;
+
   {$IFDEF ANDROID}
   try
     __android_log_write(
@@ -1099,6 +1212,12 @@ begin
   except
   end;
   {$ENDIF}
+  if Assigned(Tina4LogSink) then
+    try
+      var Forwarded: string := 'Tina4: ' + Msg;
+      Tina4LogSink(Forwarded);
+    except
+    end;
 end;
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -6575,6 +6694,11 @@ begin
   FPendingRerender := False;
   FClickableRegions := TList<TClickableRegion>.Create;
   FRegisteredObjects := TDictionary<string, TObject>.Create;
+  // Acquire the RTTI pool once; one ref count for the renderer's
+  // entire lifetime. Every onclick dispatch uses this shared context
+  // instead of creating a temporary one — see FRttiCtx declaration
+  // for the bug pattern this prevents.
+  FRttiCtx := TRttiContext.Create;
   FHoverChain := TList<THTMLTag>.Create;
   FActiveChain := TList<THTMLTag>.Create;
   // Per-box scroll state — keyed by DOM tag so it survives relayouts that
@@ -6721,6 +6845,9 @@ begin
   FFormControls.Free;
   FClickableRegions.Free;
   FRegisteredObjects.Free;
+  // Release the RTTI pool ref count. Symmetric with the Create in
+  // the constructor; no Frees of TRttiType/Method ever happen here.
+  FRttiCtx.Free;
   FHoverChain.Free;
   FPaintLayout.Free;
   FActiveChain.Free;
@@ -7233,41 +7360,144 @@ begin
 end;
 
 procedure TTina4HTMLRender.SetElementText(const Id: string; const Text: string);
+var
+  AnyFocused: Boolean;
 begin
   var Tag := GetElementById(Id);
   if not Assigned(Tag) then Exit;
-  // For elements with text children, update the first #text child
+
+  // CRITICAL (2026-06-06): detect whether any native form control in
+  // this renderer currently holds focus (IME bound on Android). If so,
+  // a full relayout — which runs ClearFormControls and disposes EVERY
+  // TEdit, then recreates them — would destroy the focused control out
+  // from under the IME's active InputConnection. The IME's next
+  // getTextAfterCursor() then hangs (logcat: "InputConnection didn't
+  // respond in 2000 msec"), the main thread deadlocks, and the process
+  // dies with no crash trace. This was the Transfer-screen crash: the
+  // live closing-balance preview called SetElementText on every
+  // keystroke, each one rebuilding the form controls while the amount
+  // TEdit was IME-bound. When a control is focused we therefore do an
+  // IN-PLACE text update (DOM text + laid-out fragment) and SKIP the
+  // relayout entirely.
+  AnyFocused := False;
+  {$IF defined(ANDROID) or defined(IOS)}
+  for var Rec in FFormControls do
+    if (Rec.Control <> nil) and Rec.Control.IsFocused then
+    begin AnyFocused := True; Break; end;
+  {$ENDIF}
+
+  // Update the DOM #text child (create if missing).
+  var TextNode: THTMLTag := nil;
   for var C in Tag.Children do
+    if C.TagName = '#text' then begin TextNode := C; Break; end;
+  if TextNode = nil then
   begin
-    if C.TagName = '#text' then
-    begin
-      C.Text := Text;
-      // Update native control label if it's a styled button (TRectangle with TLabel)
-      for var Rec in FFormControls do
-        if Assigned(Rec.Box.Tag) and (Rec.Box.Tag = Tag) then
-        begin
-          if Rec.Control is TRectangle then
-            for var I := 0 to TRectangle(Rec.Control).ChildrenCount - 1 do
-              if TRectangle(Rec.Control).Children[I] is TLabel then
-              begin
-                TLabel(TRectangle(Rec.Control).Children[I]).Text := Text;
-                Break;
-              end;
-          Break;
-        end;
-      FNeedRelayout := True;
-      Repaint;
-      Exit;
-    end;
+    TextNode := THTMLTag.Create;
+    TextNode.TagName := '#text';
+    TextNode.Parent := Tag;
+    Tag.Children.Add(TextNode);
   end;
-  // No text child exists — create one
-  var TextNode := THTMLTag.Create;
-  TextNode.TagName := '#text';
   TextNode.Text := Text;
-  TextNode.Parent := Tag;
-  Tag.Children.Add(TextNode);
+
+  // Update a styled-button label if applicable (TRectangle + TLabel).
+  for var Rec in FFormControls do
+    if Assigned(Rec.Box.Tag) and (Rec.Box.Tag = Tag) then
+    begin
+      if Rec.Control is TRectangle then
+        for var I := 0 to TRectangle(Rec.Control).ChildrenCount - 1 do
+          if TRectangle(Rec.Control).Children[I] is TLabel then
+          begin
+            TLabel(TRectangle(Rec.Control).Children[I]).Text := Text;
+            Break;
+          end;
+      Break;
+    end;
+
+  if AnyFocused then
+  begin
+    // In-place update — no relayout, so the focused TEdit and its IME
+    // binding survive. Guarded: if the in-place update fails for any
+    // reason, fall back to a plain repaint (text reflows on the next
+    // natural relayout, e.g. when the field blurs) rather than risk
+    // the destructive rebuild.
+    try
+      if Assigned(FLayoutEngine) and Assigned(FLayoutEngine.Root) then
+      begin
+        var BoxForTag := FindLayoutBoxByTag(FLayoutEngine.Root, Tag);
+        if Assigned(BoxForTag) then
+          UpdateBoxTextInPlace(BoxForTag, Text);
+      end;
+    except
+    end;
+    Repaint;
+    Exit;
+  end;
+
+  // No control focused — safe to do the normal full relayout.
   FNeedRelayout := True;
   Repaint;
+end;
+
+procedure TTina4HTMLRender.UpdateBoxTextInPlace(Box: TLayoutBox;
+  const NewText: string);
+
+  procedure ReplaceFragments(B: TLayoutBox; const Txt: string);
+  begin
+    if not Assigned(B) or not Assigned(B.Fragments) then Exit;
+
+    // Capture the OUTGOING fragment's alignment anchor before we clear it.
+    // The layout engine right-aligns (text-align: right / Trailing) by
+    // shifting the fragment so its RIGHT edge sits at the content edge, and
+    // centres by anchoring the MIDPOINT. An in-place text swap that just
+    // reset Frag.X := 0 threw that shift away, so a right-aligned value
+    // (e.g. the live Closing Balance while typing an amount) snapped to the
+    // LEFT every keystroke. Preserve the anchor instead: keep the right
+    // edge for Trailing, the midpoint for Center, the left edge otherwise —
+    // so the value stays put as its width changes, without a full relayout
+    // (which we can't do here because the amount input is focused).
+    var HadFrag := B.Fragments.Count > 0;
+    var OldX: Single := 0;
+    var OldW: Single := 0;
+    if HadFrag then
+    begin
+      OldX := B.Fragments[0].X;
+      OldW := B.Fragments[0].W;
+    end;
+
+    B.Fragments.Clear;
+    var Frag: TTextFragment;
+    Frag.Text := Txt;
+    Frag.Y := 0;
+    Frag.W := FLayoutEngine.MeasureTextWidth(Txt, B.Style);
+    Frag.H := FLayoutEngine.GetLineHeight(B.Style);
+    Frag.X := 0;
+    if HadFrag then
+    begin
+      case B.Style.TextAlign of
+        TTextAlign.Trailing: Frag.X := (OldX + OldW) - Frag.W;        // keep right edge
+        TTextAlign.Center:   Frag.X := (OldX + OldW / 2) - Frag.W / 2; // keep centre
+      else
+        Frag.X := OldX;                                               // keep left edge
+      end;
+      if Frag.X < 0 then Frag.X := 0;
+    end;
+    B.Fragments.Add(Frag);
+  end;
+
+begin
+  if not Assigned(Box) then Exit;
+  // The visible text of an element lives in its #text child box's
+  // fragments. Find the first such child and replace its fragments
+  // with a single measured fragment carrying NewText.
+  for var Child in Box.Children do
+    if (Child.Tag <> nil) and (Child.Tag.TagName = '#text') then
+    begin
+      Child.Tag.Text := NewText;
+      ReplaceFragments(Child, NewText);
+      Exit;
+    end;
+  // No #text child — the box may carry its own fragments directly.
+  ReplaceFragments(Box, NewText);
 end;
 
 procedure TTina4HTMLRender.SetElementStyle(const Id, StyleProp, StyleValue: string);
@@ -7390,7 +7620,33 @@ begin
     // then let them fade out.
     BumpScrollbarVisibility;
 
-    // Handle autofocus attribute — focus the first input with autofocus
+    // Handle autofocus attribute — focus the first input with autofocus.
+    // SetFocus alone fires OnEnter on Styled TEdits, which in turn calls
+    // RequestKeyboardShow → ForceShowSoftKeyboard (JNI SHOW_FORCED) so
+    // the soft keyboard appears automatically on mobile. This is the
+    // canonical web-style "autofocus pops the keyboard" behaviour —
+    // host apps must NOT also call FocusElement programmatically after
+    // setting HTML with autofocus, or the IME will be requested twice
+    // and the second request can collide with the first's in-flight
+    // state and visibly toggle the keyboard off.
+    //
+    // CRITICAL: skip the entire autofocus path if the soft keyboard is
+    // already up (FKbdShowAsked / FKeyboardVisible). BuildLayout runs
+    // multiple times per render (initial layout, post-font-load
+    // relayout, etc.); each call destroys + recreates form controls,
+    // and a fresh SetFocus on a freshly-created TEdit fires OnEnter →
+    // RequestKeyboardShow. The second call sets FKbdResummonPending,
+    // which causes a re-summon on the next VK dismiss — visibly
+    // bouncing the keyboard. Once we've successfully popped the IME
+    // we have nothing to gain by re-focusing on subsequent layout
+    // passes — the user's already typing into a focused field.
+    {$IF defined(ANDROID) or defined(IOS)}
+    if FKbdShowAsked or FKeyboardVisible then
+    begin
+      TraceLog('autofocus: keyboard already up — skip SetFocus');
+    end
+    else
+    {$ENDIF}
     for var Rec in FFormControls do
       if Assigned(Rec.Box.Tag) and Rec.Box.Tag.HasAttribute('autofocus') then
       begin
@@ -7776,6 +8032,9 @@ var
 begin
   Result := False;
   Tag := GetElementById(Id);
+  TraceLog('FocusElement: id=' + Id + ' tag=' +
+    BoolToStr(Assigned(Tag), True) +
+    ' fformctlcount=' + IntToStr(FFormControls.Count));
   if not Assigned(Tag) then Exit;
 
   // Find the native FMX control associated with this element
@@ -7783,10 +8042,26 @@ begin
   begin
     if Assigned(Rec.Box.Tag) and (Rec.Box.Tag = Tag) then
     begin
+      TraceLog(Format('FocusElement: matched ctl=%p cls=%s focused-before=%s',
+        [Pointer(Rec.Control), Rec.Control.ClassName,
+         BoolToStr(Rec.Control.IsFocused, True)]));
       // Scroll the element into view first
       ScrollToElement(Id);
       // Set focus to the native control
       Rec.Control.SetFocus;
+      TraceLog(Format('FocusElement: post-SetFocus focused-after=%s',
+        [BoolToStr(Rec.Control.IsFocused, True)]));
+      // Bring the IME up for text inputs. RequestKeyboardShow is
+      // gated by FKbdShowAsked: if we've already asked the platform
+      // to show the keyboard during this focus session, it's a no-op
+      // and we don't redundantly poke the IMM. The flag is cleared
+      // by VKStateChangeHandler when the platform reports the
+      // keyboard has gone down.
+      try
+        if (Rec.Control is TEdit) or (Rec.Control is TMemo) then
+          RequestKeyboardShow(Rec.Control as TControl);
+      except
+      end;
       Result := True;
       Exit;
     end;
@@ -7994,6 +8269,64 @@ begin
   // the (about-to-be-freed) control — see HandleFormControlExit's
   // ForceQueue closure.
   Inc(FFormControlsGen);
+
+  // CRITICAL: defocus any focused TEdit before disposing it. FMX's
+  // form-level focus tracker (Self.Root.SetFocused) holds a pointer
+  // to the currently-focused control; if we DisposeOf that control
+  // without clearing the focus tracker, the pointer becomes dangling.
+  // The very next focus change anywhere in the application — e.g. a
+  // different renderer's TEdit getting focus on a downstream screen
+  // — walks into the dead presenter and AVs at offset 0x0C.
+  //
+  // Documented as the "Transfer screen twice → 1Voucher refocus AV"
+  // crash. The fix used to be DeactivateNativePeers in host code; that
+  // method's body has since been gutted to a no-op.
+  //
+  // 2026-06-06 — TWO things must happen before we dispose a TEdit that
+  // currently has focus, or the process dies on teardown (especially
+  // on the Transfer screen, whose step transitions rebuild controls
+  // while an input is IME-bound):
+  //
+  //   1. HIDE THE SOFT KEYBOARD. Disposing a TEdit while the Android
+  //      IME holds an active InputConnection to it leaves the IME
+  //      querying a dead native control — getTextAfterCursor() hangs
+  //      ("didn't respond in 2000 msec") or the InputConnection
+  //      teardown faults. Hiding the keyboard first releases the
+  //      InputConnection cleanly.
+  //
+  //   2. CLEAR THE FORM FOCUS TRACKER. FMX's TCustomForm.Focused holds
+  //      a pointer to the focused control; disposing it without
+  //      clearing leaves a dangling pointer (the offset-0x0C refocus
+  //      AV). We clear it with the SETTER only (Focused := nil) — we
+  //      NEVER read Frm.Focused.GetObject, because in a multi-renderer
+  //      teardown cascade the focused control may already have been
+  //      freed by a prior ClearFormControls, making the getter a
+  //      use-after-free. Instead we detect focus via OUR OWN controls'
+  //      IsFocused flag (always safe — reads the control's own field).
+  {$IF defined(ANDROID) or defined(IOS)}
+  var HaveFocused := False;
+  for var I := 0 to FFormControls.Count - 1 do
+    if (FFormControls[I].Control <> nil) and
+       FFormControls[I].Control.IsFocused then
+    begin HaveFocused := True; Break; end;
+  if HaveFocused then
+  begin
+    TraceLog('ClearFormControls: focused ctl present — hide IME + clear focus');
+    try
+      var KbSvc: IFMXVirtualKeyboardService;
+      if TPlatformServices.Current.SupportsPlatformService(
+           IFMXVirtualKeyboardService, IInterface(KbSvc)) and (KbSvc <> nil) then
+        KbSvc.HideVirtualKeyboard;
+    except
+    end;
+    try
+      if (Root <> nil) and (Root is TCustomForm) then
+        TCustomForm(Root).Focused := nil;
+    except
+    end;
+  end;
+  {$ENDIF}
+
   for var I := FFormControls.Count - 1 downto 0 do
   begin
     FFormControls[I].Control.Parent := nil;
@@ -8434,7 +8767,47 @@ begin
   if FKeyboardVisible then
     FKeyboardBounds := VKMsg.KeyboardBounds
   else
+  begin
     FKeyboardBounds := TRect.Empty;
+    // Keyboard went down — clear the "we asked" flag so the next
+    // focus event is free to fire ShowVirtualKeyboard again.
+    FKbdShowAsked := False;
+    // Also clear resummon so a stale True from earlier doesn't
+    // accidentally re-summon when a focused TEdit still exists on
+    // the new screen.
+    FKbdResummonPending := False;
+    // RESUMMON PATH REMOVED — was causing "permanent keyboard"
+    // perception. With the resummon firing whenever a focused
+    // TEdit existed and visible=False arrived, every navigation
+    // between input screens kept re-popping the IME (every screen
+    // with autofocus has a focused TEdit). The original use case
+    // — typing → tapping Lookup → error re-stamp → keyboard back
+    // — is now handled by the user re-tapping the input. One tap
+    // is cheaper than the IME-stuck-up bug we introduced.
+  end;
+  // CRITICAL (2026-06-06, Sunmi V2s keyboard-frame ANR):
+  // TVKStateChangeMessage is a GLOBAL broadcast — EVERY live
+  // TTina4HTMLRender on the form receives it. A host can keep several
+  // renderers parented at once (overlay pattern: Voucher / Electricity /
+  // DStv / Global Airtime / POS grid / Transfer), so one keyboard show
+  // fans out into N handler runs. Worse, FMX re-fires
+  // onVirtualKeyboardFrameChanged on EVERY decor-view layout change —
+  // i.e. on every frame of the keyboard slide-in animation. The product
+  // N renderers x M animation frames x (file-trace + ForceQueue(scroll) +
+  // scroll-repaint) saturates the UI thread and starves the input queue:
+  //   "Input dispatching timed out ... Waited 5000ms for MotionEvent"
+  // with the main thread caught spinning in dispatchToNative under
+  // onVirtualKeyboardFrameChanged. Reproduced as: do a transfer, open
+  // Global Airtime, its autofocus pops the keyboard, app freezes -> ANR.
+  //
+  // The keyboard state (FKeyboardVisible / FKeyboardBounds, set above) is
+  // cheap and worth keeping current on every renderer. But the expensive
+  // reaction — tracing and the scroll-above-keyboard pass — only matters
+  // for the renderer the user can actually see. Off-screen renderers bail
+  // here, collapsing the fan-out from N to 1. ParentedVisible (not Visible)
+  // so a renderer on a hidden parent frame is correctly treated as hidden.
+  if not ParentedVisible then Exit;
+
   TraceLog(Format('VKStateChange visible=%s bounds=(%d,%d %dx%d)',
     [BoolToStr(FKeyboardVisible, True),
      FKeyboardBounds.Left, FKeyboardBounds.Top,
@@ -8442,16 +8815,22 @@ begin
 
   // Re-enabled now that ControlType is Styled (no presenter chain
   // to deref). Scrolls the focused input above the IME if it lands
-  // below the keyboard bounds.
-  if FKeyboardVisible then
+  // below the keyboard bounds. COALESCED: the frame-change message
+  // arrives many times during the keyboard animation; queue at most one
+  // scroll at a time (FScrollAboveKbQueued) so we don't flood the loop.
+  if FKeyboardVisible and (not FScrollAboveKbQueued) then
+  begin
+    FScrollAboveKbQueued := True;
     TThread.ForceQueue(nil,
       procedure
       begin
+        FScrollAboveKbQueued := False;
         try
           ScrollFocusedControlAboveKeyboard;
         except
         end;
       end);
+  end;
 end;
 
 procedure TTina4HTMLRender.HandleFileInputClick(Sender: TObject);
@@ -8606,6 +8985,98 @@ begin
   {$ENDIF}
 end;
 
+procedure TTina4HTMLRender.RequestKeyboardShow(ACtl: TControl);
+{$IF defined(ANDROID) or defined(IOS)}
+var
+  TargetCtl: TControl;
+{$ENDIF}
+begin
+{$IFDEF ANDROID}
+  // 2026-06-06 — PROGRAMMATIC KEYBOARD SHOW DISABLED ON ANDROID.
+  //
+  // Driving the IME up programmatically (JNI showSoftInput) forces an
+  // InputConnection binding to a Styled TEdit. On the Sunmi V2s this
+  // destabilises the IME: the InputConnection's getTextAfterCursor()
+  // query blocks the main thread for >1s, the IME watchdog times out
+  // ("didn't respond in 2000 msec"), and the process is killed — with
+  // NO crash trace (debuggerd is locked down on this device). The
+  // crash was reproducible specifically on the Transfer screen and the
+  // customer confirmed: "we never crashed before the keyboard work."
+  //
+  // Reverting to FMX's NATIVE behaviour: the soft keyboard comes up
+  // when the user TAPS a field (FMX wires the tap→focus→IME path
+  // itself, with VKAutoShowMode := DefinedBySystem set in the host's
+  // FormShow). We no longer poke the IME programmatically at all. The
+  // only UX change: the keyboard does not auto-pop on programmatic
+  // screen-entry focus — the cashier taps the field, which they do
+  // anyway. Stability over a minor convenience.
+  TraceLog('ReqKbd: programmatic show disabled on Android (native tap only)');
+  Exit;
+{$ENDIF}
+{$IF defined(ANDROID) or defined(IOS)}
+  if ACtl = nil then Exit;
+
+  // Gate: if we've already asked the platform to show the keyboard
+  // for this focus session, don't ask again. FKbdShowAsked stays True
+  // until the platform reports the keyboard has gone down
+  // (VKStateChangeHandler clears it on visible=False). This makes
+  // back-to-back focus events (tap A → tap B with IME up, or
+  // programmatic re-focus on re-render) a no-op — Android keeps the
+  // IME up and re-binds it to the newly-focused control automatically.
+  if FKbdShowAsked then
+  begin
+    // We've already asked. Record that the caller wanted the keyboard
+    // up — if a subsequent dismiss is triggered by a button tap (rather
+    // than the user deliberately closing the IME), we'll re-summon in
+    // VKStateChangeHandler when visible=False arrives.
+    FKbdResummonPending := True;
+    TraceLog('ReqKbd: already asked — skip, resummon-pending=True');
+    Exit;
+  end;
+  FKbdShowAsked := True;
+  FKbdResummonPending := False;
+  TargetCtl := ACtl;
+  TraceLog(Format('ReqKbd: asking ctl=%p cls=%s',
+    [Pointer(TargetCtl), TargetCtl.ClassName]));
+
+  // Queue the show on the next idle tick so Android's focus chain
+  // settles first.
+  TThread.ForceQueue(nil, procedure
+    begin
+      {$IFDEF ANDROID}
+      try
+        ForceShowSoftKeyboard;
+      except
+        on E: Exception do TraceLog('ReqKbd ForceShow EX: ' + E.Message);
+      end;
+      {$ELSE}
+      // iOS path: fall back to FMX's keyboard service. The JNI
+      // helper is Android-only; iOS doesn't have an equivalent
+      // anti-spawn problem to work around.
+      var Svc: IFMXVirtualKeyboardService;
+      try
+        if TPlatformServices.Current.SupportsPlatformService(
+             IFMXVirtualKeyboardService, IInterface(Svc)) and (Svc <> nil) then
+          Svc.ShowVirtualKeyboard(TargetCtl);
+      except
+        on E: Exception do TraceLog('ReqKbd EX: ' + E.Message);
+      end;
+      {$ENDIF}
+    end);
+{$ENDIF}
+end;
+
+{$IFDEF ANDROID}
+procedure TTina4HTMLRender.ForceShowSoftKeyboard;
+begin
+  // Delegate to Tina4AndroidIME — keeps the JNI imports out of this
+  // unit's compilation context (where they shadow TThreadProcedure
+  // and break every TThread.ForceQueue call site).
+  Tina4AndroidIME.ForceShowSoftKeyboard(
+    procedure (const M: string) begin TraceLog(M) end);
+end;
+{$ENDIF}
+
 procedure TTina4HTMLRender.HandleFormControlEnter(Sender: TObject);
 var
   N, V: string;
@@ -8634,25 +9105,52 @@ begin
   // gained focus. The KeyboardType set in ApplyHtmlInputAttrsToEdit
   // is read by the IME hint at this point, so numeric / tel / email
   // keyboards still come up correctly.
-  var KbSvc: IFMXVirtualKeyboardService;
+  //
+  // DEFERRED via ForceQueue: calling ShowVirtualKeyboard inline
+  // here is a no-op on Sunmi V2s — the OnEnter event fires before
+  // the platform finishes binding focus to the Styled TEdit's
+  // text-input surface. The IME service queries the focused
+  // control, finds it not-yet-active, and silently skips the show.
+  // Queuing the call to the main thread runs it AFTER the focus
+  // chain settles, so the IME has a valid target to bind to. We
+  // also DROP the "Visible in state" guard — the service's state
+  // flag goes stale after a programmatic dismiss, and we'd rather
+  // re-issue an idempotent show than wrongly skip when the IME is
+  // actually down. Capture the sender into a local for the closure.
   if Sender is TControl then
   begin
-    if TPlatformServices.Current.SupportsPlatformService(
-         IFMXVirtualKeyboardService, IInterface(KbSvc)) and (KbSvc <> nil) then
-      KbSvc.ShowVirtualKeyboard(TControl(Sender));
+    var TargetCtl: TControl := TControl(Sender);
+    // Never toggle (Hide+Show) — that visibly bounces the IME.
+    // Just request Show, idempotently. If the IME is already up,
+    // ShowVirtualKeyboard is a no-op and Android re-binds the IME
+    // to TargetCtl automatically (the canonical "tap a different
+    // input while keyboard up" path). If the IME is down or being
+    // dismissed by an in-flight Binder message, we re-fire Show
+    // at multiple ticks to outlast the dismiss without anyone
+    // observing a flicker — each later Show is a no-op once the
+    // first one lands.
+    RequestKeyboardShow(TargetCtl);
   end;
 
   // After the IME is up, the focused input may be below the keyboard.
   // Defer the scroll a tick so any layout settle on Android finishes
-  // first. Safe with Styled controls (no presenter chain).
-  TThread.ForceQueue(nil,
-    procedure
-    begin
-      try
-        ScrollFocusedControlAboveKeyboard;
-      except
-      end;
-    end);
+  // first. Safe with Styled controls (no presenter chain). COALESCED
+  // through the same FScrollAboveKbQueued flag VKStateChangeHandler
+  // uses, so a focus-in and the subsequent keyboard-show don't each
+  // queue their own scroll (and a burst of focus changes can't pile up).
+  if not FScrollAboveKbQueued then
+  begin
+    FScrollAboveKbQueued := True;
+    TThread.ForceQueue(nil,
+      procedure
+      begin
+        FScrollAboveKbQueued := False;
+        try
+          ScrollFocusedControlAboveKeyboard;
+        except
+        end;
+      end);
+  end;
   {$ENDIF}
   TraceLog('OnEnter EXIT (handler complete)');
 end;
@@ -10502,9 +11000,15 @@ begin
           Layout.Color := Box.Style.Color;
           Layout.WordWrap := False;
           Layout.HorizontalAlign := TTextAlign.Leading;
-          Layout.TopLeft := PointF(CharX, Y + Box.ContentTop + Frag.Y);
+          Layout.VerticalAlign := TTextAlign.Leading;
           Layout.MaxSize := PointF(Box.Style.FontSize * 2, Frag.H + 2);
           Layout.EndUpdate;
+          // Explicit centering — see main paint site below for rationale.
+          var TextHc: Single := Layout.TextHeight;
+          var YOffc: Single := (Frag.H - TextHc) / 2;
+          if YOffc < 0 then YOffc := 0;
+          Layout.TopLeft := PointF(CharX,
+            Y + Box.ContentTop + Frag.Y + YOffc);
           Layout.RenderLayout(Canvas);
           CharX := CharX + Layout.Width + Box.Style.LetterSpacing;
         end;
@@ -10528,11 +11032,17 @@ begin
           Layout.Color := Box.Style.TextShadowColor;
           Layout.WordWrap := Box.Style.WhiteSpace <> 'pre';
           Layout.HorizontalAlign := TTextAlign.Leading;
+          Layout.VerticalAlign := TTextAlign.Leading;
           Layout.MaxSize := PointF(Frag.W + 2, Frag.H + 2);
+          Layout.EndUpdate;
+          // Explicit centering — see main paint site below for rationale.
+          var TextHs: Single := Layout.TextHeight;
+          var YOffs: Single := (Frag.H - TextHs) / 2;
+          if YOffs < 0 then YOffs := 0;
           Layout.TopLeft := PointF(
             X + Box.ContentLeft + Frag.X + Box.Style.TextShadowOffsetX,
-            Y + Box.ContentTop  + Frag.Y + Box.Style.TextShadowOffsetY);
-          Layout.EndUpdate;
+            Y + Box.ContentTop  + Frag.Y + Box.Style.TextShadowOffsetY
+              + YOffs);
           Layout.RenderLayout(Canvas);
         end;
 
@@ -10544,10 +11054,21 @@ begin
         Layout.Color := Box.Style.Color;
         Layout.WordWrap := Box.Style.WhiteSpace <> 'pre';
         Layout.HorizontalAlign := TTextAlign.Leading;
-        Layout.TopLeft := PointF(X + Box.ContentLeft + Frag.X,
-                                 Y + Box.ContentTop + Frag.Y);
+        // Explicit centering: paint at the top of the line box,
+        // measure the actual text height after EndUpdate, then shift
+        // TopLeft.Y by (LineBoxH - TextH) / 2 to put the text bbox
+        // dead-center vertically. This bypasses FMX's opaque
+        // VerticalAlign := Center (which depends on what FMX
+        // internally considers the text bbox) and gives pixel-exact
+        // control over where the glyph ends up.
+        Layout.VerticalAlign := TTextAlign.Leading;
         Layout.MaxSize := PointF(Frag.W + 2, Frag.H + 2);
         Layout.EndUpdate;
+        var TextH: Single := Layout.TextHeight;
+        var YCenterOffset: Single := (Frag.H - TextH) / 2;
+        if YCenterOffset < 0 then YCenterOffset := 0;
+        Layout.TopLeft := PointF(X + Box.ContentLeft + Frag.X,
+                                 Y + Box.ContentTop + Frag.Y + YCenterOffset);
         Layout.RenderLayout(Canvas);
       end;
 
@@ -11219,9 +11740,17 @@ begin
     else
     begin
       var TargetObj := FRegisteredObjects[ObjName.ToLower];
-      var Ctx := TRttiContext.Create;
+      // Use the renderer-owned FRttiCtx — DO NOT Create/Free a local
+      // TRttiContext here. The Method.Invoke below may call into host
+      // code that itself uses RTTI (e.g. nested click dispatch, sale-
+      // processing helpers, anything that touches TValue/TVarRec), and
+      // a Create/Free pair around the invoke can drop the pool ref
+      // count to zero mid-call, invalidating RttiType + Method. The
+      // EAccessViolation + "RTTI objects cannot be manually destroyed"
+      // cascade is the documented symptom of that. See FRttiCtx
+      // declaration for the full rationale.
       try
-        var RttiType := Ctx.GetType(TargetObj.ClassType);
+        var RttiType := FRttiCtx.GetType(TargetObj.ClassType);
         if not Assigned(RttiType) then
           UnresolvedReason := Format('RTTI type info missing for %s', [TargetObj.ClassName])
         else
@@ -11229,7 +11758,7 @@ begin
           var Method := RttiType.GetMethod(MethodName);
           if not Assigned(Method) then
             UnresolvedReason := Format(
-              '%s.%s not found by RTTI — must be `public` or `published` (currently `private`?)',
+              '%s.%s not found by RTTI - must be `public` or `published` (currently `private`?)',
               [TargetObj.ClassName, MethodName])
           else
           begin
@@ -11256,8 +11785,10 @@ begin
             end;
           end;
         end;
-      finally
-        Ctx.Free;
+      except
+        on E: Exception do
+          UnresolvedReason := Format('RTTI lookup raised %s: %s',
+            [E.ClassName, E.Message]);
       end;
     end;
 
@@ -11730,11 +12261,69 @@ end;
 procedure TTina4HTMLRender.Resize;
 begin
   inherited;
-  if not FIsLayoutting then
+  if FIsLayoutting then Exit;
+
+  // CRITICAL (2026-06-06, Sunmi V2s relayout storm + focus-theft):
+  // A host can keep several TTina4HTMLRender instances parented to one form
+  // (Voucher / Electricity / DStv / Global Airtime / POS / Transfer),
+  // switching between them with Visible. FMX delivers Resize to EVERY
+  // aligned child on a form resize regardless of Visible, and the soft
+  // keyboard opening IS a form resize. If the OFF-SCREEN renderers relayout
+  // too, two bad things happen: (1) an N-way ClearFormControls storm on a
+  // slow GPU, and (2) any off-screen renderer that still has an autofocus
+  // input runs SetFocus during its relayout and STEALS focus from the
+  // on-screen input that just popped the keyboard — which then defeats the
+  // focus-guard below and lets that input be disposed mid-IME-bind -> the
+  // silent native crash seen entering Global Airtime after a transfer.
+  //
+  // So an off-screen renderer must NOT relayout here. Mark FNeedRelayout so
+  // it still relayouts lazily the next time it is actually painted (Paint ->
+  // DoLayout when shown again), but do no work now.
+  //
+  // Use ParentedVisible, NOT Visible: a renderer hosted on a hidden parent
+  // frame (e.g. renderTransfer on frameTransfer1 after we navigate away)
+  // still has its OWN Visible = True — only the parent frame is hidden. A
+  // plain `Visible` check misses it, so on the keyboard resize it relayouts,
+  // re-runs ITS autofocus SetFocus, and steals focus from the on-screen
+  // input that just popped the keyboard. ParentedVisible is False whenever
+  // any ancestor is hidden, which is exactly the set we must not touch.
+  if not ParentedVisible then
   begin
     FNeedRelayout := True;
-    Repaint;
+    Exit;
   end;
+
+  {$IF defined(ANDROID) or defined(IOS)}
+  // CRITICAL (2026-06-06, Sunmi V2s focused-input dispose crash):
+  // If one of THIS renderer's own inputs is focused, this resize is the
+  // soft keyboard opening/closing. Do NOT relayout — a relayout runs
+  // ClearFormControls + CreateFormControls (in DoLayout), which DISPOSES
+  // the focused native TEdit out from under Android's live IME
+  // InputConnection. The process then dies with no exception and no
+  // tombstone (debuggerd is locked down on this device). Reproduced as:
+  // enter Global Airtime after a transfer, its autofocused input pops the
+  // keyboard, the form shrinks -> Resize -> relayout -> dispose -> crash.
+  //
+  // The visible content does not change when the keyboard appears (it just
+  // overlays the bottom of the screen), so this relayout buys nothing;
+  // ScrollFocusedControlAboveKeyboard handles lifting the input above the
+  // keyboard. Once focus leaves (keyboard down / navigation away) the next
+  // resize relays out normally. Scoped to Resize ONLY: explicit DOM
+  // mutations (SetElementText / SetElementStyle / SetElementVisible /
+  // ShowStep) still drive a normal DoLayout so their content shows — that
+  // is why Search results and the OTP step still render while typing.
+  // Assigned() guard is REQUIRED: the constructor sets Width/Height (which
+  // fires Resize) BEFORE FFormControls is created, so this runs once with a
+  // nil list during construction. Iterating a nil list AVs and crash-loops
+  // the app at startup. Nil => no controls => none focused => fall through.
+  if Assigned(FFormControls) then
+    for var FRec in FFormControls do
+      if (FRec.Control <> nil) and FRec.Control.IsFocused then
+        Exit;
+  {$ENDIF}
+
+  FNeedRelayout := True;
+  Repaint;
 end;
 
 end.

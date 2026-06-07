@@ -10080,6 +10080,18 @@ begin
           begin
             Ed := TEdit(PooledEd);
             FReusePool.Remove(ElId);
+            // Re-seed the reused (non-focused) control from the NEW DOM value.
+            // On a DOM-mutation relayout the value-sync above wrote the live
+            // text into this box's value attribute, so Val IS the user's text
+            // (retained — e.g. the Electricity meter is kept when an amount
+            // error reshows). On a full reparse (Twig.Text := newHTML, a
+            // deliberate fresh screen) the new DOM carries the source value
+            // (usually empty), so the reused control is cleared to match —
+            // fixing "Cancel/re-tap leaves the old value in the field" (DStv)
+            // WITHOUT churning the native control or its IME binding. The
+            // focused FReuseCtl is handled above and never re-seeded, so
+            // typing + caret are preserved.
+            Ed.Text := Val;
           end;
         end;
         {$ENDIF}

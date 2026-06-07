@@ -7783,6 +7783,34 @@ begin
       [Pointer(FReuseCtl), FReuseId, Pointer(FImeBoundCtl), FFormControls.Count]));
     {$ENDIF}
 
+    // ── Preserve user-typed input values across this relayout ───────────────
+    // A DOM-mutation relayout (showing an inline validation error via
+    // SetInnerHTML / SetElementVisible, toggling a row, etc.) rebuilds the
+    // native TEdits in CreateFormControls, which re-seeds each input's text
+    // from its DOM `value` attribute. Typing only updates the live TEdit.Text —
+    // it never writes back to the DOM — so without this the rebuilt control
+    // comes back BLANK, wiping fields the user already filled in (reported: the
+    // Electricity meter number is cleared when Process is pressed with no
+    // amount, because showing the error relays out). Sync each text input's
+    // current value into its DOM `value` NOW, while the boxes/tags are still
+    // alive (before the null-loop + reparse below), so CreateFormControls
+    // restores it. On a full reparse the DOM is rebuilt from FHTML.Text and
+    // these writes are harmlessly discarded — a deliberate fresh screen. An
+    // intentional clear via SetElementValue already set TEdit.Text := '', so
+    // this preserves that clear too. This is the framework-level version of the
+    // per-screen "pin the value before relayout" workaround host code used to
+    // need — every screen now retains its values on error automatically.
+    for var VRec in FFormControls do
+      if Assigned(VRec.Control) and Assigned(VRec.Box) and
+         Assigned(VRec.Box.Tag) and Assigned(VRec.Box.Tag.Attributes) then
+      try
+        if VRec.Control is TEdit then
+          VRec.Box.Tag.Attributes.AddOrSetValue('value', TEdit(VRec.Control).Text)
+        else if VRec.Control is TMemo then
+          VRec.Box.Tag.Attributes.AddOrSetValue('value', TMemo(VRec.Control).Lines.Text);
+      except
+      end;
+
     // Now that the reuse id is captured, null every FFormControls[].Box. The
     // reparse and the Layout below will free the DOM and the box tree; nulling
     // here means no later code can deref a dangling box — the OnExit/OnChange

@@ -50,7 +50,7 @@ type
     FLastErr: string;
     FActiveIdx: Integer;
     FScreenFlip: Integer;    // which component set the active renderer shows
-    FLoopMode: Boolean;      // True = inline busy-loop (B), False = dispose storm (A)
+    FMode: Integer;          // 0 = dispose-storm (A), 1 = inline busy-loop (B), 2 = focus-stress (C)
     procedure BuildUI;
     procedure RebuildRenderers;
     procedure CountBtnClick(Sender: TObject);
@@ -201,7 +201,11 @@ var
   S: string;
 begin
   if not Assigned(FStatus) then Exit;
-  if FLoopMode then S := 'MODE B inline-loop' else S := 'MODE A dispose-storm';
+  case FMode of
+    0: S := 'MODE A dispose-storm';
+    2: S := 'MODE C focus-stress';
+  else S := 'MODE B inline-loop';
+  end;
   S := S + Format('  iter=%d survived=%d AVcaught=%d UNCAUGHT=%d',
     [FIter, FSurvived, FAvCount, FUncaught]);
   if FLastErr <> '' then S := S + sLineBreak + 'last: ' + FLastErr;
@@ -269,7 +273,7 @@ procedure TformCrashTest.BuildUI;
 begin
   Randomize;
   Application.OnException := HandleAppException;  // intercept the OK-dialog AVs
-  FLoopMode := True;
+  FMode := 1;                                     // default MODE B (inline-loop)
   FActiveIdx := -1;
   FRenderCount := 5;
 
@@ -352,8 +356,8 @@ var
 begin
   if (FActiveIdx < 0) or (FActiveIdx >= FRenderCount) then Exit;
   R := FRenders[FActiveIdx];
-  if FLoopMode then
-  begin
+  case FMode of
+  1: begin
     // EXACT Cuttlefish "Search M-000002 then focus the amount" flow — the
     // sequence the isolated old harness never did, and which SIGSEGVs in the
     // real app. Each op isolated so the AV log names the faulting step.
@@ -392,9 +396,8 @@ begin
          try R.SetElementValue('i2', '');              except on E: Exception do Bump('clear amount: ' + E.Message); end;
     end;
     Inc(FSurvived);
-  end
-  else
-  begin
+  end;
+  0: begin
     try
       for I := 0 to FRenderCount - 1 do
         FRenders[I].HTML.Text := ScreenHtml((I + FIter) mod 2);
@@ -403,11 +406,56 @@ begin
       on E: Exception do Bump('storm: ' + E.Message);
     end;
   end;
+  2: begin
+    // FOCUS STRESS [C] — reproduce the MT6761 compositor stall (ANR), the
+    // freeze the resilient AV handling can't catch. Mirrors the Electricity
+    // "Process with no amount" path that froze the app: focus a field (keyboard
+    // up), show an inline error (relayout WHILE focused), then move focus to
+    // another field (keyboard transition DURING that relayout), then reset.
+    // Fired faster than the keyboard animation so the transitions overlap —
+    // the exact condition that drives the compositor into a sync-point wait
+    // timeout. Best run with RENDERERS: 1 (single screen, like one overlay).
+    case FIter mod 4 of
+      0: try R.FocusElement('i1');                          // focus meter (kbd up)
+         except on E: Exception do Bump('fs focus i1: ' + E.Message); end;
+      1: try R.SetElementValue('i1', 'M-' + IntToStr(10000 + FIter)); // type a meter
+         except on E: Exception do Bump('fs type i1: ' + E.Message); end;
+      2: begin
+           // THE TRIGGER — mirror tapping "Process" with no amount:
+           //  (a) the tap blurs the input -> keyboard STARTS DISMISSING.
+           try if (Root <> nil) and (Root is TCustomForm) then
+                 TCustomForm(Root).Focused := nil;
+           except end;
+           HideKeyboard;
+           //  (b) ShowElecError: inline banner shown -> relayout rebuilds inputs.
+           try R.SetElementText('errBanner', 'Please enter an amount ' + IntToStr(FIter));
+           except on E: Exception do Bump('fs err text: ' + E.Message); end;
+           try R.SetElementVisible('errBanner', True);
+           except on E: Exception do Bump('fs err show: ' + E.Message); end;
+           //  (c) focus the amount -> keyboard RE-SHOWS, during that relayout and
+           //      mid-dismiss. The keyboard down-then-up across a relayout is what
+           //      stalls the MT6761 compositor (the Electricity freeze).
+           try R.FocusElement('i2');
+           except on E: Exception do Bump('fs focus-on-error: ' + E.Message); end;
+         end;
+      3: try R.SetElementVisible('errBanner', False);       // reset
+         except on E: Exception do Bump('fs err hide: ' + E.Message); end;
+    end;
+    Inc(FSurvived);
+  end;
+  end;
   Inc(FIter);
-  if (FIter mod 12) = 0 then
+  // Heartbeat — every 4 ticks in focus-stress (finer, so the external watcher
+  // can pinpoint a UI stall), every 12 otherwise. If this 'iter N' line stops
+  // advancing while the process is still alive, the main thread has frozen
+  // (ANR / MTK surface stall) — which the harness itself cannot catch.
+  var HbEvery: Integer := 12;
+  if FMode = 2 then HbEvery := 4;
+  if (FIter mod HbEvery) = 0 then
   begin
     UpdateStatus;
-    SimLog(Format('iter %d survived=%d AVcaught=%d screen=%d', [FIter, FSurvived, FAvCount, FScreenFlip]));
+    SimLog(Format('iter %d survived=%d AVcaught=%d uncaught=%d screen=%d',
+      [FIter, FSurvived, FAvCount, FUncaught, FScreenFlip]));
   end;
 end;
 
@@ -423,18 +471,38 @@ begin
   else
   begin
     FActiveIdx := -1;
-    FFocusTimer.Enabled := True;
-    FMutateTimer.Enabled := True;
+    if FMode = 2 then
+    begin
+      // Focus-stress: hammer the focus/keyboard/relayout pattern on renderer 0,
+      // no flipping. Mirror Cuttlefish's overlay stack: keep all N renderers
+      // PARENTED but hide all but the active one (like ShowOnlyRender). They
+      // still receive the global VK message and the compositor still has to
+      // manage N stacked surfaces during the keyboard animation — the load that
+      // single-renderer mode lacked.
+      if FRenderCount > 0 then FActiveIdx := 0;
+      for var I := 0 to FRenderCount - 1 do
+        if Assigned(FRenders[I]) then
+          try FRenders[I].Visible := (I = 0); except end;
+      FMutateTimer.Enabled := True;
+    end
+    else
+    begin
+      FFocusTimer.Enabled := True;
+      FMutateTimer.Enabled := True;
+      FocusTick(nil);
+    end;
     FRunBtn.Text := 'STOP';
-    FocusTick(nil);
   end;
 end;
 
 procedure TformCrashTest.ModeBtnClick(Sender: TObject);
 begin
-  FLoopMode := not FLoopMode;
-  if FLoopMode then FModeBtn.Text := 'MODE: B (inline-loop)'
-  else FModeBtn.Text := 'MODE: A (dispose storm)';
+  FMode := (FMode + 1) mod 3;
+  case FMode of
+    0: FModeBtn.Text := 'MODE: A (dispose storm)';
+    1: FModeBtn.Text := 'MODE: B (inline-loop)';
+    2: FModeBtn.Text := 'MODE: C (focus-stress)';
+  end;
   UpdateStatus;
 end;
 

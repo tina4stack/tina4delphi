@@ -715,6 +715,15 @@ type
     // "transfer corrupts the IME, next screen crashes" fix.
     FReuseCtl: TControl;
     FReuseId: string;
+    // Reuse pool: id -> existing TEdit/TMemo (EXCLUDING FReuseCtl), snapshotted
+    // by DoLayout each relayout BEFORE the boxes are freed. CreateFormControls
+    // re-adopts every input by id from here instead of dispose+recreate, so NO
+    // native control (and its live Android IME InputConnection) churns across a
+    // relayout. That removes the surface op that stalls the MT6761 compositor
+    // when a relayout coincides with a keyboard transition (the Electricity
+    // "Process with no amount -> focus" freeze), makes programmatic FocusElement
+    // safe to call anywhere, and speeds up every relayout (no native re-create).
+    FReusePool: TDictionary<string, TControl>;
     // True only while ClearFormControls is disposing controls. During that
     // window FFormControls still references boxes already freed by the reparse,
     // and DisposeOf fires OnEnter/OnExit/OnChange synchronously — the event
@@ -6739,6 +6748,7 @@ begin
   Width := 320;
   Height := 240;
   FFormControls := TList<TNativeFormControl>.Create;
+  FReusePool := TDictionary<string, TControl>.Create;
   // RerenderOnFocus default = False now that ControlType stays
   // Styled on Android. The rebuild was a workaround for the Platform
   // presenter refocus AV, which no longer exists.
@@ -6903,6 +6913,7 @@ begin
   ClearFormControls;
   DrainPendingDispose;  // free any control still queued for keyboard-down
   FFormControls.Free;
+  FReusePool.Free;
   FClickableRegions.Free;
   FRegisteredObjects.Free;
   // Release the RTTI pool ref count. Symmetric with the Create in
@@ -7783,6 +7794,24 @@ begin
       [Pointer(FReuseCtl), FReuseId, Pointer(FImeBoundCtl), FFormControls.Count]));
     {$ENDIF}
 
+    // ── Snapshot the reuse pool: id -> existing TEdit/TMemo (NOT FReuseCtl) ──
+    // CreateFormControls re-adopts these by id instead of dispose+recreate, so
+    // no native control (or its IME binding) churns across this relayout — the
+    // MT6761 compositor-stall fix. Captured here while the boxes/tags are alive;
+    // ClearFormControls keeps pooled controls parented; any pooled control whose
+    // id is gone from the new DOM is deferred-disposed after CreateFormControls.
+    {$IF defined(ANDROID) or defined(IOS)}
+    FReusePool.Clear;
+    for var QRec in FFormControls do
+      if Assigned(QRec.Control) and (QRec.Control <> FReuseCtl) and
+         Assigned(QRec.Box) and Assigned(QRec.Box.Tag) and
+         ((QRec.Control is TEdit) or (QRec.Control is TMemo)) then
+      begin
+        var Qid := QRec.Box.Tag.GetAttribute('id', '');
+        if Qid <> '' then FReusePool.AddOrSetValue(Qid, QRec.Control);
+      end;
+    {$ENDIF}
+
     // ── Preserve user-typed input values across this relayout ───────────────
     // A DOM-mutation relayout (showing an inline validation error via
     // SetInnerHTML / SetElementVisible, toggling a row, etc.) rebuilds the
@@ -7879,6 +7908,21 @@ begin
       FPendingDispose := FPendingDispose + [FReuseCtl];
       FReuseCtl := nil;
       FReuseId := '';
+    end;
+    // Any pooled control NOT re-adopted by CreateFormControls (its element was
+    // removed from the new DOM) is now orphaned — detach + defer-dispose it on
+    // the same keyboard-down path, never synchronously here. Whatever remains in
+    // the pool was, by definition, not matched by id during this rebuild.
+    if (FReusePool <> nil) and (FReusePool.Count > 0) then
+    begin
+      for var Leftover in FReusePool.Values do
+        if Assigned(Leftover) then
+        begin
+          try Leftover.Parent := nil; except end;
+          if Leftover.Owner = Self then RemoveComponent(Leftover);
+          FPendingDispose := FPendingDispose + [Leftover];
+        end;
+      FReusePool.Clear;
     end;
     {$ENDIF}
 
@@ -8582,6 +8626,15 @@ begin
         FFormControls.Delete(I);
   if FReuseCtl = AComponent then FReuseCtl := nil;
   if FImeBoundCtl = AComponent then FImeBoundCtl := nil;
+  // Purge it from the reuse pool too, so a freed control can never be re-adopted
+  // by id in a later CreateFormControls.
+  if (FReusePool <> nil) and (AComponent is TControl) then
+  begin
+    var PoolKey: string := '';
+    for var Pair in FReusePool do
+      if Pair.Value = AComponent then begin PoolKey := Pair.Key; Break; end;
+    if PoolKey <> '' then FReusePool.Remove(PoolKey);
+  end;
   // NOTE: we deliberately do NOT touch TCommonCustomForm.Focused here.
   // Reading Frm.Focused.GetObject during a multi-renderer teardown cascade is
   // a use-after-free (the focused control may already have been freed by a
@@ -8683,6 +8736,12 @@ begin
     var C := FFormControls[I].Control;
     if C = nil then Continue;
     if C = FReuseCtl then Continue;  // preserved for reuse: keep parented + bound
+    {$IF defined(ANDROID) or defined(IOS)}
+    // Reuse pool: a TEdit/TMemo that the impending CreateFormControls will
+    // re-adopt by id. Keep it parented + bound — do NOT detach/dispose it, so
+    // its native control and IME InputConnection survive the relayout untouched.
+    if (FReusePool <> nil) and FReusePool.ContainsValue(C) then Continue;
+    {$ENDIF}
     C.Parent := nil;
     if C = FocusedCtl then Continue;
     {$IF defined(ANDROID) or defined(IOS)}
@@ -8731,6 +8790,9 @@ begin
     var C := Controls[I];
     if C = FReuseCtl then Continue;  // preserved for reuse
     if C = FocusedCtl then Continue;
+    {$IF defined(ANDROID) or defined(IOS)}
+    if (FReusePool <> nil) and FReusePool.ContainsValue(C) then Continue;  // reuse pool: keep parented
+    {$ENDIF}
     if (C is TEdit) or (C is TButton) or (C is TMemo) or (C is TComboBox)
       or (C is TCheckBox) or (C is TRadioButton) or (C is TRectangle)
       or (C is TLayout) then
@@ -9997,12 +10059,28 @@ begin
         // crashes" bug. Keep its current Text (what the user has typed) and
         // its already-wired handlers; just clear the reuse slot so it's not
         // double-adopted, and skip ApplyHtmlInputAttrsToEdit (unchanged).
+        var ElId: string := '';
+        if Assigned(Box.Tag) then ElId := Box.Tag.GetAttribute('id', '');
         if Assigned(FReuseCtl) and (FReuseCtl is TEdit) and (FReuseId <> '') and
-           Assigned(Box.Tag) and (Box.Tag.GetAttribute('id', '') = FReuseId) then
+           (ElId = FReuseId) then
         begin
           Ed := TEdit(FReuseCtl);
           FReuseCtl := nil;
           FReuseId := '';
+        end
+        // Otherwise re-adopt any POOLED TEdit with this id (every non-focused
+        // input from the previous layout). Same benefit as FReuseCtl, applied to
+        // ALL inputs: the native control + its IME binding survive untouched,
+        // so nothing churns during a keyboard transition (the compositor-stall
+        // fix), and typed text is kept (it's the same live control).
+        else if (ElId <> '') and (FReusePool <> nil) then
+        begin
+          var PooledEd: TControl;
+          if FReusePool.TryGetValue(ElId, PooledEd) and (PooledEd is TEdit) then
+          begin
+            Ed := TEdit(PooledEd);
+            FReusePool.Remove(ElId);
+          end;
         end;
         {$ENDIF}
         if Ed = nil then
@@ -10025,11 +10103,35 @@ begin
     end
     else if TN = 'textarea' then
     begin
-      var Mem := TMemo.Create(Self);
-      Mem.OnChange  := HandleFormControlChange;
-      Mem.OnEnter   := HandleFormControlEnter;
-      Mem.OnExit    := HandleFormControlExit;
-      Mem.OnKeyDown := HandleFormControlKeyDown;
+      var Mem: TMemo := nil;
+      {$IF defined(ANDROID) or defined(IOS)}
+      // Re-adopt the focused control, or a pooled TMemo with this id — same
+      // no-churn reuse as the TEdit branch above.
+      var TaId: string := '';
+      if Assigned(Box.Tag) then TaId := Box.Tag.GetAttribute('id', '');
+      if Assigned(FReuseCtl) and (FReuseCtl is TMemo) and (FReuseId <> '') and
+         (TaId = FReuseId) then
+      begin
+        Mem := TMemo(FReuseCtl); FReuseCtl := nil; FReuseId := '';
+      end
+      else if (TaId <> '') and (FReusePool <> nil) then
+      begin
+        var PooledMem: TControl;
+        if FReusePool.TryGetValue(TaId, PooledMem) and (PooledMem is TMemo) then
+        begin
+          Mem := TMemo(PooledMem);
+          FReusePool.Remove(TaId);
+        end;
+      end;
+      {$ENDIF}
+      if Mem = nil then
+      begin
+        Mem := TMemo.Create(Self);
+        Mem.OnChange  := HandleFormControlChange;
+        Mem.OnEnter   := HandleFormControlEnter;
+        Mem.OnExit    := HandleFormControlExit;
+        Mem.OnKeyDown := HandleFormControlKeyDown;
+      end;
       // TMemo shares keyboard properties with TEdit on mobile. Default
       // to sentence-case + regular alphabet; enterkeyhint still applies
       // even though Enter on a textarea usually inserts a newline.

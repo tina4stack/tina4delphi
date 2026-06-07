@@ -324,11 +324,18 @@ end;
 
 { ---- Logging ---- }
 
+// Off by default: SSL tracing writes ssl_debug.log to the device, which must
+// not appear in production builds. A host can flip this to True only when
+// diagnosing a TLS handshake. Keeps Release builds free of debug logging.
+var
+  Tina4SSLLoggingEnabled: Boolean = False;
+
 procedure SSLLog(const Msg: String);
 var
   LogPath: String;
   F: TextFile;
 begin
+  if not Tina4SSLLoggingEnabled then Exit;
   try
     {$IFDEF ANDROID}
     LogPath := TPath.Combine(TPath.GetHomePath, 'ssl_debug.log');

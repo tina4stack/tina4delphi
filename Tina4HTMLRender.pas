@@ -715,6 +715,12 @@ type
     // "transfer corrupts the IME, next screen crashes" fix.
     FReuseCtl: TControl;
     FReuseId: string;
+    // True only while ClearFormControls is disposing controls. During that
+    // window FFormControls still references boxes already freed by the reparse,
+    // and DisposeOf fires OnEnter/OnExit/OnChange synchronously — the event
+    // handlers check this flag and bail so none walks the stale list (the async
+    // use-after-free SIGSEGV the harness reproduced at C16A144A / C179B4EA).
+    FDisposingControls: Boolean;
     /// <summary>
     /// "We've already asked FMX to show the soft keyboard for the
     /// currently-focused input" flag. Set by RequestKeyboardShow when
@@ -756,6 +762,12 @@ type
     procedure DoLayout;
     procedure ClearFormControls;
     procedure DrainPendingDispose;
+    // Purge a just-freed native control from FFormControls + all cached
+    // pointers. Without this a control freed elsewhere (keyboard-down drain,
+    // ANOTHER renderer's teardown, FMX) stays in our FFormControls and is later
+    // read by SetElementValue / FocusElement / etc. as a live TEdit -> AV
+    // (use-after-free). Registered via FreeNotification on every form control.
+    procedure Notification(AComponent: TComponent; Operation: TOperation); override;
     procedure ResizeSettleTick(Sender: TObject);
     procedure CreateFormControls(Box: TLayoutBox; OffX, OffY: Single);
     function CreateStyledButton(Box: TLayoutBox; const BtnText: string): TControl;
@@ -7078,7 +7090,7 @@ begin
   // First check native form controls for live value
   for var Rec in FFormControls do
   begin
-    if Assigned(Rec.Box.Tag) and
+    if Assigned(Rec.Box) and Assigned(Rec.Box.Tag) and
        SameText(Rec.Box.Tag.GetAttribute('id', ''), Id) then
     begin
       var N: string;
@@ -7093,26 +7105,60 @@ begin
 end;
 
 procedure TTina4HTMLRender.SetElementValue(const Id: string; const Value: string);
+var
+  BoxId: string;
+  Matched: Boolean;
 begin
-  // Update native form control if it exists
+  // Update native form control if it exists. Each deref is guarded: with
+  // several live renderers a control (or its layout box, which is NOT a
+  // TComponent so FreeNotification cannot purge it) can be freed out from under
+  // a stale FFormControls entry, and reading it back as a live TEdit AVs
+  // (the multi-renderer use-after-free that surfaces as the on-screen
+  // "Access violation ... OK" dialog when it lands in an FMX callback).
   for var Rec in FFormControls do
   begin
-    if Assigned(Rec.Box.Tag) and
-       SameText(Rec.Box.Tag.GetAttribute('id', ''), Id) then
-    begin
+    if Rec.Control = nil then Continue;
+    BoxId := '';
+    try
+      if Assigned(Rec.Box) and Assigned(Rec.Box.Tag) then
+        BoxId := Rec.Box.Tag.GetAttribute('id', '');
+    except
+      TraceLog('SetElementValue: STALE BOX skipped');
+      Continue;
+    end;
+    if not SameText(BoxId, Id) then Continue;
+
+    Matched := False;
+    try
+      // Only assign when the value actually differs — assigning .Text fires
+      // the control's OnChange (and on Android can disturb a live IME bind),
+      // so re-setting an already-correct value (e.g. clearing an
+      // already-empty input on every screen show) must be a true no-op.
       if Rec.Control is TEdit then
-        TEdit(Rec.Control).Text := Value
+      begin
+        if TEdit(Rec.Control).Text <> Value then
+          TEdit(Rec.Control).Text := Value;
+      end
       else if Rec.Control is TMemo then
-        TMemo(Rec.Control).Lines.Text := Value
+      begin
+        if TMemo(Rec.Control).Lines.Text <> Value then
+          TMemo(Rec.Control).Lines.Text := Value;
+      end
       else if Rec.Control is TCheckBox then
         TCheckBox(Rec.Control).IsChecked := SameText(Value, 'true') or (Value = '1')
       else if Rec.Control is TRadioButton then
         TRadioButton(Rec.Control).IsChecked := SameText(Value, 'true') or (Value = '1');
-      // Also update the DOM attribute
-      if Assigned(Rec.Box.Tag.Attributes) then
-        Rec.Box.Tag.Attributes.AddOrSetValue('value', Value);
-      Exit;
+      Matched := True;
+    except
+      TraceLog('SetElementValue: STALE CONTROL skipped');
     end;
+    try
+      if Assigned(Rec.Box) and Assigned(Rec.Box.Tag) and
+         Assigned(Rec.Box.Tag.Attributes) then
+        Rec.Box.Tag.Attributes.AddOrSetValue('value', Value);
+    except
+    end;
+    if Matched then Exit;
   end;
   // Update DOM attribute directly
   var Tag := GetElementById(Id);
@@ -7353,7 +7399,7 @@ begin
   // Update native control
   for var Rec in FFormControls do
   begin
-    if Assigned(Rec.Box.Tag) and
+    if Assigned(Rec.Box) and Assigned(Rec.Box.Tag) and
        SameText(Rec.Box.Tag.GetAttribute('id', ''), Id) then
     begin
       Rec.Control.Enabled := Enabled;
@@ -7373,37 +7419,68 @@ begin
 end;
 
 procedure TTina4HTMLRender.SetElementVisible(const Id: string; Visible: Boolean);
+
+  // True if the tag's inline display already reflects the requested
+  // visibility. A no-op SetElementVisible (the common case on a repeat
+  // screen show — e.g. re-hiding an already-hidden error banner or
+  // re-toggling an unchanged pinned/pinless wrap) must NOT tear down and
+  // rebuild every native TEdit and re-fire autofocus. So skip ALL work
+  // (no FNeedRelayout, no Repaint) when nothing actually changes.
+  function AlreadyAt(Tag: THTMLTag; AVisible: Boolean): Boolean;
+  var Disp: string;
+  begin
+    if not Assigned(Tag) or not Assigned(Tag.Style) then Exit(False);
+    if not Tag.Style.TryGetValue('display', Disp) then Disp := '';
+    if AVisible then Result := not SameText(Disp, 'none')
+    else Result := SameText(Disp, 'none');
+  end;
+
 begin
-  // Update native control visibility
+  // Update native control visibility. EVERY use of Rec.Box.Tag / the DOM tag
+  // is wrapped: a relayout or a lazy reparse can free the TLayoutBox (not a
+  // TComponent, so FreeNotification can't purge it) or the THTMLTag tree while
+  // this list / GetElementById still reference them — dereffing the dangling
+  // tag (GetAttribute / .Style / AlreadyAt) is a use-after-free SIGSEGV.
+  // Skip stale rows instead of faulting.
   for var Rec in FFormControls do
   begin
-    if Assigned(Rec.Box.Tag) and
-       SameText(Rec.Box.Tag.GetAttribute('id', ''), Id) then
-    begin
-      Rec.Control.Visible := Visible;
-      // Also update the style so layout respects it
-      if Assigned(Rec.Box.Tag.Style) then
+    try
+      if not Assigned(Rec.Box) then Continue;
+      var BoxTag := Rec.Box.Tag;
+      if not (Assigned(BoxTag) and SameText(BoxTag.GetAttribute('id', ''), Id)) then
+        Continue;
+      // Matched this element.
+      if (Rec.Control <> nil) and (Rec.Control.Visible = Visible) and
+         AlreadyAt(BoxTag, Visible) then
+        Exit;  // already in the requested state — do nothing
+      if Rec.Control <> nil then
+        Rec.Control.Visible := Visible;
+      if Assigned(BoxTag.Style) then
       begin
-        if Visible then
-          Rec.Box.Tag.Style.Remove('display')
-        else
-          Rec.Box.Tag.Style.AddOrSetValue('display', 'none');
+        if Visible then BoxTag.Style.Remove('display')
+        else BoxTag.Style.AddOrSetValue('display', 'none');
       end;
       FNeedRelayout := True;
       Repaint;
       Exit;
+    except
+      TraceLog('SetElementVisible: stale row skipped'); Continue;
     end;
   end;
-  // For non-form elements
-  var Tag := GetElementById(Id);
-  if Assigned(Tag) and Assigned(Tag.Style) then
-  begin
-    if Visible then
-      Tag.Style.Remove('display')
-    else
-      Tag.Style.AddOrSetValue('display', 'none');
-    FNeedRelayout := True;
-    Repaint;
+  // For non-form elements (divs like the error banner / wrap rows) — same
+  // guard around the GetElementById DOM-tree walk + the Tag.Style deref.
+  try
+    var Tag := GetElementById(Id);
+    if Assigned(Tag) and Assigned(Tag.Style) then
+    begin
+      if AlreadyAt(Tag, Visible) then Exit;  // unchanged — do nothing
+      if Visible then Tag.Style.Remove('display')
+      else Tag.Style.AddOrSetValue('display', 'none');
+      FNeedRelayout := True;
+      Repaint;
+    end;
+  except
+    TraceLog('SetElementVisible: non-form stale skipped');
   end;
 end;
 
@@ -7413,6 +7490,19 @@ var
 begin
   var Tag := GetElementById(Id);
   if not Assigned(Tag) then Exit;
+
+  // No-op guard: if the element's text is already exactly this, do nothing.
+  // Covers BOTH cases: an existing #text node that already matches, AND no
+  // #text node yet with an empty target (e.g. clearing an already-empty error
+  // banner on every screen show — gaErrorBanner has no #text child, so the
+  // naive "find #text" check would miss it and still relayout). A relayout
+  // here rebuilds every native TEdit and re-fires autofocus — the
+  // double-keyboard bug.
+  var ExistingText: THTMLTag := nil;
+  for var C0 in Tag.Children do
+    if C0.TagName = '#text' then begin ExistingText := C0; Break; end;
+  if (Assigned(ExistingText) and (ExistingText.Text = Text)) or
+     ((ExistingText = nil) and (Text = '')) then Exit;
 
   // CRITICAL (2026-06-06): detect whether any native form control in
   // this renderer currently holds focus (IME bound on Android). If so,
@@ -7448,8 +7538,17 @@ begin
   TextNode.Text := Text;
 
   // Update a styled-button label if applicable (TRectangle + TLabel).
+  // Guarded Rec.Box.Tag read: a freed TLayoutBox (use-after-free during a
+  // re-entrant relayout) must not fault here.
   for var Rec in FFormControls do
-    if Assigned(Rec.Box.Tag) and (Rec.Box.Tag = Tag) then
+  begin
+    var BoxTag2: THTMLTag := nil;
+    try
+      if Assigned(Rec.Box) then BoxTag2 := Rec.Box.Tag;
+    except
+      Continue;
+    end;
+    if Assigned(BoxTag2) and (BoxTag2 = Tag) then
     begin
       if Rec.Control is TRectangle then
         for var I := 0 to TRectangle(Rec.Control).ChildrenCount - 1 do
@@ -7460,6 +7559,7 @@ begin
           end;
       Break;
     end;
+  end;
 
   if AnyFocused then
   begin
@@ -7534,12 +7634,25 @@ end;
 
 procedure TTina4HTMLRender.SetElementStyle(const Id, StyleProp, StyleValue: string);
 begin
-  var Tag := GetElementById(Id);
-  if Assigned(Tag) and Assigned(Tag.Style) then
-  begin
-    Tag.Style.AddOrSetValue(StyleProp, StyleValue);
-    FNeedRelayout := True;
-    Repaint;
+  // Guard the DOM-tree deref: a relayout / lazy reparse can free the THTMLTag
+  // tree while GetElementById still references it — a use-after-free SIGSEGV.
+  try
+    var Tag := GetElementById(Id);
+    if Assigned(Tag) and Assigned(Tag.Style) then
+    begin
+      // No-op guard: if the inline style already holds this exact value, do
+      // nothing — no relayout, no rebuild of native peers, no autofocus
+      // re-fire. (A repeat screen show that re-sets an unchanged
+      // display/colour must be free.)
+      var CurVal: string;
+      if not Tag.Style.TryGetValue(StyleProp, CurVal) then CurVal := '';
+      if CurVal = StyleValue then Exit;
+      Tag.Style.AddOrSetValue(StyleProp, StyleValue);
+      FNeedRelayout := True;
+      Repaint;
+    end;
+  except
+    TraceLog('SetElementStyle: stale DOM skipped');
   end;
 end;
 
@@ -7610,50 +7723,25 @@ begin
   FPanIsViewport := False;
   FPanActive := False;
   try
-    // Only re-parse the source HTML when the text has actually changed.
-    // Direct DOM mutations (PrependHTML, SetElementText, SetElementStyle, etc.)
-    // operate on the in-memory tree and only need a re-layout — re-parsing
-    // would wipe their changes by rebuilding from the stale FHTML.Text.
-    if FParserDirty then
-    begin
-      FParser.Parse(FHTML.Text);
-
-      // Build stylesheet from <style> blocks and <link rel="stylesheet"> hrefs
-      FStyleSheet.Clear;
-      for var I := 0 to FParser.StyleBlocks.Count - 1 do
-        FStyleSheet.AddCSS(FParser.StyleBlocks[I]);
-      for var I := 0 to FParser.LinkHrefs.Count - 1 do
-        FStyleSheet.LoadFromURL(FParser.LinkHrefs[I]);
-
-      FParserDirty := False;
-    end;
-
-    var AvailW := Width;
-    if ScrollBarVisible and (not FScrollBarOverlay) then
-      AvailW := AvailW - FScrollBarWidth;
-    FLayoutEngine.Layout(FParser.Root, AvailW, FStyleSheet);
-    FContentHeight := FLayoutEngine.TotalHeight;
-    if Assigned(FLayoutEngine.Root) then
-      FContentWidth := FLayoutEngine.Root.MarginBoxWidth
-    else
-      FContentWidth := 0;
-    // Restore per-box scroll positions onto the rebuilt layout tree.
-    if Assigned(FLayoutEngine.Root) then
-      RestoreScrollState(FLayoutEngine.Root);
-    ClampScroll;
-    FNeedRelayout := False;
-
-    // Create native FMX controls for form elements.
+    // ── Capture reuse target + invalidate stale box pointers FIRST ──────────
+    // This MUST be the very first thing in DoLayout, because BOTH operations
+    // below destroy the structures these records point at:
+    //   • FParser.Parse (reparse, when FParserDirty) frees the old DOM THTMLTag
+    //     tree — so RRec.Box.Tag would dangle.
+    //   • FLayoutEngine.Layout does `FRoot.Free` — so RRec.Box itself dangles.
+    // The reuse loop reads RRec.Box.Tag to recover the focused control's stable
+    // DOM id, so it can only run while BOTH the boxes and the DOM are still
+    // alive — i.e. right here, before either is touched. Running it later (after
+    // the reparse or after Layout) dereferences freed-and-recycled memory and
+    // returns garbage string pointers → the SIGSEGV crash family (faults at
+    // 006C0072 / 4C542821 etc.) that killed the app on focus/re-render.
     //
-    // REUSE the currently-focused input across this rebuild instead of
-    // disposing + recreating it. Disposing a TEdit that the Android IME has
-    // an active InputConnection to corrupts the IME for the next screen (the
-    // transfer -> Global Airtime crash). By capturing it here, having
-    // ClearFormControls leave it alone, and CreateFormControls re-adopt it
-    // (matched by stable DOM id), the IME stays bound to ONE live control
-    // through the whole relayout. Only used when the focused element still
-    // exists in the new layout (same id); if it's gone (step hidden), the
-    // post-rebuild block below hands it to the keyboard-down deferral.
+    // REUSE rationale: disposing a TEdit the Android IME has an active
+    // InputConnection to corrupts the IME for the next screen (the transfer ->
+    // Global Airtime crash). Capturing the focused/IME-bound control here,
+    // having ClearFormControls leave it alone, and CreateFormControls re-adopt
+    // it (matched by stable DOM id) keeps the IME bound to ONE live control
+    // across the whole relayout.
     FReuseCtl := nil;
     FReuseId := '';
     {$IF defined(ANDROID) or defined(IOS)}
@@ -7676,10 +7764,7 @@ begin
     // just-tapped input (OnExit) a few ms before a relayout storm; without
     // this, ClearFormControls would detach (Parent:=nil) and free a control
     // the Android IME's InputConnection is still bound to -> silent process
-    // death with no tombstone. Reusing it keeps it parented + bound + intact
-    // across the rebuild (re-adopted by stable id in CreateFormControls),
-    // exactly like the focused-control case. Only when its element survives in
-    // the new layout (same id); if gone, the post-rebuild block defers it.
+    // death with no tombstone.
     if (FReuseCtl = nil) and Assigned(FImeBoundCtl) then
       for var RRec in FFormControls do
         if (RRec.Control = FImeBoundCtl) and
@@ -7698,6 +7783,56 @@ begin
       [Pointer(FReuseCtl), FReuseId, Pointer(FImeBoundCtl), FFormControls.Count]));
     {$ENDIF}
 
+    // Now that the reuse id is captured, null every FFormControls[].Box. The
+    // reparse and the Layout below will free the DOM and the box tree; nulling
+    // here means no later code can deref a dangling box — the OnExit/OnChange
+    // handlers fired synchronously during ClearFormControls' DisposeOf, any
+    // async ForceQueue closures, GetFormControlNameValue, etc. all check
+    // `Assigned(Rec.Box)` and will correctly see nil and fall back to the
+    // control's own .Text. The .Control is left intact; ClearFormControls and
+    // CreateFormControls operate off Control + stable DOM id, never the box.
+    for var I := 0 to FFormControls.Count - 1 do
+    begin
+      var Tmp := FFormControls[I];
+      Tmp.Box := nil;
+      FFormControls[I] := Tmp;
+    end;
+
+    // Only re-parse the source HTML when the text has actually changed.
+    // Direct DOM mutations (PrependHTML, SetElementText, SetElementStyle, etc.)
+    // operate on the in-memory tree and only need a re-layout — re-parsing
+    // would wipe their changes by rebuilding from the stale FHTML.Text.
+    if FParserDirty then
+    begin
+      FParser.Parse(FHTML.Text);
+
+      // Build stylesheet from <style> blocks and <link rel="stylesheet"> hrefs
+      FStyleSheet.Clear;
+      for var I := 0 to FParser.StyleBlocks.Count - 1 do
+        FStyleSheet.AddCSS(FParser.StyleBlocks[I]);
+      for var I := 0 to FParser.LinkHrefs.Count - 1 do
+        FStyleSheet.LoadFromURL(FParser.LinkHrefs[I]);
+
+      FParserDirty := False;
+    end;
+
+    var AvailW := Width;
+    if ScrollBarVisible and (not FScrollBarOverlay) then
+      AvailW := AvailW - FScrollBarWidth;
+
+    FLayoutEngine.Layout(FParser.Root, AvailW, FStyleSheet);
+    FContentHeight := FLayoutEngine.TotalHeight;
+    if Assigned(FLayoutEngine.Root) then
+      FContentWidth := FLayoutEngine.Root.MarginBoxWidth
+    else
+      FContentWidth := 0;
+    // Restore per-box scroll positions onto the rebuilt layout tree.
+    if Assigned(FLayoutEngine.Root) then
+      RestoreScrollState(FLayoutEngine.Root);
+    ClampScroll;
+    FNeedRelayout := False;
+
+    // Create native FMX controls for form elements.
     ClearFormControls;
     if Assigned(FLayoutEngine.Root) then
       CreateFormControls(FLayoutEngine.Root, 0, 0);
@@ -7751,7 +7886,14 @@ begin
     else
     {$ENDIF}
     for var Rec in FFormControls do
-      if Assigned(Rec.Box.Tag) and Rec.Box.Tag.HasAttribute('autofocus') then
+    try
+      // HasAttribute/GetAttribute hash into the tag's attributes dictionary;
+      // on a stale tag that faults inside TDictionary.Hash. This loop runs in
+      // the Paint/relayout path (no enclosing try/except), so an uncaught fault
+      // here would propagate out of DoLayout. Per-iteration guard: skip a bad
+      // entry, never crash the paint. (Boxes are normally fresh here, but a
+      // rapid flip-storm can leave a transient stale entry.)
+      if Assigned(Rec.Box) and Assigned(Rec.Box.Tag) and Rec.Box.Tag.HasAttribute('autofocus') then
       begin
         var AutoId := Rec.Box.Tag.GetAttribute('id', '');
         if AutoId <> '' then
@@ -7759,6 +7901,9 @@ begin
         Rec.Control.SetFocus;
         Break;
       end;
+    except
+      Continue;
+    end;
 
   finally
     FIsLayoutting := False;
@@ -8140,10 +8285,17 @@ begin
     ' fformctlcount=' + IntToStr(FFormControls.Count));
   if not Assigned(Tag) then Exit;
 
-  // Find the native FMX control associated with this element
+  // Find the native FMX control associated with this element.
+  // Guarded Rec.Box.Tag read: a freed TLayoutBox must not fault here.
   for var Rec in FFormControls do
   begin
-    if Assigned(Rec.Box.Tag) and (Rec.Box.Tag = Tag) then
+    var FBoxTag: THTMLTag := nil;
+    try
+      if Assigned(Rec.Box) then FBoxTag := Rec.Box.Tag;
+    except
+      Continue;
+    end;
+    if Assigned(FBoxTag) and (FBoxTag = Tag) then
     begin
       TraceLog(Format('FocusElement: matched ctl=%p cls=%s focused-before=%s',
         [Pointer(Rec.Control), Rec.Control.ClassName,
@@ -8372,9 +8524,50 @@ begin
   // doesn't see the same controls twice.
   Old := FPendingDispose;
   FPendingDispose := nil;
-  for var C in Old do
-    if C <> nil then
-      try C.DisposeOf; except end;
+  // Same re-entrancy guard as ClearFormControls: disposing these (deferred,
+  // IME-bound) controls fires OnExit/OnChange synchronously, and FFormControls
+  // may still hold freed-box entries — handlers must bail, not walk the list.
+  FDisposingControls := True;
+  try
+    for var C in Old do
+      if C <> nil then
+        try C.DisposeOf; except end;
+  finally
+    FDisposingControls := False;
+  end;
+end;
+
+procedure TTina4HTMLRender.Notification(AComponent: TComponent;
+  Operation: TOperation);
+var
+  I: Integer;
+  Keep: TArray<TControl>;
+begin
+  inherited Notification(AComponent, Operation);
+  if (Operation <> opRemove) or (csDestroying in ComponentState) then Exit;
+  // A native form control is being freed. Drop every reference to it so a
+  // freed control can never be read back as a live TEdit (the multi-renderer
+  // SetElementValue/FocusElement use-after-free AV at offset 0x0D).
+  if Assigned(FFormControls) then
+    for I := FFormControls.Count - 1 downto 0 do
+      if FFormControls[I].Control = AComponent then
+        FFormControls.Delete(I);
+  if FReuseCtl = AComponent then FReuseCtl := nil;
+  if FImeBoundCtl = AComponent then FImeBoundCtl := nil;
+  // NOTE: we deliberately do NOT touch TCommonCustomForm.Focused here.
+  // Reading Frm.Focused.GetObject during a multi-renderer teardown cascade is
+  // a use-after-free (the focused control may already have been freed by a
+  // prior ClearFormControls), and even the setter path is risky mid-cascade.
+  // Form-focus clearing is handled safely in ClearFormControls, which detects
+  // the focused control via OUR controls' own IsFocused flag (never the form
+  // getter) and clears it with the setter before disposal.
+  if Length(FPendingDispose) > 0 then
+  begin
+    Keep := nil;
+    for var C in FPendingDispose do
+      if C <> AComponent then Keep := Keep + [C];
+    FPendingDispose := Keep;
+  end;
 end;
 
 procedure TTina4HTMLRender.ClearFormControls;
@@ -8386,6 +8579,13 @@ begin
   // the (about-to-be-freed) control — see HandleFormControlExit's
   // ForceQueue closure.
   Inc(FFormControlsGen);
+
+  // Re-entrancy guard (try/finally so an exception can't leave it stuck): the
+  // DisposeOf calls below fire OnExit/OnChange synchronously while FFormControls
+  // still holds entries whose boxes the reparse already freed. The handlers
+  // bail while this is set so none derefs a dangling box.
+  FDisposingControls := True;
+  try
 
   // CRITICAL: defocus any focused TEdit before disposing it. FMX's
   // form-level focus tracker (Self.Root.SetFocused) holds a pointer
@@ -8542,6 +8742,9 @@ begin
     FPendingDispose := FPendingDispose + [FocusedCtl];
   end;
   {$ENDIF}
+  finally
+    FDisposingControls := False;
+  end;
 end;
 
 function TTina4HTMLRender.GetFormControlNameValue(Control: TControl;
@@ -8553,12 +8756,21 @@ begin
   begin
     if Rec.Control = Control then
     begin
-      if Assigned(Rec.Box.Tag) then
-      begin
-        AName := Rec.Box.Tag.GetAttribute('name', '').Trim;
-        // For radio/checkbox, return the element's value attribute
-        if (Control is TCheckBox) or (Control is TRadioButton) then
-          AValue := Rec.Box.Tag.GetAttribute('value', '').Trim;
+      // Guard the Rec.Box.Tag deref: this runs from OnEnter/OnExit, which fire
+      // while ClearFormControls disposes a focused TEdit — at that point the
+      // box (and its tag) are already freed by the reparse. A dangling deref
+      // here was the async use-after-free SIGSEGV. On a stale box, leave AName
+      // empty and fall through to the control's own .Text below.
+      try
+        if Assigned(Rec.Box) and Assigned(Rec.Box.Tag) then
+        begin
+          AName := Rec.Box.Tag.GetAttribute('name', '').Trim;
+          // For radio/checkbox, return the element's value attribute
+          if (Control is TCheckBox) or (Control is TRadioButton) then
+            AValue := Rec.Box.Tag.GetAttribute('value', '').Trim;
+        end;
+      except
+        TraceLog('GetFormControlNameValue: stale box skipped');
       end;
       Break;
     end;
@@ -8594,6 +8806,7 @@ end;
 procedure TTina4HTMLRender.HandleFormControlChange(Sender: TObject);
 var N, V: string;
 begin
+  if FDisposingControls then Exit;  // mid-dispose: FFormControls boxes are freed
   if Assigned(FOnChange) and (Sender is TControl) and
      GetFormControlNameValue(TControl(Sender), N, V) then
     FOnChange(Sender, N, V);
@@ -8615,7 +8828,7 @@ begin
     for var Rec in FFormControls do
       if Rec.Control = TControl(Sender) then
       begin
-        if Assigned(Rec.Box.Tag) then
+        if Assigned(Rec.Box) and Assigned(Rec.Box.Tag) then
           FireOnClick(Rec.Box.Tag);
         Break;
       end;
@@ -8628,7 +8841,7 @@ begin
     for var Rec in FFormControls do
     begin
       if Rec.Control <> TControl(Sender) then Continue;
-      if not Assigned(Rec.Box.Tag) then Break;
+      if (Rec.Box = nil) or (Rec.Box.Tag = nil) then Break;
 
       var IsSubmit := False;
       var TN := Rec.Box.Tag.TagName.ToLower;
@@ -8675,7 +8888,7 @@ begin
   Result := TStringList.Create;
   for var FRec in FFormControls do
   begin
-    if not Assigned(FRec.Box.Tag) then Continue;
+    if (FRec.Box = nil) or (FRec.Box.Tag = nil) then Continue;
     var CtlName := FRec.Box.Tag.GetAttribute('name', '').Trim;
     if CtlName = '' then Continue;
 
@@ -9138,7 +9351,7 @@ begin
         begin
           if Rec.Control = TControl(Sender).Parent then
           begin
-            if Assigned(Rec.Box.Tag) then
+            if Assigned(Rec.Box) and Assigned(Rec.Box.Tag) then
               FOnChange(Sender, Rec.Box.Tag.GetAttribute('name', ''),
                 Dlg.FileName);
             Break;
@@ -9336,6 +9549,7 @@ procedure TTina4HTMLRender.HandleFormControlEnter(Sender: TObject);
 var
   N, V: string;
 begin
+  if FDisposingControls then Exit;  // mid-dispose: FFormControls boxes are freed
   TraceLog(Format('OnEnter ENTRY sender=%p class=%s',
     [Pointer(Sender), Sender.ClassName]));
   {$IF defined(ANDROID) or defined(IOS)}
@@ -9426,6 +9640,7 @@ var
   KbSvc: IFMXVirtualKeyboardService;
   {$ENDIF}
 begin
+  if FDisposingControls then Exit;  // mid-dispose: FFormControls boxes are freed
   TraceLog(Format('OnExit ENTRY sender=%p class=%s',
     [Pointer(Sender), Sender.ClassName]));
   if Assigned(FOnExit) and (Sender is TControl) and
@@ -9858,6 +10073,11 @@ begin
 
       Rec.Control := Ctl;
       Rec.Box := Box;
+      // Get an opRemove callback when this control is freed — by us, by the
+      // keyboard-down deferral drain (which RemoveComponent's it off Self), or
+      // by any other path — so Notification() can purge the stale FFormControls
+      // entry before SetElementValue/FocusElement dereference a freed control.
+      Ctl.FreeNotification(Self);
       FFormControls.Add(Rec);
       Exit;
     end;
@@ -11822,7 +12042,7 @@ function TTina4HTMLRender.ResolveOnClickParam(const Expr: string;
       // Try to find the native control and get its live value
       for var Rec in FFormControls do
       begin
-        if Rec.Box.Tag = Tag then
+        if Assigned(Rec.Box) and (Rec.Box.Tag = Tag) then
         begin
           var N, V: string;
           GetFormControlNameValue(Rec.Control, N, V);
@@ -12478,7 +12698,7 @@ begin
         var ForId := LabelTag.GetAttribute('for', '');
         if ForId <> '' then
           for var Rec in FFormControls do
-            if Assigned(Rec.Box.Tag) and
+            if Assigned(Rec.Box) and Assigned(Rec.Box.Tag) and
                SameText(Rec.Box.Tag.GetAttribute('id', ''), ForId) then
             begin
               if Rec.Control is TCheckBox then

@@ -159,18 +159,18 @@ begin
         if S[I] = QuoteChar then
           InQuote := False;
       end
-      else if S[I] in ['''', '"'] then
+      else if CharInSet(S[I], ['''', '"']) then
       begin
         InQuote := True;
         QuoteChar := S[I];
         Current := Current + S[I];
       end
-      else if S[I] in ['(', '[', '{'] then
+      else if CharInSet(S[I], ['(', '[', '{']) then
       begin
         Inc(Depth);
         Current := Current + S[I];
       end
-      else if S[I] in [')', ']', '}'] then
+      else if CharInSet(S[I], [')', ']', '}']) then
       begin
         Dec(Depth);
         Current := Current + S[I];
@@ -215,18 +215,18 @@ begin
         if Expr[I] = QuoteChar then
           InQuote := False;
       end
-      else if Expr[I] in ['''', '"'] then
+      else if CharInSet(Expr[I], ['''', '"']) then
       begin
         InQuote := True;
         QuoteChar := Expr[I];
         SB.Append(Expr[I]);
       end
-      else if Expr[I] in ['(', '[', '{'] then
+      else if CharInSet(Expr[I], ['(', '[', '{']) then
       begin
         Inc(Depth);
         SB.Append(Expr[I]);
       end
-      else if Expr[I] in [')', ']', '}'] then
+      else if CharInSet(Expr[I], [')', ']', '}']) then
       begin
         Dec(Depth);
         SB.Append(Expr[I]);
@@ -405,7 +405,7 @@ begin
       end;
 
       // Handle quoted strings
-      if Expr[I] in ['''', '"'] then
+      if CharInSet(Expr[I], ['''', '"']) then
       begin
         Quote := Expr[I];
         Token := Quote;
@@ -499,7 +499,7 @@ begin
                 Inc(I);
                 Continue;
               end;
-              if Expr[I] in ['''', '"'] then
+              if CharInSet(Expr[I], ['''', '"']) then
               begin
                 QuoteChar := Expr[I];
                 InQuote := True;
@@ -538,7 +538,7 @@ begin
         Depth := 1;
         while (I <= Length(Expr)) and (Depth > 0) do
         begin
-          if Expr[I] in ['''', '"'] then
+          if CharInSet(Expr[I], ['''', '"']) then
           begin
             Quote := Expr[I];
             Token := Token + Quote;
@@ -583,7 +583,7 @@ begin
         Depth := 1;
         while (I <= Length(Expr)) and (Depth > 0) do
         begin
-          if Expr[I] in ['''', '"'] then
+          if CharInSet(Expr[I], ['''', '"']) then
           begin
             Quote := Expr[I];
             Token := Token + Quote;
@@ -1236,13 +1236,13 @@ var
       begin
         if S[Idx] = QuoteCh then InQuote := False;
       end
-      else if S[Idx] in ['''', '"'] then
+      else if CharInSet(S[Idx], ['''', '"']) then
       begin
         InQuote := True; QuoteCh := S[Idx];
       end
-      else if S[Idx] in ['(', '[', '{'] then
+      else if CharInSet(S[Idx], ['(', '[', '{']) then
         Inc(Depth)
-      else if S[Idx] in [')', ']', '}'] then
+      else if CharInSet(S[Idx], [')', ']', '}']) then
         Dec(Depth)
       else if (Depth = 0) and (S[Idx] = '?') and (S[Idx + 1] = '?') then
         Exit(Idx);
@@ -1268,13 +1268,13 @@ var
       begin
         if S[Idx] = QuoteCh then InQuote := False;
       end
-      else if S[Idx] in ['''', '"'] then
+      else if CharInSet(S[Idx], ['''', '"']) then
       begin
         InQuote := True; QuoteCh := S[Idx];
       end
-      else if S[Idx] in ['(', '[', '{'] then
+      else if CharInSet(S[Idx], ['(', '[', '{']) then
         Inc(Depth)
-      else if S[Idx] in [')', ']', '}'] then
+      else if CharInSet(S[Idx], [')', ']', '}']) then
         Dec(Depth)
       else if (Depth = 0) and (S[Idx] = '?') then
       begin
@@ -1307,13 +1307,13 @@ var
       begin
         if S[Idx] = QuoteCh then InQuote := False;
       end
-      else if S[Idx] in ['''', '"'] then
+      else if CharInSet(S[Idx], ['''', '"']) then
       begin
         InQuote := True; QuoteCh := S[Idx];
       end
-      else if S[Idx] in ['(', '[', '{'] then
+      else if CharInSet(S[Idx], ['(', '[', '{']) then
         Inc(Depth)
-      else if S[Idx] in [')', ']', '}'] then
+      else if CharInSet(S[Idx], [')', ']', '}']) then
         Dec(Depth)
       else if (Depth = 0) and (S[Idx] = ':') then
         Exit(Idx);
@@ -1341,13 +1341,13 @@ var
       begin
         if S[Idx] = QuoteCh then InQuote := False;
       end
-      else if S[Idx] in ['''', '"'] then
+      else if CharInSet(S[Idx], ['''', '"']) then
       begin
         InQuote := True; QuoteCh := S[Idx];
       end
-      else if S[Idx] in ['(', '[', '{'] then
+      else if CharInSet(S[Idx], ['(', '[', '{']) then
         Inc(Depth)
-      else if S[Idx] in [')', ']', '}'] then
+      else if CharInSet(S[Idx], [')', ']', '}']) then
         Dec(Depth)
       else if (Depth = 0) and (SameText(Copy(S, Idx, KLen), Keyword)) then
       begin
@@ -1507,7 +1507,7 @@ var
         begin
           if Result[I] = QuoteCh then InQuote := False;
         end
-        else if Result[I] in ['''', '"'] then
+        else if CharInSet(Result[I], ['''', '"']) then
         begin
           InQuote := True; QuoteCh := Result[I];
         end
@@ -1527,12 +1527,12 @@ var
             begin
               if Inner[J] = QuoteCh then InQuote := False;
             end
-            else if Inner[J] in ['''', '"'] then
+            else if CharInSet(Inner[J], ['''', '"']) then
             begin
               InQuote := True; QuoteCh := Inner[J];
             end
-            else if Inner[J] in ['(', '[', '{'] then Inc(Depth)
-            else if Inner[J] in [')', ']', '}'] then Dec(Depth)
+            else if CharInSet(Inner[J], ['(', '[', '{']) then Inc(Depth)
+            else if CharInSet(Inner[J], [')', ']', '}']) then Dec(Depth)
             else if (Depth = 0) and (Inner[J] = '?') and
                     ((J = Length(Inner)) or (Inner[J + 1] <> '?')) then
             begin
@@ -1667,14 +1667,14 @@ begin
       if S[I] = QuoteChar then
         InQuote := False;
     end
-    else if S[I] in ['''', '"'] then
+    else if CharInSet(S[I], ['''', '"']) then
     begin
       InQuote := True;
       QuoteChar := S[I];
     end
-    else if S[I] in ['(', '[', '{'] then
+    else if CharInSet(S[I], ['(', '[', '{']) then
       Inc(Depth)
-    else if S[I] in [')', ']', '}'] then
+    else if CharInSet(S[I], [')', ']', '}']) then
       Dec(Depth)
     else if (S[I] = Ch) and (Depth = 0) then
     begin
@@ -2053,7 +2053,9 @@ begin
           List.Add(Indent + '}');
         end
         else
-          List.Add(Indent + 'record(' + Value.TypeInfo.Name + ')');
+          // Explicit string() cast — TypeInfo.Name is TSymbolName (a
+          // ShortString alias), which would otherwise raise W1057.
+          List.Add(Indent + 'record(' + string(Value.TypeInfo.Name) + ')');
       end;
     else
       List.Add(Indent + Value.ToString);
@@ -4139,8 +4141,11 @@ begin
           raise Exception.Create('Too few arguments');
         var Arg := ArgValues[ArgNum];
         var StrVal: String;
-        var NumVal: Double;
-        var IntVal: Int64;
+        // W1036: only the matching case-branch assigns NumVal/IntVal; the sign
+        // check at the bottom references both regardless of Spec. Seed to 0 so
+        // a non-matching spec falls through with a benign positive sign.
+        var NumVal: Double := 0;
+        var IntVal: Int64 := 0;
         var UIntVal: UInt64;
         case Spec of
           'b':
@@ -4245,7 +4250,7 @@ begin
             StrVal := Arg; // Default to string representation
         end;
         // Apply sign for numeric
-        var IsNumeric := Spec in ['d', 'e', 'E', 'f', 'F', 'g', 'G', 'h', 'H'];
+        var IsNumeric := CharInSet(Spec, ['d', 'e', 'E', 'f', 'F', 'g', 'G', 'h', 'H']);
         var IsPositive := (Spec = 'd') and (IntVal >= 0) or (Spec <> 'd') and (NumVal >= 0);
         var Sign := '';
         if IsNumeric then
@@ -5580,7 +5585,7 @@ begin
         LastDash := True; // suppress leading dashes
         for I := 1 to Length(S) do
         begin
-          if S[I] in ['a'..'z', '0'..'9'] then
+          if CharInSet(S[I], ['a'..'z', '0'..'9']) then
           begin
             SB.Append(S[I]);
             LastDash := False;
@@ -6438,7 +6443,7 @@ begin
       while CurrentPos <= Length(Template) do
       begin
         EndPos := CurrentPos;
-        while (EndPos <= Length(Template)) and not ((Template[EndPos] = '{') and (EndPos + 1 <= Length(Template)) and (Template[EndPos + 1] in ['{', '%'])) do
+        while (EndPos <= Length(Template)) and not ((Template[EndPos] = '{') and (EndPos + 1 <= Length(Template)) and CharInSet(Template[EndPos + 1], ['{', '%'])) do
           Inc(EndPos);
         if EndPos > CurrentPos then
           SB.Append(Copy(Template, CurrentPos, EndPos - CurrentPos));

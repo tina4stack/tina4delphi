@@ -1920,7 +1920,10 @@ begin
             ReadFile(vStdOutPipe.Output, vBuffer^, cBufferSize, vReadBytes, nil);
             if vReadBytes > 0 then
             begin
-              AOutput := AOutput + StrPas(PAnsiChar(vBuffer));
+              // String(AnsiString(PAnsiChar(...))) replaces deprecated StrPas
+              // (moved to System.AnsiStrings in modern Delphi) and removes the
+              // implicit AnsiString->string cast warning (W1057).
+              AOutput := AOutput + String(AnsiString(PAnsiChar(vBuffer)));
               Inc(Result, vReadBytes);
             end;
           until (vReadBytes < cBufferSize);

@@ -4329,7 +4329,7 @@ begin
           end;
         end
       finally
-        surf.DisposeOf;
+        surf.Free;
       end;
     end;
     Exit;
@@ -6711,6 +6711,19 @@ end;
 constructor TTina4HTMLRender.Create(AOwner: TComponent);
 begin
   inherited;
+  {$IFDEF IOS}
+  // 2026-06-08 — Permanently suppress the FMX iOS virtual-keyboard accessory
+  // toolbar (the blue "Done" bar). Switching iOS inputs to Styled (the native-
+  // peer use-after-free fix) makes FMX.VirtualKeyboard.iOS attach a UIToolbar
+  // + Done above the keyboard. It has no value AND its height covers the input
+  // we just scrolled to the keyboard's top edge (the "input hidden behind the
+  // keyboard" report). IFMXVirtualKeyboardToolbarService disables it app-wide.
+  // Idempotent; safe to call on every renderer construction.
+  var TbSvc: IFMXVirtualKeyboardToolbarService;
+  if TPlatformServices.Current.SupportsPlatformService(
+       IFMXVirtualKeyboardToolbarService, IInterface(TbSvc)) and (TbSvc <> nil) then
+    TbSvc.SetToolbarEnabled(False);
+  {$ENDIF}
   FHTML := TStringList.Create;
   FDebug := TStringList.Create;
 
@@ -7953,7 +7966,14 @@ begin
     {$IF defined(ANDROID) or defined(IOS)}
     if FKbdShowAsked or FKeyboardVisible then
     begin
-      TraceLog('autofocus: keyboard already up — skip SetFocus');
+      // 2026-06-08 - keyboard is up from the previous screen. If THIS freshly
+      // rendered screen has NO focusable inputs (e.g. Transfer "Confirm" -> the
+      // read-only confirmation screen), the IME has nothing to bind to, so
+      // dismiss it instead of leaving it floating over an input-less screen.
+      if FFormControls.Count = 0 then
+        HideVirtualKeyboardIfAny
+      else
+        TraceLog('autofocus: keyboard already up — skip SetFocus');
     end
     else
     {$ENDIF}
@@ -8603,7 +8623,7 @@ begin
   try
     for var C in Old do
       if C <> nil then
-        try C.DisposeOf; except end;
+        try C.Free; except end;
   finally
     FDisposingControls := False;
   end;
@@ -8779,7 +8799,7 @@ begin
         [Pointer(C), Pointer(FImeBoundCtl), Pointer(FReuseCtl),
          BoolToStr(FKeyboardVisible, True)]));
     {$ENDIF}
-    C.DisposeOf;
+    C.Free;
   end;
   FFormControls.Clear;
 
@@ -8809,7 +8829,7 @@ begin
         Continue;
       end;
       {$ENDIF}
-      C.DisposeOf;
+      C.Free;
     end;
   end;
 
@@ -9539,7 +9559,17 @@ begin
   // Sunmi bugs don't exist on iOS so there's no downside to Platform
   // mode there.
   {$IFDEF IOS}
-  Ed.ControlType := TControlType.Platform;
+  // 2026-06-08 — DISABLED native UITextField on iOS (was: ControlType.Platform).
+  // The native peer keeps async UIKit callbacks (paint/layout/VK) that fire a
+  // tick AFTER a re-render has already freed the control — a use-after-free
+  // INSIDE FMX/UIKit, below any Pascal try/except. CrashSimTest on iOS proved
+  // it: AVcaught=0, UNCAUGHT climbing on every flip, constant fault address,
+  // the freed slot reused by a UTF-16 banner string. Mirror Android (which is
+  // already Styled, see the note above): Styled = FMX-managed, synchronous
+  // dispose, NO native async peer -> the UAF can't happen. Trade-off:
+  // FMX.VirtualKeyboard.iOS re-adds a "Done" accessory bar above the keyboard
+  // (cosmetic). Stability wins — same call we made for Android.
+  // Ed.ControlType := TControlType.Platform;
   {$ENDIF}
 end;
 
@@ -10856,6 +10886,11 @@ begin
   Op := GetScrollbarOpacity;
   if Op <= 0.001 then Exit;
   GetBoxScrollBarRects(Box, CX, CY, VTrack, VThumb, HTrack, HThumb, HasV, HasH);
+  // Seed SB up front. The overlay branch uses SB/2 as the thumb corner radius
+  // (W1036 "might not have been initialized") — the corner-fill branch at the
+  // bottom reassigns it, but by then the overlay paint has already used a
+  // garbage radius from uninitialized stack memory.
+  SB := FScrollBarWidth;
   Canvas.Fill.Kind := TBrushKind.Solid;
 
   if FScrollBarOverlay then
@@ -10889,10 +10924,10 @@ begin
       Canvas.FillRect(HThumb, 4, 4, AllCorners, Op);
     end;
   end;
-  // Fill the bottom-right corner square when both bars are showing
+  // Fill the bottom-right corner square when both bars are showing.
+  // SB was seeded at function entry — no re-init needed.
   if HasV and HasH then
   begin
-    SB := FScrollBarWidth;
     Canvas.Fill.Color := $FFF0F0F0;
     Canvas.FillRect(RectF(CX + Box.ContentWidth - SB, CY + Box.ContentHeight - SB,
                           CX + Box.ContentWidth, CY + Box.ContentHeight), Op);

@@ -19,12 +19,16 @@ type
     LastError: string;
     MessageCount: Integer;
     ReconnectAttempt: Integer;
+    StateChangeFired: Boolean;
+    LastStateChangeOld, LastStateChangeNew: TTina4WSState;
     procedure OnConnected(Sender: TObject);
     procedure OnDisconnected(Sender: TObject; const ACode: Integer;
       const AReason: string);
     procedure OnMessage(Sender: TObject; const AMessage: string);
     procedure OnError(Sender: TObject; const AError: string);
     procedure OnReconnecting(Sender: TObject; AAttempt: Integer);
+    procedure OnStateChange(Sender: TObject;
+      AOldState, ANewState: TTina4WSState);
     procedure Reset;
     procedure OnServerError(Sender: TObject; Connection: TTina4WSConnection;
       const AError: string);
@@ -54,6 +58,12 @@ type
     procedure TestIsConnectedWhenClosed;
     procedure TestSendWhenNotConnected;
     procedure TestDisconnectWhenClosed;
+
+    // Mobile bullet-proofing — disconnect controls
+    procedure TestDisconnectWithCodeAndReason;
+    procedure TestForceReconnectWhenClosedTriggersReconnect;
+    procedure TestNotifyNetworkChangedWhenClosedNoop;
+    procedure TestStateChangeEventFiresOnDisconnect;
 
     // OpenSSL loader
     procedure TestOpenSSLLoad;
@@ -122,6 +132,9 @@ begin
   LastError := '';
   MessageCount := 0;
   ReconnectAttempt := 0;
+  StateChangeFired := False;
+  LastStateChangeOld := wsClosed;
+  LastStateChangeNew := wsClosed;
 end;
 
 procedure TWSTestHelper.OnConnected(Sender: TObject);
@@ -151,6 +164,14 @@ end;
 procedure TWSTestHelper.OnReconnecting(Sender: TObject; AAttempt: Integer);
 begin
   ReconnectAttempt := AAttempt;
+end;
+
+procedure TWSTestHelper.OnStateChange(Sender: TObject;
+  AOldState, ANewState: TTina4WSState);
+begin
+  StateChangeFired := True;
+  LastStateChangeOld := AOldState;
+  LastStateChangeNew := ANewState;
 end;
 
 procedure TWSTestHelper.OnServerError(Sender: TObject;
@@ -195,8 +216,15 @@ begin
     CheckEquals(10, WS.ReconnectMaxAttempts, 'ReconnectMaxAttempts should default to 10');
     CheckEquals(30000, WS.PingInterval, 'PingInterval should default to 30000');
     CheckEquals(5000, WS.ConnectTimeout, 'ConnectTimeout should default to 5000');
+    // Mobile bullet-proofing defaults
+    CheckEquals(10000, WS.PongTimeout, 'PongTimeout should default to 10000');
+    CheckEquals(60000, WS.ReconnectMaxInterval,
+      'ReconnectMaxInterval should default to 60000');
+    CheckEquals(0, WS.MaxConnectionAge,
+      'MaxConnectionAge should default to 0 (disabled)');
     Check(WS.State = wsClosed, 'State should default to wsClosed');
     CheckEquals(0, WS.Headers.Count, 'Headers should be empty');
+    CheckEquals(0, WS.LastRTT, 'LastRTT should start at 0');
   finally
     WS.Free;
   end;
@@ -406,6 +434,114 @@ begin
     Check(WS.State = wsClosed, 'State should remain closed');
   finally
     WS.Free;
+  end;
+end;
+
+{ -- Mobile bullet-proofing — disconnect controls -- }
+
+procedure TestTTina4WebSocketUnit.TestDisconnectWithCodeAndReason;
+var
+  WS: TTina4WebSocketClient;
+begin
+  // Even with no live connection, Disconnect(code, reason) should accept
+  // the parameters without raising and leave the component in wsClosed.
+  // The code path that actually sends the close frame is exercised by
+  // the integration tests below.
+  WS := TTina4WebSocketClient.Create(nil);
+  try
+    WS.Disconnect(1001, 'going to background');
+    Check(WS.State = wsClosed, 'State should remain closed');
+    WS.Disconnect(4000, 'application logout');
+    Check(WS.State = wsClosed, 'State should remain closed');
+  finally
+    WS.Free;
+  end;
+end;
+
+procedure TestTTina4WebSocketUnit.TestForceReconnectWhenClosedTriggersReconnect;
+var
+  WS: TTina4WebSocketClient;
+  H: TWSTestHelper;
+begin
+  // From wsClosed with no URL set, ForceReconnect should still:
+  //   1. Flip AutoReconnect back on,
+  //   2. Fire OnReconnecting,
+  //   3. Asynchronously fail the connect (no URL/server),
+  // without raising on the caller's thread.
+  WS := TTina4WebSocketClient.Create(nil);
+  H := TWSTestHelper.Create;
+  try
+    WS.URL := 'ws://127.0.0.1:1';  // unreachable
+    WS.ReconnectInterval := 100;   // keep the test snappy
+    WS.ReconnectMaxAttempts := 1;
+    WS.OnReconnecting := H.OnReconnecting;
+    H.Reset;
+
+    WS.AutoReconnect := False;     // simulate "user disconnected earlier"
+    WS.ForceReconnect;             // should override AutoReconnect
+
+    Check(WS.AutoReconnect, 'ForceReconnect should re-enable AutoReconnect');
+
+    // Give the background reconnect thread a moment to fire OnReconnecting.
+    var Waited := 0;
+    while (H.ReconnectAttempt = 0) and (Waited < 2000) do
+    begin
+      Sleep(50); CheckSynchronize(50); Inc(Waited, 50);
+    end;
+    Check(H.ReconnectAttempt >= 1,
+      'ForceReconnect should have triggered OnReconnecting');
+  finally
+    WS.Disconnect;
+    Sleep(150);  // let any pending reconnect thread settle
+    WS.Free;
+    H.Free;
+  end;
+end;
+
+procedure TestTTina4WebSocketUnit.TestNotifyNetworkChangedWhenClosedNoop;
+var
+  WS: TTina4WebSocketClient;
+begin
+  // With no open connection, NotifyNetworkChanged must be a safe no-op
+  // (it should NOT raise, NOT transition state, NOT try to send).
+  WS := TTina4WebSocketClient.Create(nil);
+  try
+    WS.NotifyNetworkChanged;
+    Check(WS.State = wsClosed, 'State should remain closed');
+  finally
+    WS.Free;
+  end;
+end;
+
+procedure TestTTina4WebSocketUnit.TestStateChangeEventFiresOnDisconnect;
+var
+  WS: TTina4WebSocketClient;
+  H: TWSTestHelper;
+begin
+  // OnStateChange is the single hook for any state transition. Verify it
+  // fires for the wsConnecting -> wsClosed flip path that happens when
+  // Connect is followed by Disconnect before any TCP success.
+  WS := TTina4WebSocketClient.Create(nil);
+  H := TWSTestHelper.Create;
+  try
+    H.Reset;
+    WS.URL := 'ws://127.0.0.1:1';  // unreachable -> async failure
+    WS.AutoReconnect := False;
+    WS.OnStateChange := H.OnStateChange;
+
+    WS.Connect;                    // wsClosed -> wsConnecting
+    Sleep(50); CheckSynchronize(50);
+    WS.Disconnect;                 // -> wsClosed
+    Sleep(200); CheckSynchronize(100);
+
+    Check(H.StateChangeFired, 'OnStateChange should have fired at least once');
+    // We don't assert the exact transition pair because the connect
+    // thread may have already failed asynchronously, but ending at
+    // wsClosed is invariant.
+    Check(WS.State = wsClosed, 'Final state should be wsClosed');
+  finally
+    WS.Free;
+    H.Free;
   end;
 end;
 

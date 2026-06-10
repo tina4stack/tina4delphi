@@ -161,6 +161,12 @@ function IsOpenSSLLoaded: Boolean;
 /// <summary>Unload OpenSSL libraries</summary>
 procedure UnloadOpenSSL;
 
+/// <summary>SSL handshake tracing -> ssl_debug.log on the device. Off by
+/// default so production builds stay silent; a host app flips it on (e.g.
+/// gated on its own APP_DEBUG) only when diagnosing a TLS/SNI handshake.</summary>
+var
+  Tina4SSLLoggingEnabled: Boolean = False;
+
 implementation
 
 { ---- Library names per platform ---- }
@@ -226,6 +232,10 @@ type
   TSSL_read = function(ssl: PSSL; buf: Pointer; num: Integer): Integer; cdecl;
   TSSL_write = function(ssl: PSSL; buf: Pointer; num: Integer): Integer; cdecl;
   TSSL_shutdown = function(ssl: PSSL): Integer; cdecl;
+  // BoringSSL (Android system/vendor lib) exports SNI as a REAL function and
+  // has NO SSL_ctrl; OpenSSL implements it as the SSL_ctrl(55) macro. Bind
+  // both and prefer the direct export so SNI works whichever library loads.
+  TSSL_set_tlsext_host_name = function(ssl: PSSL; name: MarshaledAString): Integer; cdecl;
   TSSL_get_error = function(ssl: PSSL; ret: Integer): Integer; cdecl;
   TERR_error_string = function(e: Cardinal; buf: PAnsiChar): PAnsiChar; cdecl;
   TERR_get_error = function: Cardinal; cdecl;
@@ -259,6 +269,7 @@ var
   _SSL_read: TSSL_read = nil;
   _SSL_write: TSSL_write = nil;
   _SSL_shutdown: TSSL_shutdown = nil;
+  _SSL_set_tlsext_host_name: TSSL_set_tlsext_host_name = nil;
   _SSL_get_error: TSSL_get_error = nil;
   _ERR_error_string: TERR_error_string = nil;
   _ERR_get_error: TERR_get_error = nil;
@@ -324,11 +335,8 @@ end;
 
 { ---- Logging ---- }
 
-// Off by default: SSL tracing writes ssl_debug.log to the device, which must
-// not appear in production builds. A host can flip this to True only when
-// diagnosing a TLS handshake. Keeps Release builds free of debug logging.
-var
-  Tina4SSLLoggingEnabled: Boolean = False;
+// Tina4SSLLoggingEnabled lives in the interface so a host app can flip it
+// (gated on its own APP_DEBUG) when diagnosing a TLS/SNI handshake.
 
 procedure SSLLog(const Msg: String);
 var
@@ -381,19 +389,18 @@ begin
     if FLoaded then
       Exit(True);
 
-    // Load crypto library first — try names, then app native lib path
+    // Load crypto library first.
+    // ANDROID ORDER MATTERS: try the app's own native-lib dir by ABSOLUTE
+    // PATH FIRST. A bare dlopen("libcrypto.so") is a linker-namespace
+    // lottery — on some vendor images (seen on a Sunmi V2) it resolves the
+    // SYSTEM BoringSSL instead of the OpenSSL 1.1.1 bundled in the APK.
+    // BoringSSL has no SSL_ctrl export, so SNI was silently skipped and
+    // vhosted TLS servers answered the wss:// handshake with HTTP 421
+    // Misdirected Request. The absolute path pins our bundled copy; the
+    // bare name stays as the fallback.
     for I := 0 to High(CRYPTO_LIB_NAMES) do
     begin
-      SSLLog('Trying crypto: ' + CRYPTO_LIB_NAMES[I]);
-      FCryptoLib := InternalLoadLib(CRYPTO_LIB_NAMES[I]);
-      if FCryptoLib <> 0 then
-      begin
-        SSLLog('Loaded crypto: ' + CRYPTO_LIB_NAMES[I]);
-        Break;
-      end;
-      SSLLog('Failed crypto: ' + CRYPTO_LIB_NAMES[I]);
       {$IFDEF ANDROID}
-      // Try app's native lib directory
       var CryptoPath := TPath.Combine(TPath.GetLibraryPath, CRYPTO_LIB_NAMES[I]);
       SSLLog('Trying crypto: ' + CryptoPath);
       FCryptoLib := InternalLoadLib(CryptoPath);
@@ -404,6 +411,14 @@ begin
       end;
       SSLLog('Failed crypto: ' + CryptoPath);
       {$ENDIF}
+      SSLLog('Trying crypto: ' + CRYPTO_LIB_NAMES[I]);
+      FCryptoLib := InternalLoadLib(CRYPTO_LIB_NAMES[I]);
+      if FCryptoLib <> 0 then
+      begin
+        SSLLog('Loaded crypto: ' + CRYPTO_LIB_NAMES[I]);
+        Break;
+      end;
+      SSLLog('Failed crypto: ' + CRYPTO_LIB_NAMES[I]);
     end;
     if FCryptoLib = 0 then
     begin
@@ -411,17 +426,11 @@ begin
       Exit(False);
     end;
 
-    // Load SSL library
+    // Load SSL library — same Android absolute-path-first rule as crypto
+    // above (and the pair must come from the SAME install, never mix the
+    // app's libssl with the system's libcrypto).
     for I := 0 to High(SSL_LIB_NAMES) do
     begin
-      SSLLog('Trying ssl: ' + SSL_LIB_NAMES[I]);
-      FSSLLib := InternalLoadLib(SSL_LIB_NAMES[I]);
-      if FSSLLib <> 0 then
-      begin
-        SSLLog('Loaded ssl: ' + SSL_LIB_NAMES[I]);
-        Break;
-      end;
-      SSLLog('Failed ssl: ' + SSL_LIB_NAMES[I]);
       {$IFDEF ANDROID}
       var SSLPath := TPath.Combine(TPath.GetLibraryPath, SSL_LIB_NAMES[I]);
       SSLLog('Trying ssl: ' + SSLPath);
@@ -433,6 +442,14 @@ begin
       end;
       SSLLog('Failed ssl: ' + SSLPath);
       {$ENDIF}
+      SSLLog('Trying ssl: ' + SSL_LIB_NAMES[I]);
+      FSSLLib := InternalLoadLib(SSL_LIB_NAMES[I]);
+      if FSSLLib <> 0 then
+      begin
+        SSLLog('Loaded ssl: ' + SSL_LIB_NAMES[I]);
+        Break;
+      end;
+      SSLLog('Failed ssl: ' + SSL_LIB_NAMES[I]);
     end;
     if FSSLLib = 0 then
     begin
@@ -464,6 +481,9 @@ begin
     @_SSL_shutdown := InternalGetProc(FSSLLib, 'SSL_shutdown');
     @_SSL_get_error := InternalGetProc(FSSLLib, 'SSL_get_error');
     @_SSL_ctrl := InternalGetProc(FSSLLib, 'SSL_ctrl');
+    // Direct SNI export — present in BoringSSL (and absent as an export in
+    // OpenSSL, where it's a macro). Complement of _SSL_ctrl above.
+    @_SSL_set_tlsext_host_name := InternalGetProc(FSSLLib, 'SSL_set_tlsext_host_name');
     @_ERR_error_string := InternalGetProc(FCryptoLib, 'ERR_error_string');
     @_ERR_get_error := InternalGetProc(FCryptoLib, 'ERR_get_error');
 
@@ -491,6 +511,13 @@ begin
     SSLLog('SSL_shutdown=' + BoolToStr(Assigned(_SSL_shutdown), True));
     SSLLog('SSL_free=' + BoolToStr(Assigned(_SSL_free), True));
     SSLLog('SSL_CTX_free=' + BoolToStr(Assigned(_SSL_CTX_free), True));
+    // SSL_ctrl is the SNI carrier (SSL_set_tlsext_host_name macro). BoringSSL
+    // (Android vendor images) does NOT export it — if this reads False the
+    // wrong library was dlopen'd and SNI is silently skipped -> vhosted
+    // servers answer HTTP 421 Misdirected Request on the wss:// handshake.
+    SSLLog('SSL_ctrl=' + BoolToStr(Assigned(_SSL_ctrl), True));
+    SSLLog('SSL_set_tlsext_host_name=' +
+      BoolToStr(Assigned(_SSL_set_tlsext_host_name), True));
 
     if not Assigned(_TLS_client_method) or
        not Assigned(_SSL_CTX_new) or not Assigned(_SSL_new) or
@@ -592,11 +619,30 @@ begin
   if _SSL_set_fd(FSSL, Integer(ASocketHandle)) <> 1 then
     Exit;
 
-  // Set SNI hostname for virtual-hosted TLS servers
-  if (FHostName <> '') and Assigned(_SSL_ctrl) then
+  // Set SNI hostname for virtual-hosted TLS servers. OpenSSL carries it via
+  // the SSL_ctrl(55) macro; BoringSSL exports a REAL SSL_set_tlsext_host_name
+  // function and has NO SSL_ctrl. Prefer the direct export, fall back to the
+  // macro path, and log loudly when neither binds — a missing SNI surfaces
+  // remotely as HTTP 421 Misdirected Request on the wss:// handshake.
+  if FHostName <> '' then
   begin
     var HostBytes := TEncoding.UTF8.GetBytes(FHostName + #0);
-    _SSL_ctrl(FSSL, 55 {SSL_CTRL_SET_TLSEXT_HOSTNAME}, 0 {TLSEXT_NAMETYPE_host_name}, @HostBytes[0]);
+    if Assigned(_SSL_set_tlsext_host_name) then
+    begin
+      var SNIRet := _SSL_set_tlsext_host_name(FSSL, MarshaledAString(@HostBytes[0]));
+      SSLLog('SNI set (direct) host=' + FHostName + ' ret=' + IntToStr(SNIRet) +
+        ' (1=ok, 0=rejected)');
+    end
+    else if Assigned(_SSL_ctrl) then
+    begin
+      var SNIRet := _SSL_ctrl(FSSL, 55 {SSL_CTRL_SET_TLSEXT_HOSTNAME}, 0 {TLSEXT_NAMETYPE_host_name}, @HostBytes[0]);
+      SSLLog('SNI set (SSL_ctrl) host=' + FHostName + ' ret=' + IntToStr(SNIRet) +
+        ' (1=ok, 0=rejected)');
+    end
+    else
+      SSLLog('SNI SKIPPED: host="' + FHostName +
+        '" — neither SSL_set_tlsext_host_name nor SSL_ctrl bound; ' +
+        'vhosted servers will answer HTTP 421');
   end;
 
   Result := True;

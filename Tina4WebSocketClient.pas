@@ -27,6 +27,10 @@ type
   /// <summary>Reconnect attempt event</summary>
   TTina4WSReconnectEvent = procedure(Sender: TObject;
     AAttempt: Integer) of object;
+  /// <summary>State-transition event. Fired for every state change after
+  /// the new state is in effect.</summary>
+  TTina4WSStateChangeEvent = procedure(Sender: TObject;
+    AOldState, ANewState: TTina4WSState) of object;
 
   TTina4WebSocketClient = class;
 
@@ -52,10 +56,14 @@ type
     FHeaders: TStringList;
     FAutoReconnect: Boolean;
     FReconnectInterval: Integer;
+    FReconnectMaxInterval: Integer;
     FReconnectMaxAttempts: Integer;
     FPingInterval: Integer;
+    FPongTimeout: Integer;
+    FMaxConnectionAge: Integer;
     FConnectTimeout: Integer;
     FState: TTina4WSState;
+    FStateLock: TCriticalSection;  // serializes FState reads/writes
 
     FOnConnected: TNotifyEvent;
     FOnDisconnected: TTina4WSDisconnectEvent;
@@ -63,6 +71,7 @@ type
     FOnBinaryReceived: TTina4WSBinaryEvent;
     FOnError: TTina4WSErrorEvent;
     FOnReconnecting: TTina4WSReconnectEvent;
+    FOnStateChange: TTina4WSStateChangeEvent;
 
     FSocket: TSocket;
     FSSL: TTina4SSLContext;
@@ -79,11 +88,20 @@ type
     FWriteLock: TCriticalSection;
     FReconnectAttempt: Integer;
     FLastPingSent: TDateTime;
+    FLastFrameAt: TDateTime;  // updated on EVERY received frame (watchdog)
+    FLastRTT: Integer;        // ms, latest ping-to-pong round-trip
+    FConnectedAt: TDateTime;  // when the current connection went wsOpen
     FPingTimer: TThread;
-    FPingWake: TEvent;  // signaled to wake ping thread out of its wait early
+    FPingWake: TEvent;       // signaled to wake ping thread out of its wait early
+    FReconnectWake: TEvent;  // signaled to break out of backoff wait
+    FReconnectThread: TThread;
+    FForceReconnect: Boolean; // ForceReconnect path: bypass MaxAttempts/AutoReconnect
 
     function GetHeaders: TStrings;
     procedure SetHeaders(const Value: TStrings);
+    function GetState: TTina4WSState;
+    procedure SetState(ANewState: TTina4WSState);
+    function ComputeBackoffMs(AAttempt: Integer): Integer;
     procedure ParseURL;
     procedure DoConnect;
     procedure DoTCPConnect;
@@ -111,22 +129,44 @@ type
     procedure FireBinary(const AData: TBytes);
     procedure FireError(const AError: string);
     procedure FireReconnecting(AAttempt: Integer);
+    procedure FireStateChange(AOldState, ANewState: TTina4WSState);
   public
     constructor Create(AOwner: TComponent); override;
     destructor Destroy; override;
 
     /// <summary>Connect to the WebSocket server</summary>
     procedure Connect;
-    /// <summary>Disconnect gracefully</summary>
-    procedure Disconnect;
+    /// <summary>Disconnect gracefully with normal close code (1000).</summary>
+    procedure Disconnect; overload;
+    /// <summary>Disconnect with an explicit close code and reason. Common
+    /// mobile codes: 1000 normal, 1001 going-away (background/logout),
+    /// 4000-4999 application-specific.</summary>
+    procedure Disconnect(ACode: Integer; const AReason: string); overload;
+    /// <summary>Force an immediate reconnect regardless of AutoReconnect or
+    /// MaxAttempts. Intended for "app resumed from background / network
+    /// changed" scenarios where the current socket may be stale.</summary>
+    procedure ForceReconnect;
+    /// <summary>Non-destructive liveness probe. Sends an immediate ping and
+    /// shortens the watchdog deadline so a dead link fails fast. If the
+    /// pong returns within PongTimeout the connection survives untouched.
+    /// Call after a network-change notification on mobile.</summary>
+    procedure NotifyNetworkChanged;
     /// <summary>Send a text message</summary>
     procedure Send(const AMessage: string); overload;
     /// <summary>Send binary data</summary>
     procedure Send(const AData: TBytes); overload;
     /// <summary>True if the connection is open</summary>
     function IsConnected: Boolean;
-    /// <summary>Current connection state</summary>
-    property State: TTina4WSState read FState;
+    /// <summary>Current connection state (thread-safe).</summary>
+    property State: TTina4WSState read GetState;
+    /// <summary>Latest ping-to-pong round-trip in milliseconds. 0 until
+    /// the first pong arrives. Useful for showing connection quality.</summary>
+    property LastRTT: Integer read FLastRTT;
+    /// <summary>Wall-clock time the current connection went wsOpen.</summary>
+    property ConnectedAt: TDateTime read FConnectedAt;
+    /// <summary>Wall-clock time of the most recent received frame (any
+    /// opcode — message, ping, pong). The watchdog uses this.</summary>
+    property LastFrameAt: TDateTime read FLastFrameAt;
   published
     /// <summary>WebSocket URL (ws:// or wss://)</summary>
     property URL: string read FURL write FURL;
@@ -135,15 +175,34 @@ type
     /// <summary>Auto-reconnect on unexpected disconnect (default True)</summary>
     property AutoReconnect: Boolean read FAutoReconnect write FAutoReconnect
       default True;
-    /// <summary>Delay between reconnect attempts in ms (default 3000)</summary>
+    /// <summary>Initial delay between reconnect attempts in ms (default 3000).
+    /// Subsequent attempts double up to ReconnectMaxInterval with 0-25% jitter
+    /// — exponential backoff prevents thundering-herd against a down server.</summary>
     property ReconnectInterval: Integer read FReconnectInterval
       write FReconnectInterval default 3000;
+    /// <summary>Cap on the exponential backoff (default 60000 = 60s). The
+    /// computed delay is min(ReconnectMaxInterval, ReconnectInterval * 2^(n-1))
+    /// plus random jitter.</summary>
+    property ReconnectMaxInterval: Integer read FReconnectMaxInterval
+      write FReconnectMaxInterval default 60000;
     /// <summary>Max reconnect attempts. 0 = infinite (default 10)</summary>
     property ReconnectMaxAttempts: Integer read FReconnectMaxAttempts
       write FReconnectMaxAttempts default 10;
     /// <summary>Ping interval in ms. 0 = disabled (default 30000)</summary>
     property PingInterval: Integer read FPingInterval write FPingInterval
       default 30000;
+    /// <summary>How long after a ping (or any received frame) the watchdog
+    /// waits for a frame back before declaring the link dead and forcing a
+    /// reconnect. Mobile-critical: detects half-open sockets in seconds
+    /// rather than waiting minutes for OS TCP timeout. 0 = disabled.
+    /// Default 10000ms.</summary>
+    property PongTimeout: Integer read FPongTimeout write FPongTimeout
+      default 10000;
+    /// <summary>If > 0, the connection is gracefully rotated this many ms
+    /// after it goes wsOpen. Defeats silent NAT / middlebox timeouts on
+    /// long-lived mobile sockets. 0 = disabled (default).</summary>
+    property MaxConnectionAge: Integer read FMaxConnectionAge
+      write FMaxConnectionAge default 0;
     /// <summary>TCP connect timeout in ms (default 5000)</summary>
     property ConnectTimeout: Integer read FConnectTimeout write FConnectTimeout
       default 5000;
@@ -163,6 +222,11 @@ type
     /// <summary>Fired before each reconnect attempt</summary>
     property OnReconnecting: TTina4WSReconnectEvent read FOnReconnecting
       write FOnReconnecting;
+    /// <summary>Fired after every state transition. Single hook for UI
+    /// connection-quality indicators — covers wsClosed/wsConnecting/wsOpen/
+    /// wsClosing/wsReconnecting without chaining the specific events.</summary>
+    property OnStateChange: TTina4WSStateChangeEvent read FOnStateChange
+      write FOnStateChange;
   end;
 
 procedure Register;
@@ -315,7 +379,7 @@ begin
   // Frame parsing now lives in Tina4WebSocketFrames.ReadFrame so the
   // server unit can share it. We just supply our byte source and
   // dispatch the assembled message to ProcessFrame.
-  while not Terminated and (FOwner.FState = wsOpen) do
+  while not Terminated and (FOwner.GetState = wsOpen) do
   begin
     try
       Frame := ReadFrame(
@@ -327,7 +391,7 @@ begin
     except
       on E: Exception do
       begin
-        if not Terminated and (FOwner.FState = wsOpen) then
+        if not Terminated and (FOwner.GetState = wsOpen) then
         begin
           FOwner.FireError('Read error: ' + E.Message);
           FOwner.DoDisconnectInternal(1006, 'Connection lost', True);
@@ -345,23 +409,42 @@ begin
   inherited;
   FHeaders := TStringList.Create;
   FWriteLock := TCriticalSection.Create;
-  FPingWake := TEvent.Create(nil, True, False, '');  // manual-reset, initially non-signaled
+  FStateLock := TCriticalSection.Create;
+  FPingWake := TEvent.Create(nil, True, False, '');       // manual-reset
+  FReconnectWake := TEvent.Create(nil, True, False, '');  // manual-reset
   FAutoReconnect := True;
   FReconnectInterval := 3000;
+  FReconnectMaxInterval := 60000;
   FReconnectMaxAttempts := 10;
   FPingInterval := 30000;
+  FPongTimeout := 10000;
+  FMaxConnectionAge := 0;  // off by default
   FConnectTimeout := 5000;
   FState := wsClosed;
   FReconnectAttempt := 0;
+  FLastRTT := 0;
 end;
 
 destructor TTina4WebSocketClient.Destroy;
 begin
   FAutoReconnect := False;
+  // Wake any pending reconnect wait so it exits immediately on destroy.
+  if Assigned(FReconnectWake) then FReconnectWake.SetEvent;
+  // Set state directly — SetState fires OnStateChange via Queue which we
+  // don't want during destruction.
   FState := wsClosed;
 
   // 1. Stop ping timer
   StopPingTimer;
+
+  // Join the reconnect thread BEFORE freeing the wake event it waits on.
+  if Assigned(FReconnectThread) then
+  begin
+    FReconnectThread.Terminate;
+    if Assigned(FReconnectWake) then FReconnectWake.SetEvent;
+    try FReconnectThread.WaitFor; except end;
+    FreeAndNil(FReconnectThread);
+  end;
 
   // 2. Stop read thread
   if Assigned(FReadThread) then
@@ -408,7 +491,9 @@ begin
   {$ENDIF}
 
   FPingWake.Free;
+  FReconnectWake.Free;
   FWriteLock.Free;
+  FStateLock.Free;
   FHeaders.Free;
   inherited;
 end;
@@ -421,6 +506,60 @@ end;
 procedure TTina4WebSocketClient.SetHeaders(const Value: TStrings);
 begin
   FHeaders.Assign(Value);
+end;
+
+{ ---- State (thread-safe) ---- }
+
+function TTina4WebSocketClient.GetState: TTina4WSState;
+begin
+  // FStateLock isn't strictly required to read an enum-sized field on the
+  // platforms we target, but it pairs with SetState so callers always see
+  // a coherent snapshot relative to state-change events.
+  FStateLock.Enter;
+  try
+    Result := FState;
+  finally
+    FStateLock.Leave;
+  end;
+end;
+
+procedure TTina4WebSocketClient.SetState(ANewState: TTina4WSState);
+var
+  OldState: TTina4WSState;
+  Changed: Boolean;
+begin
+  FStateLock.Enter;
+  try
+    OldState := FState;
+    Changed := OldState <> ANewState;
+    if Changed then
+      FState := ANewState;
+  finally
+    FStateLock.Leave;
+  end;
+  if Changed then
+    FireStateChange(OldState, ANewState);
+end;
+
+{ ---- Reconnect backoff ---- }
+
+function TTina4WebSocketClient.ComputeBackoffMs(AAttempt: Integer): Integer;
+var
+  Base, JitterMs: Integer;
+begin
+  // Exponential backoff: ReconnectInterval * 2^(attempt-1), clamped to
+  // ReconnectMaxInterval. Plus 0-25% jitter to avoid thundering-herd when
+  // many clients reconnect simultaneously. Attempt 1 stays at ~ReconnectInterval
+  // so existing apps see no behavior change on the first retry.
+  if AAttempt < 1 then AAttempt := 1;
+  if AAttempt > 16 then AAttempt := 16;  // cap shift to avoid Int overflow
+  Base := FReconnectInterval shl (AAttempt - 1);
+  if (Base <= 0) or (Base > FReconnectMaxInterval) then
+    Base := FReconnectMaxInterval;
+  if Base < 100 then Base := 100;
+  // 0-25% additive jitter
+  JitterMs := Random(Base div 4 + 1);
+  Result := Base + JitterMs;
 end;
 
 { ---- URL Parsing ---- }
@@ -473,16 +612,17 @@ end;
 
 procedure TTina4WebSocketClient.Connect;
 begin
-  if FState in [wsOpen, wsConnecting] then
+  if GetState in [wsOpen, wsConnecting] then
     Exit;
 
   FReconnectAttempt := 0;
+  FAutoReconnect := True;  // refresh — Disconnect may have cleared it
   DoConnect;
 end;
 
 procedure TTina4WebSocketClient.DoConnect;
 begin
-  FState := wsConnecting;
+  SetState(wsConnecting);
 
   // Run connection in a background thread so we don't block the main thread
   TThread.CreateAnonymousThread(
@@ -497,9 +637,16 @@ begin
 
         DoWSHandshake;
 
-        // Connection succeeded
-        FState := wsOpen;
+        // Connection succeeded. Seed the watchdog clock NOW so the first
+        // ping-tick window starts from a known point — otherwise a stale
+        // FLastFrameAt from a previous connection could trip the watchdog
+        // before any pings have flown.
+        FLastFrameAt := Now;
+        FLastPingSent := 0;
+        FLastRTT := 0;
+        FConnectedAt := Now;
         FReconnectAttempt := 0;
+        SetState(wsOpen);
         FireConnected;
 
         // Start read thread
@@ -531,7 +678,7 @@ begin
             end;
             FreeAndNil(FSocket);
           end;
-          FState := wsClosed;
+          SetState(wsClosed);
 
           // Try reconnect if enabled
           if FAutoReconnect then
@@ -720,7 +867,7 @@ begin
   // Allow sends during the handshake too — the WS upgrade request
   // is dispatched while FState is still wsConnecting. Only block on
   // states where the socket is gone (wsClosed, wsClosing).
-  if FState in [wsClosed, wsClosing] then Exit;
+  if GetState in [wsClosed, wsClosing] then Exit;
   FWriteLock.Enter;
   try
     {$IFDEF IOS}
@@ -808,6 +955,11 @@ var
   CloseReason: string;
   PongFrame: TBytes;
 begin
+  // ANY frame counts as proof-of-life — text, binary, ping, pong all reset
+  // the watchdog. The watchdog only fires when nothing has arrived for
+  // PingInterval + PongTimeout.
+  FLastFrameAt := Now;
+
   case AOpcode of
     WS_OP_TEXT:
       begin
@@ -832,16 +984,25 @@ begin
       end;
 
     WS_OP_PONG:
-      ; // Pong received — we could track latency, but just ignore
+      begin
+        // Record the round-trip from our last ping. Multiple pings in
+        // flight are rare in practice (ping interval >> RTT), so the
+        // single-slot FLastPingSent is enough.
+        if FLastPingSent > 0 then
+        begin
+          FLastRTT := MilliSecondsBetween(Now, FLastPingSent);
+          FLastPingSent := 0;
+        end;
+      end;
 
     WS_OP_CLOSE:
       begin
         ParseClosePayload(APayload, CloseCode, CloseReason);
 
         // Echo close frame back if we haven't sent one yet
-        if FState = wsOpen then
+        if GetState = wsOpen then
         begin
-          FState := wsClosing;
+          SetState(wsClosing);
           try
             var CloseFrame := EncodeFrame(WS_OP_CLOSE, APayload);
             RawSend(CloseFrame);
@@ -860,7 +1021,7 @@ procedure TTina4WebSocketClient.Send(const AMessage: string);
 var
   Payload, Frame: TBytes;
 begin
-  if FState <> wsOpen then
+  if GetState <> wsOpen then
     raise Exception.Create('WebSocket is not connected');
 
   Payload := TEncoding.UTF8.GetBytes(AMessage);
@@ -872,7 +1033,7 @@ procedure TTina4WebSocketClient.Send(const AData: TBytes);
 var
   Frame: TBytes;
 begin
-  if FState <> wsOpen then
+  if GetState <> wsOpen then
     raise Exception.Create('WebSocket is not connected');
 
   Frame := EncodeFrame(WS_OP_BINARY, AData);
@@ -882,31 +1043,102 @@ end;
 { ---- Disconnect ---- }
 
 procedure TTina4WebSocketClient.Disconnect;
+begin
+  Disconnect(1000, 'Normal closure');
+end;
+
+procedure TTina4WebSocketClient.Disconnect(ACode: Integer;
+  const AReason: string);
 var
-  ClosePayload, Frame: TBytes;
+  ClosePayload, ReasonBytes, Frame: TBytes;
+  Cur: TTina4WSState;
 begin
   FAutoReconnect := False; // explicit disconnect = no reconnect
   StopPingTimer;
+  // Wake any pending reconnect backoff so the wait collapses.
+  if Assigned(FReconnectWake) then FReconnectWake.SetEvent;
 
-  if FState = wsOpen then
+  Cur := GetState;
+  if Cur = wsOpen then
   begin
-    FState := wsClosing;
+    SetState(wsClosing);
 
-    // Send close frame (code 1000 = normal closure)
-    SetLength(ClosePayload, 2);
-    ClosePayload[0] := Byte(1000 shr 8);
-    ClosePayload[1] := Byte(1000);
+    // RFC 6455 §5.5.1 close payload: 2-byte status code + optional UTF-8
+    // reason. Code 1000 = normal, 1001 = going-away (mobile background /
+    // logout), 4000-4999 = application-private.
+    if AReason <> '' then
+    begin
+      ReasonBytes := TEncoding.UTF8.GetBytes(AReason);
+      SetLength(ClosePayload, 2 + Length(ReasonBytes));
+      if Length(ReasonBytes) > 0 then
+        Move(ReasonBytes[0], ClosePayload[2], Length(ReasonBytes));
+    end
+    else
+      SetLength(ClosePayload, 2);
+    ClosePayload[0] := Byte(ACode shr 8);
+    ClosePayload[1] := Byte(ACode);
     try
       Frame := EncodeFrame(WS_OP_CLOSE, ClosePayload);
       RawSend(Frame);
     except
     end;
 
-    DoDisconnectInternal(1000, 'Normal closure', False);
+    DoDisconnectInternal(ACode, AReason, False);
   end
-  else if FState in [wsConnecting, wsReconnecting] then
+  else if Cur in [wsConnecting, wsReconnecting] then
   begin
-    DoDisconnectInternal(1000, 'Cancelled', False);
+    DoDisconnectInternal(ACode, 'Cancelled', False);
+  end;
+end;
+
+procedure TTina4WebSocketClient.ForceReconnect;
+begin
+  // Path used by "app resumed from background / network changed". The
+  // current socket is probably stale (cellular handoff, WiFi switch, NAT
+  // reset, OS suspended the link). Tear down without firing the AutoReconnect
+  // gate and reconnect immediately, regardless of MaxAttempts.
+  FForceReconnect := True;
+  FAutoReconnect := True;
+  FReconnectAttempt := 0;
+  // Wake any in-flight backoff wait so it doesn't keep us idle.
+  if Assigned(FReconnectWake) then FReconnectWake.SetEvent;
+  // If we're already open we go through the normal close path so the server
+  // sees a clean 1001 going-away rather than a half-open socket.
+  if GetState = wsOpen then
+    DoDisconnectInternal(1001, 'Going away (force reconnect)', True)
+  else
+    // Otherwise just kick the state machine: from wsClosed / wsConnecting /
+    // wsClosing fall through to a fresh DoConnect.
+    DoReconnect;
+end;
+
+procedure TTina4WebSocketClient.NotifyNetworkChanged;
+var
+  PingFrame: TBytes;
+begin
+  // Non-destructive probe — preferred to ForceReconnect when the app just
+  // wants to verify the link is still alive (e.g. screen wake, BG -> FG).
+  // Sends a ping NOW and shortens the watchdog clock so a dead link is
+  // detected within PongTimeout (default 10s) rather than the full
+  // PingInterval. If the pong returns, the existing connection survives
+  // without any disconnect / reconnect churn — UI stays calm.
+  if GetState <> wsOpen then
+  begin
+    // No open connection to probe. If a reconnect backoff is in progress,
+    // collapse the wait so we retry now.
+    if Assigned(FReconnectWake) then FReconnectWake.SetEvent;
+    Exit;
+  end;
+  try
+    PingFrame := EncodeFrame(WS_OP_PING, nil);
+    RawSend(PingFrame);
+    FLastPingSent := Now;
+    // Pull the watchdog deadline forward: pretend the last received frame
+    // was PingInterval ago, so the watchdog window collapses to PongTimeout.
+    FLastFrameAt := IncMilliSecond(Now, -FPingInterval);
+  except
+    // Send failed -> socket is gone. Force a reconnect.
+    DoDisconnectInternal(1006, 'Network change probe failed', True);
   end;
 end;
 
@@ -915,9 +1147,17 @@ procedure TTina4WebSocketClient.DoDisconnectInternal(ACode: Integer;
 var
   CalledFromReader: Boolean;
 begin
-  if FState = wsClosed then Exit; // already disconnected
-
-  FState := wsClosed; // signal all threads to stop
+  // Atomic state guard: only the caller who actually flips wsClosed wins.
+  // Multiple paths can race into this (read thread error, explicit
+  // Disconnect, watchdog) — without the lock both could half-tear-down.
+  FStateLock.Enter;
+  try
+    if FState = wsClosed then Exit;
+    FState := wsClosed;
+  finally
+    FStateLock.Leave;
+  end;
+  FireStateChange(wsClosing, wsClosed);
 
   CalledFromReader := Assigned(FReadThread) and
                       (TThread.CurrentThread.ThreadID = FReadThread.ThreadID);
@@ -996,33 +1236,61 @@ end;
 { ---- Reconnect ---- }
 
 procedure TTina4WebSocketClient.DoReconnect;
+var
+  DelayMs: Integer;
+  ForceThisAttempt: Boolean;
 begin
   if not FAutoReconnect then
     Exit;
 
+  // Snapshot + clear the force flag so a single ForceReconnect bypasses the
+  // attempt cap exactly once.
+  ForceThisAttempt := FForceReconnect;
+  FForceReconnect := False;
+
   Inc(FReconnectAttempt);
 
-  if (FReconnectMaxAttempts > 0) and
+  if (not ForceThisAttempt) and
+     (FReconnectMaxAttempts > 0) and
      (FReconnectAttempt > FReconnectMaxAttempts) then
   begin
     FireError('Max reconnect attempts (' +
       IntToStr(FReconnectMaxAttempts) + ') exceeded');
-    FState := wsClosed;
+    SetState(wsClosed);
     Exit;
   end;
 
-  FState := wsReconnecting;
+  SetState(wsReconnecting);
   FireReconnecting(FReconnectAttempt);
 
-  // Wait then reconnect in a background thread
-  TThread.CreateAnonymousThread(
+  // ForceReconnect skips the backoff entirely (user already paid the wait
+  // by being offline). Normal attempts use exponential backoff + jitter.
+  if ForceThisAttempt then
+    DelayMs := 0
+  else
+    DelayMs := ComputeBackoffMs(FReconnectAttempt);
+
+  // Cancellable wait: ForceReconnect / Disconnect / NotifyNetworkChanged
+  // signal FReconnectWake to break out.
+  FReconnectWake.ResetEvent;
+
+  // Join any previous reconnect thread before spawning a new one.
+  if Assigned(FReconnectThread) then
+  begin
+    try FReconnectThread.WaitFor; except end;
+    FreeAndNil(FReconnectThread);
+  end;
+
+  FReconnectThread := TThread.CreateAnonymousThread(
     procedure
     begin
-      Sleep(FReconnectInterval);
-      if FAutoReconnect and (FState = wsReconnecting) then
+      if DelayMs > 0 then
+        FReconnectWake.WaitFor(DelayMs);
+      if FAutoReconnect and (GetState = wsReconnecting) then
         DoConnect;
-    end
-  ).Start;
+    end);
+  FReconnectThread.FreeOnTerminate := False;
+  FReconnectThread.Start;
 end;
 
 { ---- Ping Timer ---- }
@@ -1035,24 +1303,81 @@ begin
 
   FPingWake.ResetEvent;
 
+  // Mobile bullet-proofing: this thread now does THREE jobs.
+  //   1. Sends keepalive pings every FPingInterval.
+  //   2. Watchdog — if no frame (of any kind) has arrived for
+  //      FPingInterval + FPongTimeout, the link is silently dead
+  //      (cellular handoff / NAT timeout / OS-suspended socket).
+  //      Force a reconnect immediately rather than waiting for the
+  //      OS TCP timeout (often 5-15 minutes).
+  //   3. Connection-age rotation — if FMaxConnectionAge > 0 and the
+  //      connection has been up longer than that, gracefully rotate
+  //      to defeat middlebox state-table drops on long-lived sockets.
+  // The wait quantum is min(PingInterval, 1000ms) so the watchdog can
+  // react quickly even when PingInterval is long.
   FPingTimer := TThread.CreateAnonymousThread(
     procedure
     var
       PingFrame: TBytes;
+      WaitMs, ElapsedSincePing, ElapsedSinceFrame: Integer;
+      WatchdogMs: Integer;
     begin
-      while not TThread.Current.CheckTerminated and (FState = wsOpen) do
+      while not TThread.Current.CheckTerminated and (GetState = wsOpen) do
       begin
-        // Wait up to FPingInterval ms — wakes immediately if FPingWake is signaled
-        if FPingWake.WaitFor(FPingInterval) = wrSignaled then
+        // Short wait quantum to allow timely watchdog firing even when
+        // PingInterval is set to, say, 5 minutes for low-traffic apps.
+        WaitMs := FPingInterval;
+        if WaitMs > 1000 then WaitMs := 1000;
+        if FPongTimeout > 0 then
+        begin
+          if WaitMs > FPongTimeout div 2 then WaitMs := FPongTimeout div 2;
+          if WaitMs < 250 then WaitMs := 250;
+        end;
+        if FPingWake.WaitFor(WaitMs) = wrSignaled then
           Break;
-        if TThread.Current.CheckTerminated or (FState <> wsOpen) then
+        if TThread.Current.CheckTerminated or (GetState <> wsOpen) then
           Break;
-        try
-          PingFrame := EncodeFrame(WS_OP_PING, nil);
-          RawSend(PingFrame);
-          FLastPingSent := Now;
-        except
+
+        // Watchdog. PongTimeout = 0 disables it.
+        if FPongTimeout > 0 then
+        begin
+          WatchdogMs := FPingInterval + FPongTimeout;
+          ElapsedSinceFrame := MilliSecondsBetween(Now, FLastFrameAt);
+          if ElapsedSinceFrame > WatchdogMs then
+          begin
+            FireError(Format('Watchdog: no frame for %d ms (limit %d)',
+              [ElapsedSinceFrame, WatchdogMs]));
+            DoDisconnectInternal(1006,
+              'Watchdog: no traffic from server', True);
+            Break;
+          end;
+        end;
+
+        // Connection-age rotation. 0 = disabled.
+        if (FMaxConnectionAge > 0) and (FConnectedAt > 0) and
+           (MilliSecondsBetween(Now, FConnectedAt) > FMaxConnectionAge) then
+        begin
+          FForceReconnect := True;
+          DoDisconnectInternal(1001,
+            'Going away (connection age rotation)', True);
           Break;
+        end;
+
+        // Ping cadence — emit a ping once per FPingInterval. We only
+        // arm a new FLastPingSent when there isn't one already (so
+        // back-to-back pings don't clobber the RTT measurement).
+        ElapsedSincePing := MilliSecondsBetween(Now, FLastPingSent);
+        if (FLastPingSent = 0) or (ElapsedSincePing >= FPingInterval) then
+        begin
+          try
+            PingFrame := EncodeFrame(WS_OP_PING, nil);
+            RawSend(PingFrame);
+            if FLastPingSent = 0 then FLastPingSent := Now;
+          except
+            // Send failed — socket is gone. Trigger reconnect.
+            DoDisconnectInternal(1006, 'Ping send failed', True);
+            Break;
+          end;
         end;
       end;
     end
@@ -1141,9 +1466,22 @@ begin
       end);
 end;
 
+procedure TTina4WebSocketClient.FireStateChange(AOldState,
+  ANewState: TTina4WSState);
+begin
+  if csDestroying in ComponentState then Exit;
+  if Assigned(FOnStateChange) then
+    TThread.Queue(nil,
+      procedure
+      begin
+        if Assigned(FOnStateChange) then
+          FOnStateChange(Self, AOldState, ANewState);
+      end);
+end;
+
 function TTina4WebSocketClient.IsConnected: Boolean;
 begin
-  Result := FState = wsOpen;
+  Result := GetState = wsOpen;
 end;
 
 initialization

@@ -5,7 +5,7 @@ interface
 uses
   System.SysUtils, System.Classes, IdBaseComponent, IdComponent, IdCustomTCPServer, IdCustomHTTPServer, IdHTTPServer, FMX.Dialogs, IdContext, IdScheduler, IdSchedulerOfThread, IdSchedulerOfThreadPool, IdServerIOHandler, IdSSL, IdSSLOpenSSL, FireDAC.Stan.Intf, FireDAC.Stan.Option, FireDAC.Stan.Error, FireDAC.UI.Intf, FireDAC.Phys.Intf, FireDAC.Stan.Def, FireDAC.Stan.Pool, FireDAC.Stan.Async, FireDAC.Phys, FireDAC.ConsoleUI.Wait, Data.DB, FireDAC.Comp.Client, FireDAC.Phys.SQLite, FireDAC.Phys.SQLiteDef, FireDAC.Stan.ExprFuncs, FireDAC.Phys.SQLiteWrapper.Stat, Tina4Core, JSON, FireDAC.Stan.Param, FireDAC.DatS, FireDAC.DApt.Intf, FireDAC.DApt, FireDAC.Comp.DataSet, Tina4REST, Tina4Route,
   Data.Bind.Components, Data.Bind.ObjectScope, REST.Client, Tina4RESTRequest, FireDAC.Stan.StorageBin, Tina4WebServer, REST.Types, REST.Response.Adapter, System.Net.URLClient,
-  Tina4JSONAdapter, Tina4HTMLPages;
+  Tina4JSONAdapter, Tina4HTMLPages, System.Net.HttpClient;
 
 type
   TfrmDataModule = class(TDataModule)

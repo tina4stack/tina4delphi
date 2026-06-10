@@ -21,6 +21,9 @@
         <Projects Include="Example\HtmlRender.dproj">
             <Dependencies/>
         </Projects>
+        <Projects Include="Example\CrashSimTest.dproj">
+            <Dependencies/>
+        </Projects>
     </ItemGroup>
     <ProjectExtensions>
         <Borland.Personality>Default.Personality.12</Borland.Personality>
@@ -83,14 +86,23 @@
     <Target Name="HtmlRender:Make">
         <MSBuild Projects="Example\HtmlRender.dproj" Targets="Make"/>
     </Target>
+    <Target Name="CrashSimTest">
+        <MSBuild Projects="Example\CrashSimTest.dproj"/>
+    </Target>
+    <Target Name="CrashSimTest:Clean">
+        <MSBuild Projects="Example\CrashSimTest.dproj" Targets="Clean"/>
+    </Target>
+    <Target Name="CrashSimTest:Make">
+        <MSBuild Projects="Example\CrashSimTest.dproj" Targets="Make"/>
+    </Target>
     <Target Name="Build">
-        <CallTarget Targets="Tina4DelphiDesign;Tina4Delphi;Tina4DelphiExample;Tina4DelphiExampleTests;Demo;HtmlRender"/>
+        <CallTarget Targets="Tina4DelphiDesign;Tina4Delphi;Tina4DelphiExample;Tina4DelphiExampleTests;Demo;HtmlRender;CrashSimTest"/>
     </Target>
     <Target Name="Clean">
-        <CallTarget Targets="Tina4DelphiDesign:Clean;Tina4Delphi:Clean;Tina4DelphiExample:Clean;Tina4DelphiExampleTests:Clean;Demo:Clean;HtmlRender:Clean"/>
+        <CallTarget Targets="Tina4DelphiDesign:Clean;Tina4Delphi:Clean;Tina4DelphiExample:Clean;Tina4DelphiExampleTests:Clean;Demo:Clean;HtmlRender:Clean;CrashSimTest:Clean"/>
     </Target>
     <Target Name="Make">
-        <CallTarget Targets="Tina4DelphiDesign:Make;Tina4Delphi:Make;Tina4DelphiExample:Make;Tina4DelphiExampleTests:Make;Demo:Make;HtmlRender:Make"/>
+        <CallTarget Targets="Tina4DelphiDesign:Make;Tina4Delphi:Make;Tina4DelphiExample:Make;Tina4DelphiExampleTests:Make;Demo:Make;HtmlRender:Make;CrashSimTest:Make"/>
     </Target>
     <Import Project="$(BDS)\Bin\CodeGear.Group.Targets" Condition="Exists('$(BDS)\Bin\CodeGear.Group.Targets')"/>
 </Project>

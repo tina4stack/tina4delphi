@@ -288,8 +288,9 @@ begin
   FStatus.Align := TAlignLayout.Top;
   FStatus.Height := 84;
   FStatus.StyledSettings := [];
-  FStatus.TextSettings.Font.Size := 13;
-  FStatus.TextSettings.FontColor := claWhite;
+  FStatus.TextSettings.Font.Size := 14;
+  FStatus.TextSettings.Font.Style := [TFontStyle.fsBold];
+  FStatus.TextSettings.FontColor := claBlack;
   FStatus.TextSettings.HorzAlign := TTextAlign.Center;
   FStatus.Text := 'CRASH TEST ready - tap RUN';
 

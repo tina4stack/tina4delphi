@@ -198,14 +198,12 @@ var
   I: Integer;
   InQuote: Boolean;
   QuoteChar: Char;
-  Depth: Integer;
   IsWhitespace: Boolean;
 begin
   SB := TStringBuilder.Create;
   try
     InQuote := False;
     QuoteChar := #0;
-    Depth := 0;
     for I := 1 to Length(Expr) do
     begin
       IsWhitespace := CharInSet(Expr[I], [#9, #10, #13, ' ']);
@@ -221,16 +219,8 @@ begin
         QuoteChar := Expr[I];
         SB.Append(Expr[I]);
       end
-      else if CharInSet(Expr[I], ['(', '[', '{']) then
-      begin
-        Inc(Depth);
-        SB.Append(Expr[I]);
-      end
-      else if CharInSet(Expr[I], [')', ']', '}']) then
-      begin
-        Dec(Depth);
-        SB.Append(Expr[I]);
-      end
+      else if CharInSet(Expr[I], ['(', '[', '{', ')', ']', '}']) then
+        SB.Append(Expr[I])
       else if IsWhitespace then
       begin
         // Collapse multiple whitespace to single space, but only outside structures
@@ -857,7 +847,6 @@ var
   Filter: TFilterFunc;
   Func: TFunctionFunc;
   Condition: Boolean;
-  IsSimpleInteger: Boolean;
   Regex: TRegEx;
   Arr: TArray<TValue>;
 begin
@@ -1486,7 +1475,7 @@ var
   function ResolveParenTernaries(const S: String): String;
   var
     I, OpenIdx, QMark, ColonIdx, Depth: Integer;
-    Inner, SubResult: String;
+    Inner: String;
     SubVal: TValue;
     InQuote: Boolean;
     QuoteCh: Char;
@@ -1496,7 +1485,6 @@ var
     while True do
     begin
       OpenIdx := 0;
-      Depth := 0;
       InQuote := False;
       QuoteCh := #0;
       // Find an innermost open-paren (the last '(' before a matching ')'
@@ -2875,7 +2863,6 @@ function TTina4Frond.ParseVariableDict(const DictStr: String; OuterContext: TDic
 var
   Content: String;
   JSONValue: TJSONValue;
-  JSONObject: TJSONObject;
   Pair: TJSONPair;
   Key, ValueStr: String;
   Value: TValue;
@@ -3117,7 +3104,7 @@ end;
 function TTina4Frond.EvaluateIncludes(const Template: String; Context: TDictionary<String, TValue>): String;
 var
   SB: TStringBuilder;
-  CurrentPos, EndPos, TagStart: Integer;
+  CurrentPos, EndPos: Integer;
   Tag, IncludeExpr, IncludeName, IncludedText: String;
   IncludeDict: TDictionary<String, TValue>;
   UseOnly: Boolean;
@@ -3134,7 +3121,6 @@ begin
         SB.Append(Copy(Template, CurrentPos, EndPos - CurrentPos));
       if EndPos > Length(Template) then
         Break;
-      TagStart := EndPos;
       CurrentPos := EndPos + 2;
       EndPos := CurrentPos;
       while (EndPos <= Length(Template)) and not ((Template[EndPos] = '%') and (EndPos + 1 <= Length(Template)) and (Template[EndPos + 1] = '}')) do
@@ -3422,11 +3408,7 @@ function TTina4Frond.EvaluateExtends(const Template: String; Context: TDictionar
   end;
 
 var
-  SB: TStringBuilder;
-  CurrentPos, EndPos, TagStart, BlockStart: Integer;
-  Tag, ExtendsExpr, ParentTemplateName, ParentTemplate, BlockName, BlockContent: String;
   Blocks: TDictionary<String, TList<String>>;
-  BlockDepth: Integer;
 begin
   // Multi-level extends: walk the chain bottom-up, accumulating block
   // overrides per name into a list (leaf at index 0, root at index N).
@@ -4056,7 +4038,8 @@ begin
           ArgNumStr := ArgNumStr + Fmt[I];
           Inc(I);
         end;
-        var ArgNum := ArgIndex;
+        // Both branches assign ArgNum — no initializer needed.
+        var ArgNum: Integer;
         if (ArgNumStr <> '') and (I <= Length(Fmt)) and (Fmt[I] = '$') then
         begin
           ArgNum := StrToIntDef(ArgNumStr, ArgIndex + 1) - 1;
@@ -5610,7 +5593,6 @@ begin
     function(const Input: TValue; const Args: TArray<String>; const Context: TDictionary<String, TValue>): TValue
     var
       Arr: TArray<TValue>;
-      I: Integer;
     begin
       if Input.IsArray then
       begin
@@ -6427,7 +6409,6 @@ var
   LoopContext: TDictionary<String, TValue>;
   HasElse: Boolean;
   ElsePos: Integer;
-  IncludeExpr, IncludeName, IncludeText: String;
   WithTag, WithExpr: String;
   WithDict: TDictionary<String, TValue>;
   MacroTag, MacroName: String;
@@ -6767,7 +6748,8 @@ begin
                   //   for k, v in iter         -> ForParts[0]=k, [1]=',', [2]=v, [3]=in
                   // For the second form, KeyLoopVar holds the dict key.
                   var KeyLoopVar := '';
-                  var InIdx := -1;
+                  // Every path below either assigns InIdx or raises.
+                  var InIdx: Integer;
                   if (Length(ForParts) >= 4) and (ForParts[1] = ',') and (ForParts[3] = 'in') then
                   begin
                     KeyLoopVar := ForParts[0];
@@ -6970,11 +6952,10 @@ begin
           else if Tag.StartsWith('with ') or (Tag = 'with') then
           begin
             WithTag := Tag;
+            // Only with/endwith nesting matters for finding our endwith;
+            // if/for/macro tags can't contain an endwith that pairs with us.
             WithDepth := 1;
             BodyStart := CurrentPos;
-            IfDepth := 0;
-            ForDepth := 0;
-            MacroDepth := 0;
             UseOnly := False;
             while CurrentPos <= Length(Template) do
             begin
@@ -7031,18 +7012,6 @@ begin
                   Break;
                 end;
               end;
-              if Tag.StartsWith('if ') then
-                Inc(IfDepth)
-              else if Tag = 'endif' then
-                Dec(IfDepth);
-              if Tag.StartsWith('for ') then
-                Inc(ForDepth)
-              else if Tag = 'endfor' then
-                Dec(ForDepth);
-              if Tag.StartsWith('macro ') then
-                Inc(MacroDepth)
-              else if Tag = 'endmacro' then
-                Dec(MacroDepth);
             end;
             if WithDepth > 0 then
               raise Exception.Create('Unclosed with');
@@ -7050,11 +7019,9 @@ begin
           else if Tag.StartsWith('macro ') then
           begin
             MacroTag := Tag;
+            // Only macro/endmacro nesting matters for finding our endmacro.
             MacroDepth := 1;
             BodyStart := CurrentPos;
-            IfDepth := 0;
-            ForDepth := 0;
-            WithDepth := 0;
             while CurrentPos <= Length(Template) do
             begin
               EndPos := CurrentPos;
@@ -7129,18 +7096,6 @@ begin
                   Break;
                 end;
               end;
-              if Tag.StartsWith('if ') then
-                Inc(IfDepth)
-              else if Tag = 'endif' then
-                Dec(IfDepth);
-              if Tag.StartsWith('for ') then
-                Inc(ForDepth)
-              else if Tag = 'endfor' then
-                Dec(ForDepth);
-              if Tag.StartsWith('with ') or (Tag = 'with') then
-                Inc(WithDepth)
-              else if Tag = 'endwith' then
-                Dec(WithDepth);
             end;
             if MacroDepth > 0 then
               raise Exception.Create('Unclosed macro');

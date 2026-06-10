@@ -1,4 +1,4 @@
-﻿unit Tina4HtmlRender;
+unit Tina4HtmlRender;
 
 interface
 
@@ -89,7 +89,6 @@ type
     procedure ParseStyleAttribute(const StyleStr: string; Dict: TDictionary<string, string>);
     procedure ParseChildren(Parent: THTMLTag; const StopTag: string = '');
     class function IsVoidTag(const Name: string): Boolean; static;
-    class function IsRawTag(const Name: string): Boolean; static;
     class function IsIgnoredTag(const Name: string): Boolean; static;
   public
     constructor Create;
@@ -170,8 +169,7 @@ type
     FRulesByKey: TDictionary<string, TList<TCSSRule>>;
     FUniversalRules: TList<TCSSRule>;  // rules with empty RoutingKey
     procedure ParseCSS(const CSSText: string);
-    function SelectorMatches(const Selector: string; Tag: THTMLTag): Boolean; overload;
-    function SelectorMatches(Rule: TCSSRule; Tag: THTMLTag): Boolean; overload;
+    function SelectorMatches(Rule: TCSSRule; Tag: THTMLTag): Boolean;
     function SelectorSpecificity(const Selector: string): Integer;
     procedure ClassifyRule(Rule: TCSSRule);
     procedure ClearRuleIndex;
@@ -771,18 +769,10 @@ type
     procedure DoLayout;
     procedure ClearFormControls;
     procedure DrainPendingDispose;
-    // Purge a just-freed native control from FFormControls + all cached
-    // pointers. Without this a control freed elsewhere (keyboard-down drain,
-    // ANOTHER renderer's teardown, FMX) stays in our FFormControls and is later
-    // read by SetElementValue / FocusElement / etc. as a live TEdit -> AV
-    // (use-after-free). Registered via FreeNotification on every form control.
-    procedure Notification(AComponent: TComponent; Operation: TOperation); override;
     procedure ResizeSettleTick(Sender: TObject);
     procedure CreateFormControls(Box: TLayoutBox; OffX, OffY: Single);
-    function CreateStyledButton(Box: TLayoutBox; const BtnText: string): TControl;
     procedure PositionFormControls;
     procedure HandleFormControlChange(Sender: TObject);
-    procedure HandleFormControlClick(Sender: TObject);
     procedure HandleFileInputClick(Sender: TObject);
     procedure HandleFormControlEnter(Sender: TObject);
     procedure HandleFormControlExit(Sender: TObject);
@@ -906,6 +896,13 @@ type
     procedure DoScrollChanged;
     procedure InsertHTMLFragment(Target: THTMLTag; const Html: string; AtFront: Boolean);
   protected
+    // Purge a just-freed native control from FFormControls + all cached
+    // pointers. Without this a control freed elsewhere (keyboard-down drain,
+    // ANOTHER renderer's teardown, FMX) stays in our FFormControls and is later
+    // read by SetElementValue / FocusElement / etc. as a live TEdit -> AV
+    // (use-after-free). Registered via FreeNotification on every form control.
+    // Protected to match TControl's declaration (was private — H2269).
+    procedure Notification(AComponent: TComponent; Operation: TOperation); override;
     procedure Paint; override;
     procedure Resize; override;
     procedure MouseWheel(Shift: TShiftState; WheelDelta: Integer;
@@ -1968,50 +1965,10 @@ begin
   Result := True;
 end;
 
-function TCSSStyleSheet.SelectorMatches(const Selector: string; Tag: THTMLTag): Boolean;
-// Legacy entry point — kept so external callers still work. Allocates
-// per-call splits; use the TCSSRule overload where possible to skip
-// that work via cached SelectorParts.
-var
-  Sel: string;
-  Parts: TArray<string>;
-begin
-  Result := False;
-  if not Assigned(Tag) or (Tag.TagName = '#text') or (Tag.TagName = 'root') then
-    Exit;
-
-  Sel := Selector.Trim.ToLower;
-  if Sel = '' then Exit;
-
-  // Handle descendant selectors (e.g., "div p", "ul li a")
-  Parts := Sel.Split([' ']);
-
-  // Match the last selector part against the current tag
-  var LastPart := Parts[Length(Parts) - 1].Trim;
-  if not MatchesSingleSelector(LastPart, Tag) then
-    Exit;
-
-  // If single selector, we're done
-  if Length(Parts) = 1 then
-    Exit(True);
-
-  // For descendant selectors, walk up ancestor chain
-  var Current := Tag.Parent;
-  var PartIdx := Length(Parts) - 2;
-  while (PartIdx >= 0) and Assigned(Current) do
-  begin
-    if MatchesSingleSelector(Parts[PartIdx].Trim, Current) then
-      Dec(PartIdx);
-    Current := Current.Parent;
-  end;
-
-  Result := PartIdx < 0;
-end;
-
 function TCSSStyleSheet.SelectorMatches(Rule: TCSSRule; Tag: THTMLTag): Boolean;
-// Fast overload — uses Rule.SelectorParts cached at parse time so we
-// don't pay Trim+ToLower+Split per match. Otherwise the same
-// last-part-then-walk-ancestors algorithm as the legacy entry point.
+// Uses Rule.SelectorParts cached at parse time so we don't pay
+// Trim+ToLower+Split per match: match the last simple selector against
+// the tag, then walk ancestors for descendant parts.
 begin
   Result := False;
   if not Assigned(Tag) or (Tag.TagName = '#text') or (Tag.TagName = 'root') then
@@ -2378,7 +2335,6 @@ end;
 
 procedure THTMLParser.ParseStyleAttribute(const StyleStr: string; Dict: TDictionary<string, string>);
 var
-  KV: TArray<string>;
   Pairs: TList<string>;
   Start, I, ParenDepth: Integer;
 begin
@@ -2517,11 +2473,6 @@ begin
     SameText(Name, 'dt') or SameText(Name, 'dd') or
     SameText(Name, 'details') or SameText(Name, 'summary') or
     SameText(Name, 'address') or SameText(Name, 'fieldset');
-end;
-
-class function THTMLParser.IsRawTag(const Name: string): Boolean;
-begin
-  Result := SameText(Name, 'script') or SameText(Name, 'style');
 end;
 
 class function THTMLParser.IsIgnoredTag(const Name: string): Boolean;
@@ -4035,7 +3986,6 @@ begin
       var Inner := GS.Substring(P1 + 16, P2 - P1 - 16);
       var Args := Inner.Split([',']);
       Style.BgGradientAngle := 180;  // default `to bottom` (top→bottom)
-      var ColorIdx := 0;
       var Colors: TArray<TAlphaColor>;
       for var A in Args do
       begin
@@ -4053,7 +4003,6 @@ begin
         begin
           SetLength(Colors, Length(Colors) + 1);
           Colors[High(Colors)] := ParseColor(A.Trim);
-          Inc(ColorIdx);
         end;
       end;
       if Length(Colors) >= 2 then
@@ -5311,7 +5260,6 @@ var
       Child.X := CursorX;
       Child.Y := CursorY;
 
-      var IsFirst := True;
       for var WI := 0 to Length(Words) - 1 do
       begin
         var W := Words[WI];
@@ -5362,7 +5310,6 @@ var
             end;
           end;
           CursorX := CursorX + SpaceW;
-          IsFirst := False;
           Continue;
         end;
 
@@ -5386,7 +5333,6 @@ var
         else
           CursorX := CursorX + WordW + SpaceW;
         LineH := Max(LineH, WordH);
-        IsFirst := False;
       end;
 
       // Calculate child bounds
@@ -5560,7 +5506,7 @@ begin
             LineRight := Max(LineRight, Child.X + Child.MarginBoxWidth);
         end;
 
-        var Shift: Single := 0;
+        var Shift: Single;
         if Box.Style.TextAlign = TTextAlign.Center then
           Shift := (AvailWidth - LineRight) / 2
         else
@@ -6370,11 +6316,10 @@ begin
        (Child.Style.CSSPosition <> 'fixed') then Continue;
 
     // If both `left` and `right` are set the width is derived (CSS spec).
-    var DerivedW: Single := -1;
     if (Child.Style.CSSLeft > -9990) and (Child.Style.CSSRight > -9990) and
        (Child.Style.ExplicitWidth <= 0) then
     begin
-      DerivedW := CW - Child.Style.CSSLeft - Child.Style.CSSRight;
+      var DerivedW: Single := CW - Child.Style.CSSLeft - Child.Style.CSSRight;
       if DerivedW < 0 then DerivedW := 0;
       Child.Style.ExplicitWidth := DerivedW;
     end;
@@ -8922,74 +8867,6 @@ begin
     FOnChange(Sender, N, V);
 end;
 
-procedure TTina4HTMLRender.HandleFormControlClick(Sender: TObject);
-var N, V: string;
-begin
-  if Assigned(FOnClick) and (Sender is TControl) then
-  begin
-    GetFormControlNameValue(TControl(Sender), N, V);
-    FOnClick(Sender, N, V);
-  end;
-
-  // Fire OnElementClick if the form control has an onclick attribute
-  if (Assigned(FOnElementClick) or (FRegisteredObjects.Count > 0)) and
-     (Sender is TControl) then
-  begin
-    for var Rec in FFormControls do
-      if Rec.Control = TControl(Sender) then
-      begin
-        if Assigned(Rec.Box) and Assigned(Rec.Box.Tag) then
-          FireOnClick(Rec.Box.Tag);
-        Break;
-      end;
-  end;
-
-  // Fire OnFormSubmit when a submit button is clicked
-  if Assigned(FOnSubmit) and (Sender is TControl) then
-  begin
-    // Find the Box for this control and check if it's a submit trigger
-    for var Rec in FFormControls do
-    begin
-      if Rec.Control <> TControl(Sender) then Continue;
-      if (Rec.Box = nil) or (Rec.Box.Tag = nil) then Break;
-
-      var IsSubmit := False;
-      var TN := Rec.Box.Tag.TagName.ToLower;
-      if TN = 'button' then
-      begin
-        // <button> defaults to type=submit; only type=button is non-submit
-        var BtnType := Rec.Box.Tag.GetAttribute('type', 'submit').ToLower;
-        IsSubmit := (BtnType = 'submit');
-      end
-      else if TN = 'input' then
-      begin
-        var InputType := Rec.Box.Tag.GetAttribute('type', 'text').ToLower;
-        IsSubmit := (InputType = 'submit');
-      end;
-
-      if not IsSubmit then Break;
-
-      // Walk up the DOM to find the enclosing <form>
-      var FormTag: THTMLTag := Rec.Box.Tag.Parent;
-      while Assigned(FormTag) and not SameText(FormTag.TagName, 'form') do
-        FormTag := FormTag.Parent;
-
-      var FormName := '';
-      if Assigned(FormTag) then
-        FormName := FormTag.GetAttribute('name', FormTag.GetAttribute('id', '')).Trim;
-
-      // Collect all form control values that belong to this form.
-      var FormData := CollectFormData(FormTag);
-      try
-        FOnSubmit(Sender, FormName, FormData);
-      finally
-        FormData.Free;
-      end;
-      Break;
-    end;
-  end;
-end;
-
 // Collects name=value pairs for every form control whose nearest
 // <form> ancestor is AFormTag. Skips submit/button/reset triggers and
 // unchecked checkbox/radio. Caller owns the returned TStringList.
@@ -9250,7 +9127,6 @@ begin
   // transaction — the exact moment the MTK compositor stalls on. On Android
   // (adjustResize) the window shrinks when the IME appears, so a focused input
   // is almost never truly occluded and this gate skips the scroll entirely.
-  CtlBottom := 0;
   try
     CtlBottom := FocusedCtl.AbsoluteRect.Bottom;
   except
@@ -9899,92 +9775,6 @@ begin
       end);
   end;
   {$ENDIF}
-end;
-
-function TTina4HTMLRender.CreateStyledButton(Box: TLayoutBox; const BtnText: string): TControl;
-var
-  BtnColor, BtnTextColor: TAlphaColor;
-begin
-  BtnColor := TAlphaColors.Null;
-  BtnTextColor := TAlphaColors.Null;
-
-  // Use computed background color from CSS (includes resolved var() values)
-  if Box.Style.BackgroundColor <> TAlphaColors.Null then
-  begin
-    BtnColor := Box.Style.BackgroundColor;
-    if Box.Style.Color <> TAlphaColors.Null then
-      BtnTextColor := Box.Style.Color;
-  end
-  else if Assigned(Box.Tag) then
-  begin
-    // Fall back to Bootstrap button class mapping
-    var BtnClass := Box.Tag.GetAttribute('class', '').ToLower;
-    if BtnClass.Contains('btn-primary') then begin BtnColor := $FF0D6EFD; BtnTextColor := TAlphaColors.White; end
-    else if BtnClass.Contains('btn-secondary') then begin BtnColor := $FF6C757D; BtnTextColor := TAlphaColors.White; end
-    else if BtnClass.Contains('btn-success') then begin BtnColor := $FF198754; BtnTextColor := TAlphaColors.White; end
-    else if BtnClass.Contains('btn-danger') then begin BtnColor := $FFDC3545; BtnTextColor := TAlphaColors.White; end
-    else if BtnClass.Contains('btn-warning') then begin BtnColor := $FFFFC107; BtnTextColor := TAlphaColors.Black; end
-    else if BtnClass.Contains('btn-info') then begin BtnColor := $FF0DCAF0; BtnTextColor := TAlphaColors.Black; end
-    else if BtnClass.Contains('btn-dark') then begin BtnColor := $FF212529; BtnTextColor := TAlphaColors.White; end
-    else if BtnClass.Contains('btn-light') then begin BtnColor := $FFF8F9FA; BtnTextColor := TAlphaColors.Black; end;
-  end;
-
-  // Default: buttons with a Bootstrap .btn class but no recognized color variant
-  // should be transparent (matching browser behaviour). Plain buttons without
-  // .btn get a standard gray background so they remain visible.
-  if BtnColor = TAlphaColors.Null then
-  begin
-    var HasBtnClass := Assigned(Box.Tag) and
-      Box.Tag.GetAttribute('class', '').ToLower.Contains('btn');
-    if HasBtnClass then
-    begin
-      BtnColor := TAlphaColors.Null;  // transparent — drawn with no fill
-      BtnTextColor := TAlphaColors.Black;
-    end
-    else
-    begin
-      BtnColor := $FFE0E0E0;
-      BtnTextColor := TAlphaColors.Black;
-    end;
-  end;
-
-  var Radius: Single := Box.Style.BorderRadius;
-  if Radius < 0 then Radius := 4;  // -1 = not set, default to 4px
-
-  var Rect := TRectangle.Create(Self);
-  if BtnColor = TAlphaColors.Null then
-  begin
-    Rect.Fill.Kind := TBrushKind.None;
-    Rect.Stroke.Kind := TBrushKind.None;
-  end
-  else
-  begin
-    Rect.Fill.Kind := TBrushKind.Solid;
-    Rect.Fill.Color := BtnColor;
-    Rect.Stroke.Kind := TBrushKind.Solid;
-    Rect.Stroke.Color := $FFB0B0B0;
-  end;
-  Rect.XRadius := Radius;
-  Rect.YRadius := Radius;
-  // HitTest must be False so touches pass through to the renderer's
-  // MouseDown/Move/Up for pan-to-scroll. Clicks are handled via the
-  // canvas-based FClickableRegions system in MouseUp instead.
-  Rect.HitTest := False;
-  Rect.Cursor := crHandPoint;
-
-  var Lbl := TLabel.Create(Rect);
-  Lbl.Parent := Rect;
-  Lbl.Align := TAlignLayout.Client;
-  Lbl.Text := BtnText;
-  Lbl.HitTest := False;
-  Lbl.StyledSettings := Lbl.StyledSettings - [TStyledSetting.FontColor,
-    TStyledSetting.Size, TStyledSetting.Family];
-  Lbl.FontColor := BtnTextColor;
-  Lbl.Font.Size := Box.Style.FontSize;
-  Lbl.Font.Family := Box.Style.FontFamily;
-  Lbl.TextSettings.HorzAlign := TTextAlign.Center;
-
-  Result := Rect;
 end;
 
 procedure TTina4HTMLRender.CreateFormControls(Box: TLayoutBox; OffX, OffY: Single);

@@ -2,9 +2,29 @@
 *.groupproj.local
 /.idea/
 /__history/
+
+# Compiled units — never track; they pin old code into the build and
+# the test runner links them instead of recompiling changed sources.
+*.dcu
+
+# Build output directories (per platform)
 /Win32/
+/Win64/
 /Example/Win32/
+/Example/Android/
+/Example/Android64/
+/Example/OSX64/
+/Example/iOSDevice64/
+/Example/iOSSimARM64/
 /Example/__history/
+
+# Debug / build-harness scratch output
+*.log
+/_buildcheck_output.txt
+/_buildtests_output.txt
+/test_results.txt
+/baseline_results.txt
+/Example/_capture_lnk.txt
 /Tina4Delphi.identcache
 /Tina4DelphiProject.dsk
 /Tina4DelphiProject.~dsk

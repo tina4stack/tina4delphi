@@ -5340,13 +5340,23 @@ var
       begin
         var MinY := Child.Fragments[0].Y;
         var MaxY := Child.Fragments[0].Y + Child.Fragments[0].H;
+        var MaxRight: Single := 0;
         for var F in Child.Fragments do
         begin
           MinY := Min(MinY, F.Y);
           MaxY := Max(MaxY, F.Y + F.H);
+          MaxRight := Max(MaxRight, F.X + F.W);
         end;
         Child.ContentHeight := MaxY - MinY;
-        Child.ContentWidth := CursorX - Child.X;
+        // Width = the widest line's right edge, NOT the running cursor.
+        // CursorX includes the inter-word space appended after the LAST
+        // word, and after a wrap it reflects only the (possibly shorter)
+        // final line. Both inflated/deflated inline-block shrink-to-fit,
+        // so a chat-bubble background painted one space wider than its
+        // text (visible as asymmetric padding on centered bubbles).
+        // The parent flow cursor still advances past the trailing space —
+        // only the box's own reported width changes here.
+        Child.ContentWidth := MaxRight;
       end;
       Exit;
     end;
@@ -5414,11 +5424,20 @@ var
       // (so PaintBox's ContentLeft/ContentTop offset works correctly).
       // Fragment positions are already relative to their text node's X/Y, so they
       // move automatically when the text node is repositioned — no separate adjustment needed.
+      var InnerMaxRight: Single := 0;
       for var GrandChild in Child.Children do
       begin
         GrandChild.X := GrandChild.X - ContentOriginX;
         GrandChild.Y := GrandChild.Y - ContentOriginY;
+        InnerMaxRight := Max(InnerMaxRight, GrandChild.X + GrandChild.MarginBoxWidth);
       end;
+      // Single-line width: prefer the children's true extents over the
+      // running cursor — ContentEndX includes the trailing inter-word
+      // space a final text child appended (same chat-bubble bug as the
+      // text-node width: <small>System 09:16</small> reported one space
+      // too wide, inflating the inline-block shrink-to-fit background).
+      if (CursorY = StartY) and (InnerMaxRight > 0) then
+        Child.ContentWidth := InnerMaxRight;
 
       // Include full inline box height in line height
       LineH := Max(LineH, Child.Style.Margin.Top + Child.Style.BorderWidths.Top +

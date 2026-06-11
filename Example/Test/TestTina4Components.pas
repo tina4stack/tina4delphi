@@ -141,6 +141,9 @@ type
     procedure TestNumericFontWeightTriggersBold;
     procedure TestAttributeSelectorPresenceMatches;
     procedure TestAttributeSelectorValueMatches;
+    // Inline-block shrink-to-fit width — background must hug the text
+    procedure TestInlineBlockWidthExcludesTrailingSpace;
+    procedure TestInlineBlockWidthUsesWidestLine;
   end;
 
 implementation
@@ -2865,6 +2868,115 @@ begin
     end;
   finally
     StyleSheet.Free;
+    Parser.Free;
+  end;
+end;
+
+// Finds the first text node in a box subtree (depth-first).
+function FindFirstTextBox(Box: Tina4HtmlRender.TLayoutBox): Tina4HtmlRender.TLayoutBox;
+var
+  I: Integer;
+begin
+  if Box.Kind = Tina4HtmlRender.lbkText then
+    Exit(Box);
+  Result := nil;
+  for I := 0 to Box.Children.Count - 1 do
+  begin
+    Result := FindFirstTextBox(Box.Children[I]);
+    if Assigned(Result) then Exit;
+  end;
+end;
+
+procedure TestTTina4Components.TestInlineBlockWidthExcludesTrailingSpace;
+var
+  Parser: Tina4HtmlRender.THTMLParser;
+  Engine: Tina4HtmlRender.TLayoutEngine;
+  Bubble, GC: Tina4HtmlRender.TLayoutBox;
+  MaxChildRight: Single;
+  I: Integer;
+begin
+  // 2026-06-11 chat-bubble bug (cuttlefish iOS): a shrink-to-fit
+  // inline-block's background painted one inter-word space WIDER than
+  // its content. Two cursor-derived widths were to blame: a text node's
+  // width included the space appended after its LAST word, and an
+  // inline container (<small>...</small>) took its width from the same
+  // cursor. Centered bubbles showed asymmetric padding. This uses the
+  // exact production bubble markup from the chat app.
+  Parser := Tina4HtmlRender.THTMLParser.Create;
+  Engine := Tina4HtmlRender.TLayoutEngine.Create(nil);
+  try
+    RunLayout(Parser, Engine,
+      '<div style="text-align: center; margin: 5px 0; padding: 0 12px;">' +
+      '<div id="bubble" style="display: inline-block; background: #eeeeee; ' +
+      'color: #000; overflow-wrap: break-word; padding: 8px 12px; ' +
+      'border-radius: 8px; max-width: 70%;">' +
+      '<small><strong>System</strong> 09:16</small><br>Not connected' +
+      '</div></div>',
+      600);
+
+    Bubble := FindBoxById(Engine.Root, 'bubble');
+    Check(Assigned(Bubble), 'bubble box must exist');
+    Check(Bubble.Children.Count > 0, 'bubble must have children');
+
+    // The bubble's content width must hug its children's true extents —
+    // the <small> header line must not report a phantom trailing space.
+    MaxChildRight := 0;
+    for I := 0 to Bubble.Children.Count - 1 do
+    begin
+      GC := Bubble.Children[I];
+      if GC.X + GC.MarginBoxWidth > MaxChildRight then
+        MaxChildRight := GC.X + GC.MarginBoxWidth;
+    end;
+
+    Check(MaxChildRight > 0, 'children must have extents');
+    Check(Abs(Bubble.ContentWidth - MaxChildRight) < 0.5,
+      Format('bubble width %.1f must hug child extents %.1f — ' +
+             'no phantom trailing space in <small> or text widths',
+             [Bubble.ContentWidth, MaxChildRight]));
+  finally
+    Engine.Free;
+    Parser.Free;
+  end;
+end;
+
+procedure TestTTina4Components.TestInlineBlockWidthUsesWidestLine;
+var
+  Parser: Tina4HtmlRender.THTMLParser;
+  Engine: Tina4HtmlRender.TLayoutEngine;
+  Bubble, TextBox: Tina4HtmlRender.TLayoutBox;
+  MaxRight: Single;
+  F: Tina4HtmlRender.TTextFragment;
+begin
+  // Companion case: when the text wraps, the old cursor-based width
+  // reflected only the LAST line. If the last line is shorter than the
+  // first, the background was too narrow and the first line's text
+  // painted outside it. Width must come from the widest line.
+  Parser := Tina4HtmlRender.THTMLParser.Create;
+  Engine := Tina4HtmlRender.TLayoutEngine.Create(nil);
+  try
+    // Narrow container forces a wrap; last line ("het?") is much
+    // shorter than the first.
+    RunLayout(Parser, Engine,
+      '<div id="bubble" style="display:inline-block; background:#eee; padding:0">' +
+      'Hey Jeanndre het jy gesien dat ek jou activities gegee het?</div>',
+      220);
+
+    Bubble := FindBoxById(Engine.Root, 'bubble');
+    Check(Assigned(Bubble), 'bubble box must exist');
+    TextBox := FindFirstTextBox(Bubble);
+    Check(Assigned(TextBox), 'bubble must contain a text node');
+    Check(TextBox.Fragments.Count > 1, 'text must have wrapped into fragments');
+
+    MaxRight := 0;
+    for F in TextBox.Fragments do
+      if F.X + F.W > MaxRight then MaxRight := F.X + F.W;
+
+    Check(Abs(TextBox.ContentWidth - MaxRight) < 0.5,
+      Format('wrapped text width %.1f must equal widest line %.1f — ' +
+             'not the (shorter) last line',
+             [TextBox.ContentWidth, MaxRight]));
+  finally
+    Engine.Free;
     Parser.Free;
   end;
 end;

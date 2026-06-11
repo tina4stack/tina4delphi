@@ -7832,29 +7832,54 @@ begin
       FFormControls[I] := Tmp;
     end;
 
-    // Only re-parse the source HTML when the text has actually changed.
-    // Direct DOM mutations (PrependHTML, SetElementText, SetElementStyle, etc.)
-    // operate on the in-memory tree and only need a re-layout — re-parsing
-    // would wipe their changes by rebuilding from the stale FHTML.Text.
-    if FParserDirty then
-    begin
-      FParser.Parse(FHTML.Text);
-
-      // Build stylesheet from <style> blocks and <link rel="stylesheet"> hrefs
-      FStyleSheet.Clear;
-      for var I := 0 to FParser.StyleBlocks.Count - 1 do
-        FStyleSheet.AddCSS(FParser.StyleBlocks[I]);
-      for var I := 0 to FParser.LinkHrefs.Count - 1 do
-        FStyleSheet.LoadFromURL(FParser.LinkHrefs[I]);
-
-      FParserDirty := False;
-    end;
-
     var AvailW := Width;
     if ScrollBarVisible and (not FScrollBarOverlay) then
       AvailW := AvailW - FScrollBarWidth;
 
-    FLayoutEngine.Layout(FParser.Root, AvailW, FStyleSheet);
+    // RESILIENT REPARSE + LAYOUT.
+    // A fault inside FParser.Parse / FLayoutEngine.Layout (a malformed or
+    // pathological DOM, a stale style ref, etc.) used to propagate straight
+    // out of DoLayout. The `finally` reset FIsLayoutting, but FParserDirty
+    // was left True with the parse/layout tree half-built — so the NEXT
+    // relayout re-ran the SAME faulting reparse and faulted again, every
+    // pass, poisoning the screen with a storm of swallowed AVs (johnny,
+    // Statement search, 2026-06-11: "DoLayout pre-clear ... EAccessViolation"
+    // repeating). Contain it here: on a fault, clear FParserDirty so we never
+    // retry the bad input, drop to a clean EMPTY layout, and carry on. The
+    // screen renders blank (recoverable by navigating away / re-searching)
+    // instead of cascading. The host's global handler still sees nothing
+    // because we recover locally; the cause is logged via TraceLog.
+    try
+      // Only re-parse the source HTML when the text has actually changed.
+      // Direct DOM mutations (PrependHTML, SetElementText, SetElementStyle,
+      // etc.) operate on the in-memory tree and only need a re-layout —
+      // re-parsing would wipe their changes by rebuilding from FHTML.Text.
+      if FParserDirty then
+      begin
+        FParser.Parse(FHTML.Text);
+
+        // Build stylesheet from <style> blocks and <link rel="stylesheet"> hrefs
+        FStyleSheet.Clear;
+        for var I := 0 to FParser.StyleBlocks.Count - 1 do
+          FStyleSheet.AddCSS(FParser.StyleBlocks[I]);
+        for var I := 0 to FParser.LinkHrefs.Count - 1 do
+          FStyleSheet.LoadFromURL(FParser.LinkHrefs[I]);
+
+        FParserDirty := False;
+      end;
+
+      FLayoutEngine.Layout(FParser.Root, AvailW, FStyleSheet);
+    except
+      on E: Exception do
+      begin
+        TraceLog('DoLayout reparse/layout FAULT (' + E.ClassName + ': ' +
+          E.Message + ') — recovering with empty layout');
+        // Don't re-run the same bad input forever, and leave a clean tree.
+        FParserDirty := False;
+        try FLayoutEngine.Layout(nil, AvailW, FStyleSheet); except end;
+      end;
+    end;
+
     FContentHeight := FLayoutEngine.TotalHeight;
     if Assigned(FLayoutEngine.Root) then
       FContentWidth := FLayoutEngine.Root.MarginBoxWidth

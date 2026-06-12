@@ -7849,6 +7849,11 @@ begin
     // screen renders blank (recoverable by navigating away / re-searching)
     // instead of cascading. The host's global handler still sees nothing
     // because we recover locally; the cause is logged via TraceLog.
+    // LFaultStage names the exact phase for the fault log below — this AV is a
+    // use-after-free/heap-corruption family that only reproduces in the wild,
+    // so the recovery log MUST say whether parse, stylesheet, or layout faulted
+    // (and the input size) to be actionable (DoLayout AV root-cause, 2026-06-12).
+    var LFaultStage := 'enter';
     try
       // Only re-parse the source HTML when the text has actually changed.
       // Direct DOM mutations (PrependHTML, SetElementText, SetElementStyle,
@@ -7856,9 +7861,11 @@ begin
       // re-parsing would wipe their changes by rebuilding from FHTML.Text.
       if FParserDirty then
       begin
+        LFaultStage := 'parse';
         FParser.Parse(FHTML.Text);
 
         // Build stylesheet from <style> blocks and <link rel="stylesheet"> hrefs
+        LFaultStage := 'stylesheet';
         FStyleSheet.Clear;
         for var I := 0 to FParser.StyleBlocks.Count - 1 do
           FStyleSheet.AddCSS(FParser.StyleBlocks[I]);
@@ -7868,15 +7875,32 @@ begin
         FParserDirty := False;
       end;
 
+      LFaultStage := 'layout';
       FLayoutEngine.Layout(FParser.Root, AvailW, FStyleSheet);
     except
       on E: Exception do
       begin
-        TraceLog('DoLayout reparse/layout FAULT (' + E.ClassName + ': ' +
-          E.Message + ') — recovering with empty layout');
+        TraceLog(Format('DoLayout FAULT @%s (%s: %s) htmlLen=%d styleBlocks=%d ' +
+          '— recovering with empty layout',
+          [LFaultStage, E.ClassName, E.Message, Length(FHTML.Text),
+           FParser.StyleBlocks.Count]));
         // Don't re-run the same bad input forever, and leave a clean tree.
         FParserDirty := False;
         try FLayoutEngine.Layout(nil, AvailW, FStyleSheet); except end;
+        // The parser's OWN internal state may be left corrupted by the fault
+        // (a half-built DOM, dangling token refs). Reusing it turns the NEXT
+        // render's *catchable* AV into an UNcatchable hard SIGSEGV that exits
+        // the process — observed 2026-06-12: the first fault recovered to an
+        // empty layout, then 23 s later the next POS render killed the app with
+        // no fault log. Recreate the parser clean. Layout(nil) just freed every
+        // box, so nothing still points at the old parser's DOM tags; the next
+        // FHTML change reparses from scratch with the fresh instance. This keeps
+        // a contained fault contained instead of escalating to process death.
+        try
+          FreeAndNil(FParser);
+          FParser := THTMLParser.Create;
+        except
+        end;
       end;
     end;
 

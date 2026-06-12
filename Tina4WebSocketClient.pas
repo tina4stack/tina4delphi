@@ -1366,7 +1366,13 @@ begin
         // Ping cadence — emit a ping once per FPingInterval. We only
         // arm a new FLastPingSent when there isn't one already (so
         // back-to-back pings don't clobber the RTT measurement).
-        ElapsedSincePing := MilliSecondsBetween(Now, FLastPingSent);
+        // FLastPingSent = 0 is the "no ping in flight" sentinel; TDateTime(0)
+        // is 1899, so MilliSecondsBetween against it overflows Integer — only
+        // compute the elapsed time when a ping is actually outstanding.
+        if FLastPingSent = 0 then
+          ElapsedSincePing := 0
+        else
+          ElapsedSincePing := MilliSecondsBetween(Now, FLastPingSent);
         if (FLastPingSent = 0) or (ElapsedSincePing >= FPingInterval) then
         begin
           try

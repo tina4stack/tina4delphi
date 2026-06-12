@@ -556,6 +556,11 @@ type
     FContentHeight: Single;
     FNeedRelayout: Boolean;
     FParserDirty: Boolean;
+    // FHTML.Text of the last layout that completed WITHOUT a fault. The
+    // DoLayout recovery ladder re-renders this known-good markup when the
+    // current screen faults, so a contained AV restores the PREVIOUS screen
+    // instead of going blank (customer: "no blank screens", 2026-06-12).
+    FLastGoodHTML: string;
     FScrollBarWidth: Single;
     FOnScroll: TTina4ScrollEvent;
     FIsLayoutting: Boolean;
@@ -7697,6 +7702,30 @@ procedure TTina4HTMLRender.DoLayout;
       RestoreScrollState(Child);
   end;
 
+  // Re-parse + lay out ARBITRARY markup with a FRESH parser, swallowing any
+  // fault and reporting success. The recovery ladder below uses it to render
+  // the current screen, then the last-good screen, before ever falling back to
+  // an empty layout. A fresh parser each call also discards the corrupted
+  // parser internals that otherwise escalate the next render into a hard exit.
+  function RecoverRender(const AHtml: string; AWidth: Single): Boolean;
+  begin
+    Result := False;
+    try
+      try FreeAndNil(FParser); FParser := THTMLParser.Create; except end;
+      FParser.Parse(AHtml);
+      FStyleSheet.Clear;
+      for var I := 0 to FParser.StyleBlocks.Count - 1 do
+        FStyleSheet.AddCSS(FParser.StyleBlocks[I]);
+      for var I := 0 to FParser.LinkHrefs.Count - 1 do
+        FStyleSheet.LoadFromURL(FParser.LinkHrefs[I]);
+      FParserDirty := False;
+      FLayoutEngine.Layout(FParser.Root, AWidth, FStyleSheet);
+      Result := True;
+    except
+      Result := False;
+    end;
+  end;
+
 begin
   if FIsLayoutting then Exit;
   FIsLayoutting := True;
@@ -7877,29 +7906,36 @@ begin
 
       LFaultStage := 'layout';
       FLayoutEngine.Layout(FParser.Root, AvailW, FStyleSheet);
+      // Reached only when the WHOLE render succeeded — remember the markup so
+      // the recovery ladder can restore this screen if a later one faults.
+      FLastGoodHTML := FHTML.Text;
     except
       on E: Exception do
       begin
-        TraceLog(Format('DoLayout FAULT @%s (%s: %s) htmlLen=%d styleBlocks=%d ' +
-          '— recovering with empty layout',
+        TraceLog(Format('DoLayout FAULT @%s (%s: %s) htmlLen=%d styleBlocks=%d',
           [LFaultStage, E.ClassName, E.Message, Length(FHTML.Text),
            FParser.StyleBlocks.Count]));
-        // Don't re-run the same bad input forever, and leave a clean tree.
-        FParserDirty := False;
-        try FLayoutEngine.Layout(nil, AvailW, FStyleSheet); except end;
-        // The parser's OWN internal state may be left corrupted by the fault
-        // (a half-built DOM, dangling token refs). Reusing it turns the NEXT
-        // render's *catchable* AV into an UNcatchable hard SIGSEGV that exits
-        // the process — observed 2026-06-12: the first fault recovered to an
-        // empty layout, then 23 s later the next POS render killed the app with
-        // no fault log. Recreate the parser clean. Layout(nil) just freed every
-        // box, so nothing still points at the old parser's DOM tags; the next
-        // FHTML change reparses from scratch with the fresh instance. This keeps
-        // a contained fault contained instead of escalating to process death.
-        try
-          FreeAndNil(FParser);
-          FParser := THTMLParser.Create;
-        except
+        // RECOVERY LADDER — never leave the screen blank if we can help it
+        // (customer: "no blank screens", 2026-06-12). Each rung uses a FRESH
+        // parser (RecoverRender), which also clears the corrupted internals that
+        // otherwise turn the NEXT render into a hard process exit.
+        //   1. Re-render the SAME markup — this AV family is mostly transient,
+        //      so a clean-parser retry usually just succeeds and the user gets
+        //      the screen they asked for.
+        //   2. Else re-render the LAST-GOOD markup — the previous screen stays
+        //      up instead of going blank.
+        //   3. Else, and only then, drop to an empty layout (last resort).
+        if RecoverRender(FHTML.Text, AvailW) then
+          TraceLog('DoLayout recovered — re-rendered current screen')
+        else if (FLastGoodHTML <> '') and (FLastGoodHTML <> FHTML.Text) and
+                RecoverRender(FLastGoodHTML, AvailW) then
+          TraceLog('DoLayout recovered — restored last-good screen')
+        else
+        begin
+          TraceLog('DoLayout recovery exhausted — empty layout');
+          FParserDirty := False;
+          try FreeAndNil(FParser); FParser := THTMLParser.Create; except end;
+          try FLayoutEngine.Layout(nil, AvailW, FStyleSheet); except end;
         end;
       end;
     end;

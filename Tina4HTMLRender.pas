@@ -1324,8 +1324,24 @@ end;
 
 destructor THTMLTag.Destroy;
 begin
-  for var Child in Children do
-    Child.Free;
+  // Detach from our parent's Children FIRST so no stale pointer to this node
+  // survives in the parent list. Without this, freeing a node through any path
+  // that didn't also remove it from its parent left a dangling entry that the
+  // next full reparse's clear-loop double-freed -> heap corruption -> the
+  // wild-only "DoLayout FAULT @parse" EAccessViolation (Airtime / Statement
+  // reparse, 2026). Tree-recursive ownership made the model fragile; this makes
+  // every free self-consistent regardless of which path triggered it.
+  if Assigned(Parent) and Assigned(Parent.Children) then
+    Parent.Children.Remove(Self);
+  Parent := nil;
+  // Free our children with an index walk, nulling each child's Parent first so
+  // its own (now self-detaching) destructor doesn't Remove itself from this very
+  // list mid-teardown — we're discarding the whole list anyway.
+  for var I := Children.Count - 1 downto 0 do
+  begin
+    Children[I].Parent := nil;
+    Children[I].Free;
+  end;
   Children.Free;
   Style.Free;
   Attributes.Free;
@@ -2712,9 +2728,14 @@ end;
 
 procedure THTMLParser.Parse(const HTML: string);
 begin
-  // Clear old tree
-  for var Child in FRoot.Children do
-    Child.Free;
+  // Clear old tree. Null each child's Parent before freeing so its now self-
+  // detaching destructor doesn't mutate FRoot.Children mid-iteration; the
+  // explicit Clear then drops the (freed) references. Index walk, not for-in.
+  for var I := FRoot.Children.Count - 1 downto 0 do
+  begin
+    FRoot.Children[I].Parent := nil;
+    FRoot.Children[I].Free;
+  end;
   FRoot.Children.Clear;
   FStyleBlocks.Clear;
   FLinkHrefs.Clear;
@@ -8606,9 +8627,13 @@ begin
   Tag := GetElementById(Id);
   if not Assigned(Tag) then Exit;
 
-  // Free existing children
+  // Free existing children. Null each child's Parent first so its self-
+  // detaching destructor doesn't Remove itself from this list mid-loop.
   for I := Tag.Children.Count - 1 downto 0 do
+  begin
+    Tag.Children[I].Parent := nil;
     Tag.Children[I].Free;
+  end;
   Tag.Children.Clear;
 
   InsertHTMLFragment(Tag, Html, False);

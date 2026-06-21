@@ -950,6 +950,40 @@ Tina4HTMLRender1.CacheDir := 'C:\MyApp\cache';
 Tina4HTMLRender1.HTML.Text := '<img src="https://example.com/photo.jpg" width="200" height="150">';
 ```
 
+### Scroll & Touch Tuning
+
+The renderer scrolls with pan-to-scroll and momentum (inertia) on touch
+devices. Direct dragging always tracks the finger 1:1; the *momentum* after
+you lift off is tunable via two published properties:
+
+```delphi
+// Glidier, iOS-like long coast
+Tina4HTMLRender1.ScrollDeceleration := 0.97;
+
+// Snappy — momentum stops quickly (good for short lists)
+Tina4HTMLRender1.ScrollDeceleration := 0.85;
+
+// Punchier flick that travels further per swipe
+Tina4HTMLRender1.ScrollFlingFactor := 1.8;
+```
+
+| Property | Default | Range | Effect |
+|---|---|---|---|
+| `ScrollDeceleration: Single` | `0.92` | `0.50`–`0.999` | Momentum friction — per-tick velocity multiplier. Higher coasts further/longer; lower stops sooner. (iOS `decelerationRate` / Android fling-friction equivalent.) |
+| `ScrollFlingFactor: Single` | `1.0` | `0.1`–`8.0` | Launch-velocity multiplier on a flick — the momentum "acceleration". `>1` throws faster/further, `<1` damps it. Direct dragging is unaffected. |
+
+Both setters clamp to their range, so you can't accidentally create
+infinite-coast (`>= 1.0` deceleration) or dead-momentum (`<= 0`) scrolling.
+Defaults reproduce the original feel — existing apps are unaffected unless
+you set them.
+
+Related scrollbar appearance properties:
+
+| Property | Default | Description |
+|---|---|---|
+| `ScrollBarsVisible: Boolean` | `True` | When `False`, scrollbars are never drawn but pan-to-scroll still works. Set `False` on mobile. |
+| `ScrollBarOverlay: Boolean` | `False` | When `True`, thin iOS/Android-style overlay indicators that reserve no layout width. Set `True` on mobile. |
+
 ### Twig Template Integration
 
 The `Twig` property accepts Twig template content that is automatically rendered to HTML via the built-in TTina4Twig engine. When content is assigned to `Twig`, the template is rendered and the result is set on the `HTML` property.
@@ -1523,3 +1557,5 @@ See the [claude-pascal-mcp](https://github.com/tina4stack/tina4delphi/tree/maste
 - 2026-03-02 Bundled OpenSSL 3.6.1 DLLs for Windows (32-bit in `lib/win32`, 64-bit in `lib/win64`)
 - 2026-06-05 TTina4WebSocketClient: Added iOS / iPadOS `wss://` support via Apple Network.framework (`TTina4NWConnection` in `Tina4OpenSSL.pas`, contributed by @mgreyling in PR #4). No OpenSSL on iOS — TLS handled by the OS against the system trust store. `LoadOpenSSL` returns `False` on iOS by design. Plain `ws://` continues to use `TSocket`. Same `URL := 'wss://...'` developer API as every other platform.
 - 2026-06-05 TTina4HTMLRender: Split `ControlType` IFDEF so iOS `TEdit` / `TMemo` go back to `TControlType.Platform`, hiding the FMX-attached blue "Done" toolbar above the on-screen keyboard. Android continues to use `TControlType.Styled` to work around Sunmi V2s bleed-through.
+- 2026-06-18 TTina4HTMLRender: Inline-block shrink-to-fit width no longer counts a trailing inter-word space — fixes chat-bubble backgrounds painting one space too wide; wrapped text now sizes to the widest line, not the last.
+- 2026-06-18 TTina4HTMLRender: Touch-scroll momentum is now tunable via `ScrollDeceleration` (default 0.92) and `ScrollFlingFactor` (default 1.0) published properties. Defaults preserve the prior feel; setters clamp to safe ranges. See the "Scroll & Touch Tuning" section.

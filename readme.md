@@ -953,29 +953,35 @@ Tina4HTMLRender1.HTML.Text := '<img src="https://example.com/photo.jpg" width="2
 ### Scroll & Touch Tuning
 
 The renderer scrolls with pan-to-scroll and momentum (inertia) on touch
-devices. Direct dragging always tracks the finger 1:1; the *momentum* after
-you lift off is tunable via two published properties:
+devices. There are two phases — the **held drag** (while the finger is down)
+and the **flick coast** (after you lift off) — each with its own knob:
 
 ```delphi
-// Glidier, iOS-like long coast
+// Make the whole touch-scroll move faster: content travels further per
+// swipe (drag) AND the flick coasts faster/longer.
+Tina4HTMLRender1.ScrollDragFactor   := 1.8;   // 1.8x content per finger-pixel
+Tina4HTMLRender1.ScrollFlingFactor  := 1.8;   // flick launches 1.8x faster
+
+// Just the coast: glidier, iOS-like long momentum
 Tina4HTMLRender1.ScrollDeceleration := 0.97;
 
 // Snappy — momentum stops quickly (good for short lists)
 Tina4HTMLRender1.ScrollDeceleration := 0.85;
-
-// Punchier flick that travels further per swipe
-Tina4HTMLRender1.ScrollFlingFactor := 1.8;
 ```
 
 | Property | Default | Range | Effect |
 |---|---|---|---|
-| `ScrollDeceleration: Single` | `0.92` | `0.50`–`0.999` | Momentum friction — per-tick velocity multiplier. Higher coasts further/longer; lower stops sooner. (iOS `decelerationRate` / Android fling-friction equivalent.) |
-| `ScrollFlingFactor: Single` | `1.0` | `0.1`–`8.0` | Launch-velocity multiplier on a flick — the momentum "acceleration". `>1` throws faster/further, `<1` damps it. Direct dragging is unaffected. |
+| `ScrollDragFactor: Single` | `1.0` | `0.25`–`5.0` | **Held-drag speed.** `1.0` = content tracks the finger 1:1 (standard). `>1` moves content further than the finger so a list scrolls faster per swipe — the knob to reach for when "touch scroll feels too slow" on small / low-travel screens. Flick velocity scales with it so momentum continues smoothly. |
+| `ScrollFlingFactor: Single` | `1.0` | `0.1`–`8.0` | **Flick "acceleration".** Launch-velocity multiplier after lift-off. `>1` throws faster/further, `<1` damps it. |
+| `ScrollDeceleration: Single` | `0.92` | `0.50`–`0.999` | **Flick friction.** Per-tick velocity multiplier — higher coasts further/longer, lower stops sooner. (iOS `decelerationRate` / Android fling-friction equivalent.) |
 
-Both setters clamp to their range, so you can't accidentally create
-infinite-coast (`>= 1.0` deceleration) or dead-momentum (`<= 0`) scrolling.
-Defaults reproduce the original feel — existing apps are unaffected unless
-you set them.
+All three setters clamp to their range, so you can't create infinite-coast
+(`>= 1.0` deceleration) or runaway/dead scrolling. Defaults reproduce the
+original feel — existing apps are unaffected unless you set them.
+
+> **"I just want it to scroll faster on touch"** — set `ScrollDragFactor`
+> (e.g. `1.5`–`2.0`). That's the primary swipe gesture. Add a matching
+> `ScrollFlingFactor` if you also want flicks to fly further.
 
 Related scrollbar appearance properties:
 
@@ -1559,3 +1565,4 @@ See the [claude-pascal-mcp](https://github.com/tina4stack/tina4delphi/tree/maste
 - 2026-06-05 TTina4HTMLRender: Split `ControlType` IFDEF so iOS `TEdit` / `TMemo` go back to `TControlType.Platform`, hiding the FMX-attached blue "Done" toolbar above the on-screen keyboard. Android continues to use `TControlType.Styled` to work around Sunmi V2s bleed-through.
 - 2026-06-18 TTina4HTMLRender: Inline-block shrink-to-fit width no longer counts a trailing inter-word space — fixes chat-bubble backgrounds painting one space too wide; wrapped text now sizes to the widest line, not the last.
 - 2026-06-18 TTina4HTMLRender: Touch-scroll momentum is now tunable via `ScrollDeceleration` (default 0.92) and `ScrollFlingFactor` (default 1.0) published properties. Defaults preserve the prior feel; setters clamp to safe ranges. See the "Scroll & Touch Tuning" section.
+- 2026-06-18 TTina4HTMLRender: Added `ScrollDragFactor` (default 1.0) — multiplies content movement per finger-pixel during a held touch-drag, so the primary swipe gesture can scroll faster on small / low-travel screens. Flick velocity scales with it for smooth momentum hand-off.

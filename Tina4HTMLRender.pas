@@ -601,6 +601,7 @@ type
     FInertiaVX, FInertiaVY: Single;     // current velocity (decaying)
     FScrollDeceleration: Single;        // per-tick momentum multiplier (friction)
     FScrollFlingFactor: Single;         // launch-velocity multiplier ("acceleration")
+    FScrollDragFactor: Single;          // finger-drag distance multiplier (held-drag speed)
     FDebugLastMouseX, FDebugLastMouseY: Single;
     FDebugMouseHit: Boolean;
     FDebugOverlay: Boolean;
@@ -762,6 +763,7 @@ type
     procedure SetScrollBarOverlay(const Value: Boolean);
     procedure SetScrollDeceleration(const Value: Single);
     procedure SetScrollFlingFactor(const Value: Single);
+    procedure SetScrollDragFactor(const Value: Single);
     procedure InertiaTimerTick(Sender: TObject);
     procedure SetHTML(const Value: TStringList);
     function GetHTML: TStringList;
@@ -1207,10 +1209,17 @@ type
       write SetScrollDeceleration;
     /// <summary>Multiplier applied to the launch velocity of a flick — the
     /// "acceleration" of momentum scrolling. 1.0 (default) throws at finger
-    /// speed; >1 coasts faster/further, <1 damps it. Direct dragging stays
-    /// 1:1 regardless. Clamped to 0.1..8.0.</summary>
+    /// speed; >1 coasts faster/further, <1 damps it. Clamped to 0.1..8.0.</summary>
     property ScrollFlingFactor: Single read FScrollFlingFactor
       write SetScrollFlingFactor;
+    /// <summary>Multiplier on finger-drag distance during a held touch-drag.
+    /// 1.0 (default) = content tracks the finger 1:1 (standard). >1 moves
+    /// content further than the finger so a list scrolls faster per swipe;
+    /// useful on small / low-travel touch screens. The flick velocity scales
+    /// with it too, so momentum continues smoothly from the drag speed.
+    /// Clamped to 0.25..5.0.</summary>
+    property ScrollDragFactor: Single read FScrollDragFactor
+      write SetScrollDragFactor;
     /// <summary>When True, shows a red dot at the last MouseDown position and
     /// debug info (Width, Height, ContentHeight, pan state). Off by default.</summary>
     property DebugOverlay: Boolean read FDebugOverlay write FDebugOverlay default False;
@@ -6779,6 +6788,7 @@ begin
   FInertiaTimer.OnTimer := InertiaTimerTick;
   FScrollDeceleration := 0.92;  // default momentum feel
   FScrollFlingFactor := 1.0;    // launch at finger speed
+  FScrollDragFactor := 1.0;     // 1:1 finger-drag (standard)
   // Resize-relayout coalescing — see FResizeTimer declaration.
   FResizeTimer := TTimer.Create(Self);
   FResizeTimer.Interval := 90;
@@ -6864,6 +6874,15 @@ begin
   if Value < 0.1 then FScrollFlingFactor := 0.1
   else if Value > 8.0 then FScrollFlingFactor := 8.0
   else FScrollFlingFactor := Value;
+end;
+
+procedure TTina4HTMLRender.SetScrollDragFactor(const Value: Single);
+begin
+  // Floor at 0.25 (below that the drag barely responds); ceiling 5.0
+  // (above that content races away from the finger and feels broken).
+  if Value < 0.25 then FScrollDragFactor := 0.25
+  else if Value > 5.0 then FScrollDragFactor := 5.0
+  else FScrollDragFactor := Value;
 end;
 
 procedure TTina4HTMLRender.InertiaTimerTick(Sender: TObject);
@@ -12622,33 +12641,42 @@ begin
     end;
     if FPanActive then
     begin
-      // Track velocity for inertia
+      // Track velocity for inertia. Scale by the drag factor so the flick
+      // momentum launches from the content's on-screen speed (which is
+      // amplified by the same factor below) — no snap at release.
       var Now := TThread.GetTickCount;
       var Elapsed := Now - FPanLastTick;
       if Elapsed > 0 then
       begin
-        FPanVelocityX := -(X - FPanLastX) / Elapsed * 16; // normalize to ~16ms frame
-        FPanVelocityY := -(Y - FPanLastY) / Elapsed * 16;
+        FPanVelocityX := -(X - FPanLastX) / Elapsed * 16 * FScrollDragFactor;
+        FPanVelocityY := -(Y - FPanLastY) / Elapsed * 16 * FScrollDragFactor;
       end;
       FPanLastX := X;
       FPanLastY := Y;
       FPanLastTick := Now;
 
+      // ScrollDragFactor amplifies how far content moves per finger-pixel.
+      // 1.0 (default) = standard 1:1 finger tracking. The axis-lock threshold
+      // above stays on the RAW finger delta so the pan triggers at the same
+      // finger travel regardless of the factor.
+      var EffDX := DX * FScrollDragFactor;
+      var EffDY := DY * FScrollDragFactor;
+
       if FPanIsViewport then
       begin
         // Viewport pan: lock to dominant axis
         if FPanLockedAxis = 1 then
-          SetScrollY(FPanStartScrollY - DY)
+          SetScrollY(FPanStartScrollY - EffDY)
         else
-          SetScrollX(FPanStartScrollX - DX);
+          SetScrollX(FPanStartScrollX - EffDX);
       end
       else
       begin
         // Inner box: scroll only the axes the box supports, nothing else
         if FPanBox.IsScrollableX and (FPanBox.ScrollWidth > FPanBox.ContentWidth + 0.5) then
-          FPanBox.ScrollX := FPanStartScrollX - DX;
+          FPanBox.ScrollX := FPanStartScrollX - EffDX;
         if FPanBox.IsScrollableY and (FPanBox.ScrollHeight > FPanBox.ContentHeight + 0.5) then
-          FPanBox.ScrollY := FPanStartScrollY - DY;
+          FPanBox.ScrollY := FPanStartScrollY - EffDY;
         FPanBox.ClampOwnScroll;
         BumpScrollbarVisibility;
         Repaint;

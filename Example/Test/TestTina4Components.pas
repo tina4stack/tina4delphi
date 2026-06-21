@@ -3027,6 +3027,22 @@ begin
     R.ScrollFlingFactor := 2.5;
     Check(Abs(R.ScrollFlingFactor - 2.5) < 0.001,
       'in-range ScrollFlingFactor must pass through unchanged');
+
+    // Drag factor: default 1.0 (1:1 finger tracking), clamps to 0.25..5.0
+    Check(Abs(R.ScrollDragFactor - 1.0) < 0.0001,
+      Format('ScrollDragFactor default should be 1.0, got %.4f',
+             [R.ScrollDragFactor]));
+    R.ScrollDragFactor := 50.0;
+    Check(Abs(R.ScrollDragFactor - 5.0) < 0.001,
+      Format('ScrollDragFactor must clamp at 5.0 ceiling, got %.5f',
+             [R.ScrollDragFactor]));
+    R.ScrollDragFactor := 0.0;
+    Check(Abs(R.ScrollDragFactor - 0.25) < 0.001,
+      Format('ScrollDragFactor must clamp at 0.25 floor, got %.5f',
+             [R.ScrollDragFactor]));
+    R.ScrollDragFactor := 1.8;
+    Check(Abs(R.ScrollDragFactor - 1.8) < 0.001,
+      'in-range ScrollDragFactor must pass through unchanged');
   finally
     R.Free;
   end;

@@ -201,7 +201,7 @@ something isn't listed it's almost certainly a no-op or unimplemented.
 * HTML input attributes (`type`, `inputmode`, `enterkeyhint`, `autocapitalize`, `maxlength`) map to Android/iOS soft keyboards.
 * Return-key traversal (`enterkeyhint="next" / "go" / "send" / "search"`) follows tab order and triggers form submit on the last field.
 * Scroll-into-view auto-lifts the focused input above the on-screen keyboard.
-* Pan-to-scroll with momentum (inertia). Direct drag tracks the finger 1:1; momentum is tunable via `ScrollDeceleration` (friction, default 0.92) and `ScrollFlingFactor` (launch "acceleration", default 1.0). `ScrollBarsVisible` / `ScrollBarOverlay` control scrollbar appearance — set overlay-style on mobile.
+* Pan-to-scroll with momentum (inertia). Tunable feel: `ScrollDragFactor` (held-drag speed, default 1.0 = 1:1 finger tracking — raise to scroll faster per swipe), `ScrollFlingFactor` (flick launch "acceleration", default 1.0), `ScrollDeceleration` (momentum friction, default 0.92). `ScrollBarsVisible` / `ScrollBarOverlay` control scrollbar appearance — set overlay-style on mobile.
 
 ---
 

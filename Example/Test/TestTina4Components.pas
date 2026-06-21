@@ -144,6 +144,8 @@ type
     // Inline-block shrink-to-fit width — background must hug the text
     procedure TestInlineBlockWidthExcludesTrailingSpace;
     procedure TestInlineBlockWidthUsesWidestLine;
+    // Touch-scroll momentum tuning
+    procedure TestScrollMomentumDefaultsAndClamping;
   end;
 
 implementation
@@ -2978,6 +2980,55 @@ begin
   finally
     Engine.Free;
     Parser.Free;
+  end;
+end;
+
+procedure TestTTina4Components.TestScrollMomentumDefaultsAndClamping;
+var
+  R: Tina4HtmlRender.TTina4HTMLRender;
+begin
+  // Touch-scroll momentum is tunable via two published properties.
+  // Defaults preserve the original hardcoded feel; setters clamp to
+  // ranges that keep inertia stable (deceleration >= 1.0 would coast
+  // forever; <= 0 or a zero fling factor would kill momentum).
+  R := Tina4HtmlRender.TTina4HTMLRender.Create(nil);
+  try
+    // Defaults
+    Check(Abs(R.ScrollDeceleration - 0.92) < 0.0001,
+      Format('ScrollDeceleration default should be 0.92, got %.4f',
+             [R.ScrollDeceleration]));
+    Check(Abs(R.ScrollFlingFactor - 1.0) < 0.0001,
+      Format('ScrollFlingFactor default should be 1.0, got %.4f',
+             [R.ScrollFlingFactor]));
+
+    // Deceleration clamps to 0.50..0.999. Tolerances absorb Single rounding
+    // (0.999 isn't exactly representable as Single).
+    R.ScrollDeceleration := 5.0;
+    Check(Abs(R.ScrollDeceleration - 0.999) < 0.001,
+      Format('ScrollDeceleration must clamp at 0.999 ceiling, got %.5f',
+             [R.ScrollDeceleration]));
+    R.ScrollDeceleration := -1.0;
+    Check(Abs(R.ScrollDeceleration - 0.50) < 0.001,
+      Format('ScrollDeceleration must clamp at 0.50 floor, got %.5f',
+             [R.ScrollDeceleration]));
+    R.ScrollDeceleration := 0.97;
+    Check(Abs(R.ScrollDeceleration - 0.97) < 0.001,
+      'in-range ScrollDeceleration must pass through unchanged');
+
+    // Fling factor clamps to 0.1..8.0
+    R.ScrollFlingFactor := 100.0;
+    Check(Abs(R.ScrollFlingFactor - 8.0) < 0.001,
+      Format('ScrollFlingFactor must clamp at 8.0 ceiling, got %.5f',
+             [R.ScrollFlingFactor]));
+    R.ScrollFlingFactor := 0.0;
+    Check(Abs(R.ScrollFlingFactor - 0.1) < 0.001,
+      Format('ScrollFlingFactor must clamp at 0.1 floor, got %.5f',
+             [R.ScrollFlingFactor]));
+    R.ScrollFlingFactor := 2.5;
+    Check(Abs(R.ScrollFlingFactor - 2.5) < 0.001,
+      'in-range ScrollFlingFactor must pass through unchanged');
+  finally
+    R.Free;
   end;
 end;
 

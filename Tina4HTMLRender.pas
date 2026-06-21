@@ -599,6 +599,8 @@ type
     FInertiaTimer: TTimer;
     FInertiaBox: TLayoutBox;            // nil = viewport inertia
     FInertiaVX, FInertiaVY: Single;     // current velocity (decaying)
+    FScrollDeceleration: Single;        // per-tick momentum multiplier (friction)
+    FScrollFlingFactor: Single;         // launch-velocity multiplier ("acceleration")
     FDebugLastMouseX, FDebugLastMouseY: Single;
     FDebugMouseHit: Boolean;
     FDebugOverlay: Boolean;
@@ -758,6 +760,8 @@ type
     procedure BumpScrollbarVisibility;
     function GetScrollbarOpacity: Single;
     procedure SetScrollBarOverlay(const Value: Boolean);
+    procedure SetScrollDeceleration(const Value: Single);
+    procedure SetScrollFlingFactor(const Value: Single);
     procedure InertiaTimerTick(Sender: TObject);
     procedure SetHTML(const Value: TStringList);
     function GetHTML: TStringList;
@@ -1194,6 +1198,19 @@ type
     /// layout width and have no track background — iOS/Android style. When False
     /// (default), scrollbars use a 12px track with background. Set True on mobile.</summary>
     property ScrollBarOverlay: Boolean read FScrollBarOverlay write SetScrollBarOverlay default False;
+    /// <summary>Momentum deceleration per ~16ms inertia tick after a flick.
+    /// 1.0 would coast forever; lower stops sooner. 0.92 (default) feels like
+    /// a normal mobile scroll; 0.97 glides much further, 0.85 stops quickly.
+    /// Clamped to 0.50..0.999. Stored as Single; not streamed with a default
+    /// (floats can't use `default`) — set it in code or the Object Inspector.</summary>
+    property ScrollDeceleration: Single read FScrollDeceleration
+      write SetScrollDeceleration;
+    /// <summary>Multiplier applied to the launch velocity of a flick — the
+    /// "acceleration" of momentum scrolling. 1.0 (default) throws at finger
+    /// speed; >1 coasts faster/further, <1 damps it. Direct dragging stays
+    /// 1:1 regardless. Clamped to 0.1..8.0.</summary>
+    property ScrollFlingFactor: Single read FScrollFlingFactor
+      write SetScrollFlingFactor;
     /// <summary>When True, shows a red dot at the last MouseDown position and
     /// debug info (Width, Height, ContentHeight, pan state). Off by default.</summary>
     property DebugOverlay: Boolean read FDebugOverlay write FDebugOverlay default False;
@@ -6760,6 +6777,8 @@ begin
   FInertiaTimer.Interval := 16;  // ~60 fps
   FInertiaTimer.Enabled := False;
   FInertiaTimer.OnTimer := InertiaTimerTick;
+  FScrollDeceleration := 0.92;  // default momentum feel
+  FScrollFlingFactor := 1.0;    // launch at finger speed
   // Resize-relayout coalescing — see FResizeTimer declaration.
   FResizeTimer := TTimer.Create(Self);
   FResizeTimer.Interval := 90;
@@ -6832,13 +6851,29 @@ begin
   Repaint;
 end;
 
+procedure TTina4HTMLRender.SetScrollDeceleration(const Value: Single);
+begin
+  // Clamp to a sane range: >= 1.0 would coast forever, <= 0 stops instantly.
+  if Value < 0.50 then FScrollDeceleration := 0.50
+  else if Value > 0.999 then FScrollDeceleration := 0.999
+  else FScrollDeceleration := Value;
+end;
+
+procedure TTina4HTMLRender.SetScrollFlingFactor(const Value: Single);
+begin
+  if Value < 0.1 then FScrollFlingFactor := 0.1
+  else if Value > 8.0 then FScrollFlingFactor := 8.0
+  else FScrollFlingFactor := Value;
+end;
+
 procedure TTina4HTMLRender.InertiaTimerTick(Sender: TObject);
 const
-  FRICTION = 0.92;      // velocity multiplier per tick (~60fps)
   MIN_VELOCITY = 0.5;   // stop when velocity drops below this
 begin
-  FInertiaVX := FInertiaVX * FRICTION;
-  FInertiaVY := FInertiaVY * FRICTION;
+  // FScrollDeceleration is the per-tick friction (default 0.92), settable
+  // via the ScrollDeceleration property for a snappier or glidier feel.
+  FInertiaVX := FInertiaVX * FScrollDeceleration;
+  FInertiaVY := FInertiaVY * FScrollDeceleration;
 
   if (Abs(FInertiaVX) < MIN_VELOCITY) and (Abs(FInertiaVY) < MIN_VELOCITY) then
   begin
@@ -7709,7 +7744,8 @@ procedure TTina4HTMLRender.DoLayout;
   // parser internals that otherwise escalate the next render into a hard exit.
   function RecoverRender(const AHtml: string; AWidth: Single): Boolean;
   begin
-    Result := False;
+    // Result is assigned on every path below (True on success, False in the
+    // except) — no initializer needed (was H2077).
     try
       try FreeAndNil(FParser); FParser := THTMLParser.Create; except end;
       FParser.Parse(AHtml);
@@ -12730,8 +12766,10 @@ begin
     if (Abs(FPanVelocityX) > 0.5) or (Abs(FPanVelocityY) > 0.5) then
     begin
       FInertiaBox := FPanBox;  // nil = viewport
-      FInertiaVX := FPanVelocityX;
-      FInertiaVY := FPanVelocityY;
+      // ScrollFlingFactor scales the launch velocity — the momentum
+      // "acceleration". Direct dragging above is unaffected (1:1).
+      FInertiaVX := FPanVelocityX * FScrollFlingFactor;
+      FInertiaVY := FPanVelocityY * FScrollFlingFactor;
       // For viewport, only apply on the locked axis
       if FPanIsViewport then
       begin

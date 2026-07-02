@@ -7145,6 +7145,10 @@ begin
   // DoLayout).
   if FParserDirty and Assigned(FParser) then
   begin
+    // Fresh parser here too (see DoLayout): this lazy parse also frees the old
+    // DOM, and re-clearing a suspect tree faults the same way. Build fresh.
+    try FreeAndNil(FParser); except end;
+    FParser := THTMLParser.Create;
     FParser.Parse(FHTML.Text);
     FParserDirty := False;
   end;
@@ -7967,6 +7971,17 @@ begin
       if FParserDirty then
       begin
         LFaultStage := 'parse';
+        // Fresh parser for every full reparse. Re-clearing the persistent
+        // FParser's old DOM tree was the fragile step: a stale / double-listed
+        // node made the clear-loop write-then-free freed memory -> the wild
+        // "@parse" AV. We can't guard our way out — a freed THTMLTag is non-nil
+        // so Assigned() passes, and reading it to "test" it IS the fault; once
+        // its block is reused the access silently corrupts another live object.
+        // So don't walk the suspect tree: build into a fresh parser and free the
+        // old one in isolation (fault swallowed -> a bad tree leaks, never
+        // crashes the render). Mirrors the RecoverRender ladder, done up front.
+        try FreeAndNil(FParser); except end;
+        FParser := THTMLParser.Create;
         FParser.Parse(FHTML.Text);
 
         // Build stylesheet from <style> blocks and <link rel="stylesheet"> hrefs

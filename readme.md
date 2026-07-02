@@ -1,6 +1,6 @@
 # Tina4Delphi
 
-This is not another framework for Delphi
+The Intelligent Native Application 4ramework for Delphi. Simple. Fast. Human.
 
 ## Requirements
 

@@ -8414,6 +8414,18 @@ var
   AX, AY, NewX, NewY, VW, VH: Single;
 begin
   Result := False;
+  // A pending SetInnerHTML / class toggle only marks the layout dirty
+  // (FNeedRelayout) and repaints — the box tree is NOT rebuilt until the
+  // next Paint. A caller that adds an element then immediately scrolls to
+  // it would otherwise walk the STALE box tree: the new element's tag
+  // exists in the DOM (GetElementById finds it) but has no layout box yet,
+  // so FindLayoutBoxByTag returns nil and this silently no-ops. Force the
+  // pending layout synchronously first, exactly like Paint does (and the
+  // prepend path above), so the target's freshly-laid-out box exists.
+  // DoLayout is re-entrancy guarded (FIsLayoutting) and preserves per-box
+  // scroll state across the rebuild, so this is safe to call here.
+  if FNeedRelayout then
+    DoLayout;
   Tag := GetElementById(Id);
   if not Assigned(Tag) then Exit;
   if not Assigned(FLayoutEngine) or not Assigned(FLayoutEngine.Root) then Exit;

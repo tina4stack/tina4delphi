@@ -6703,7 +6703,12 @@ end;
 
 procedure TLayoutEngine.Layout(DOMRoot: THTMLTag; AvailWidth: Single; AStyleSheet: TCSSStyleSheet);
 begin
-  FRoot.Free;
+  // A relayout interrupted by rapid DOM churn can leave the old box tree with
+  // dangling/freed children; freeing such a tree double-frees and AVs. Swallow
+  // it — the corrupt tree leaks (rare, recoverable) rather than crashing the
+  // render. Mirrors the parser's "build fresh, free the old in isolation" rule.
+  // FRoot := nil then guarantees the clean rebuild below.
+  try FRoot.Free; except end;
   FRoot := nil;
   FStyleSheet := AStyleSheet;
 
@@ -7809,10 +7814,18 @@ procedure TTina4HTMLRender.DoLayout;
 begin
   if FIsLayoutting then Exit;
   FIsLayoutting := True;
-  // Snapshot inner scroll state before the layout tree is rebuilt, then
-  // invalidate cached TLayoutBox pointers — the relayout replaces them.
-  if Assigned(FLayoutEngine) and Assigned(FLayoutEngine.Root) then
-    SaveScrollState(FLayoutEngine.Root);
+  // Snapshot inner scroll state before the layout tree is rebuilt.
+  // GUARD: a prior relayout interrupted by rapid DOM churn can leave the tree
+  // with dangling children; walking it here would AV and — because this runs
+  // BEFORE the try/finally below — strand FIsLayoutting=True, permanently
+  // bricking all future relayouts. Swallow: skip scroll-save and let the
+  // reparse + Layout below rebuild a clean tree and recover.
+  try
+    if Assigned(FLayoutEngine) and Assigned(FLayoutEngine.Root) then
+      SaveScrollState(FLayoutEngine.Root);
+  except
+    TraceLog('DoLayout: scroll-save skipped — corrupt tree from an interrupted relayout; rebuilding clean');
+  end;
   FDragScrollBox := nil;
   FDragScrollAxis := 0;
   FHoverScrollBox := nil;

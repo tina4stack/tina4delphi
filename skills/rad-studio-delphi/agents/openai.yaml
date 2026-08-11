@@ -1,0 +1,17 @@
+interface:
+  display_name: "RAD Studio Delphi"
+  short_description: "Build and verify Delphi projects with Delphi MCP"
+  icon_small: "./assets/roman-helmet-chat-icon-16x16.gif"
+  icon_large: "./assets/rad-studio-helmet-red-tight-large.png"
+  brand_color: "#B3261E"
+  default_prompt: "Use $rad-studio-delphi to implement and verify this Delphi change."
+
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "pascal-dev"
+      description: "Required Delphi MCP compiler, project, form, and runtime tools"
+      transport: "stdio"
+
+policy:
+  allow_implicit_invocation: true

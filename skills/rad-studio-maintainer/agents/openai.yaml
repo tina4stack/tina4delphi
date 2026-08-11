@@ -1,0 +1,17 @@
+interface:
+  display_name: "RAD Studio Maintainer"
+  short_description: "Maintain Tina4Delphi with MCP-backed verification"
+  icon_small: "./assets/roman-helmet-chat-icon-16x16.gif"
+  icon_large: "./assets/rad-studio-helmet-red-tight-large.png"
+  brand_color: "#B3261E"
+  default_prompt: "Use $rad-studio-maintainer to maintain and verify this Tina4Delphi repository."
+
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "pascal-dev"
+      description: "Required Delphi MCP compiler, project, form, and runtime tools"
+      transport: "stdio"
+
+policy:
+  allow_implicit_invocation: true

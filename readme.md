@@ -1327,6 +1327,83 @@ For the common case — `wss://` against a server with a real cert — none of t
 
 
 
+## AI coding skills
+
+This repository includes two Agent Skills:
+
+| Skill | Use it for |
+|---|---|
+| `rad-studio-delphi` | Delphi, Object Pascal, FMX/VCL, project, form, build, and debugging work |
+| `rad-studio-maintainer` | Tina4Delphi maintenance, renderer work, tests, packages, examples, and releases |
+
+Both skills use the open `SKILL.md` format. The installers copy them to each client's native user directory:
+
+| Client | Install directory |
+|---|---|
+| Codex | `$CODEX_HOME/skills` or `~/.codex/skills` |
+| Claude Code | `~/.claude/skills` |
+| Cursor | `~/.cursor/skills` |
+
+Clone this repository, then run one installer from its root.
+
+### Windows PowerShell
+
+```powershell
+# Install both skills for Codex, Claude Code, and Cursor
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install-skills.ps1
+
+# Install for one client
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install-skills.ps1 -Client cursor
+```
+
+### macOS and Linux
+
+```bash
+# Install both skills for Codex, Claude Code, and Cursor
+./scripts/install-skills.sh
+
+# Install for one client
+./scripts/install-skills.sh cursor
+```
+
+The scripts update existing installations without deleting client-specific files. Restart any client that was open before installation. In Codex, invoke `$rad-studio-delphi` or `$rad-studio-maintainer`. In Claude Code and Cursor, use `/rad-studio-delphi` or `/rad-studio-maintainer`. Each client can also select a skill from its description.
+
+### Required Delphi MCP
+
+Both skills require the [`tina4stack/claude-pascal-mcp`](https://github.com/tina4stack/claude-pascal-mcp) server under the name `pascal-dev`. They will not edit, build, or run Delphi projects until `get_compiler_info` detects a supported compiler.
+
+Install [uv](https://docs.astral.sh/uv/), then register the server with your client:
+
+**Codex** — add this to your user Codex configuration:
+
+```toml
+[mcp_servers.pascal-dev]
+command = "uvx"
+args = ["--from", "git+https://github.com/tina4stack/claude-pascal-mcp", "pascal-mcp"]
+```
+
+**Claude Code:**
+
+```bash
+claude mcp add --transport stdio pascal-dev -- uvx --from git+https://github.com/tina4stack/claude-pascal-mcp pascal-mcp
+```
+
+**Cursor** — add this to `~/.cursor/mcp.json`, or to `.cursor/mcp.json` inside a project:
+
+```json
+{
+  "mcpServers": {
+    "pascal-dev": {
+      "type": "stdio",
+      "command": "uvx",
+      "args": ["--from", "git+https://github.com/tina4stack/claude-pascal-mcp", "pascal-mcp"]
+    }
+  }
+}
+```
+
+Restart the client after registering the server. Ask it to run `get_compiler_info`; Delphi work begins only after the compiler appears.
+
 ## Pascal MCP Server
 
 An MCP (Model Context Protocol) server that lets AI assistants compile, run, and interact with Pascal/Delphi desktop applications. Works with any MCP-compatible tool (Claude Code, Cursor, Copilot, etc.). Supports Free Pascal (fpc), Delphi 32-bit (dcc32), and Delphi 64-bit (dcc64) compilers.

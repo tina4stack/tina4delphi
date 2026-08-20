@@ -7761,8 +7761,14 @@ procedure TTina4HTMLRender.DoLayout;
   procedure SaveScrollState(Box: TLayoutBox);
   begin
     if not Assigned(Box) then Exit;
-    if Assigned(Box.Tag) and (Box.IsScrollableX or Box.IsScrollableY) and
-       ((Box.ScrollX <> 0) or (Box.ScrollY <> 0)) then
+    // Record the CURRENT offset unconditionally — INCLUDING 0. The old
+    // `(ScrollX<>0) or (ScrollY<>0)` guard skipped writing a return-to-zero,
+    // so a box scrolled away and then back to the start kept its stale
+    // non-zero entry and the next relayout restored it — the box "jumped
+    // back" to where it had been. Repro with any horizontal strip: scroll to
+    // the end, tap to trigger a relayout, scroll back to the start, tap the
+    // first tile -> it jumps to the end. Saving 0 too keeps the cache truthful.
+    if Assigned(Box.Tag) and (Box.IsScrollableX or Box.IsScrollableY) then
       FBoxScrollState.AddOrSetValue(Box.Tag, PointF(Box.ScrollX, Box.ScrollY));
     for var Child in Box.Children do
       SaveScrollState(Child);

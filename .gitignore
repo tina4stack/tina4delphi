@@ -35,6 +35,8 @@
 /Example/__recovery/DataModule.dfm
 /Example/__recovery/DataModule.pas
 /Example/Win64/
+/Example/SkillHtmlRenderDemo/Win64/
+/Example/SkillHtmlRenderDemo/*.res
 /Tina4DelphiDesign.identcache
 /Win64/Debug/Tina4Core.dcu
 /Win64/Debug/Tina4HttpServer.dcu

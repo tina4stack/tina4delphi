@@ -3125,6 +3125,29 @@ begin
 
   // Non-inherited defaults
   Result.BackgroundColor := TAlphaColors.Null;
+  // box-shadow is non-inherited and was never initialised here: Result is the
+  // caller's (uninitialised) record, so BoxShadow.Active/Color/BlurRadius held
+  // stack garbage and PaintBoxShadow drew random-coloured rectangles behind
+  // arbitrary boxes (the erratic, device/build-dependent "bleed" on Android).
+  Result.BoxShadow.OffsetX := 0;
+  Result.BoxShadow.OffsetY := 0;
+  Result.BoxShadow.BlurRadius := 0;
+  Result.BoxShadow.SpreadRadius := 0;
+  Result.BoxShadow.Color := TAlphaColors.Null;
+  Result.BoxShadow.Inset := False;
+  Result.BoxShadow.Active := False;
+  // Gated by flags that ARE initialised, but zero them so no field of the
+  // record is ever read uninitialised.
+  Result.BgGradientStart := TAlphaColors.Null;
+  Result.BgGradientEnd := TAlphaColors.Null;
+  Result.BgGradientAngle := 180;
+  Result.TextShadowColor := TAlphaColors.Null;
+  Result.TextShadowOffsetX := 0;
+  Result.TextShadowOffsetY := 0;
+  Result.TextShadowBlur := 0;
+  Result.TransformRotate := 0;
+  Result.TransformTranslateX := 0;
+  Result.TransformTranslateY := 0;
   Result.TextDecoration := 'none';
   Result.Margin.Clear;
   Result.Padding.Clear;
